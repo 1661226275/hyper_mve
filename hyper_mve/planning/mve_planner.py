@@ -1,17 +1,26 @@
 """
-Per-Agent Coordinate Descent MVE Planner (v4.5).
+Per-Agent Coordinate Descent MVE Planner (v4.6).
 
 For each agent in randomised order (coordinate descent):
-    1. Enumerate all A candidate first-actions for this agent
-    2. For already-optimised agents: sample step-0 action from their π_mve
-    3. For remaining agents and all step>0: sample from policy network
-    4. Rollout K steps, accumulate agent j's discounted returns + terminal value
-    5. π_mve[j] = softmax(mean_return_per_action / temperature)
+    1. Pre-sample other agents' step-0 actions once per scenario (CRN)
+    2. Enumerate all A candidate first-actions for this agent
+    3. Replicate other agents' step-0 actions across all A candidates (noise cancels)
+    4. For step>0: all agents sample from policy network (independent)
+    5. Rollout K steps, accumulate agent j's discounted returns + terminal value
+    6. π_mve[j] = softmax(mean_return_per_action / temperature)
 
-Key improvement over v4.4:
-    - Searches per-agent action space (A=5) instead of joint space (A^N=625)
-    - S samples / A actions → meaningful per-candidate signal
-    - Coordinate descent: later agents benefit from earlier agents' improvements
+v4.6 key fix — Common Random Numbers (CRN):
+    When evaluating A candidate actions for agent j, other agents' step-0 actions
+    are sampled ONCE per scenario and SHARED across all A candidates. This eliminates
+    the dominant noise source (other agents' random actions) from the return difference
+    between candidates, allowing the planner to detect the true signal.
+
+    Without CRN: SNR ≈ 0.02 → softmax → uniform distribution
+    With CRN:    noise cancels → SNR → ∞ for step 0
+
+    Data layout change:
+        Before (v4.5): candidate outer, sample inner → (B, A, spa)
+        After  (v4.6): scenario outer, candidate inner → (B, spa, A)
 
 Supports BaselineModel, OracleHyperMuZeroModel, InferHyperMuZeroModel via duck-typing.
 For HyperMuZero: set_context() is called before each agent's perspective.
@@ -64,14 +73,13 @@ def _sample_policy_action(model, curr_s, agent_idx, batch_size, device, is_hyper
 @torch.no_grad()
 def sample_mve_plan(model, root_s, cfg, rule=None):
     """
-    Per-agent coordinate descent MVE planning from a root latent state.
+    Per-agent coordinate descent MVE planning with Common Random Numbers (CRN).
 
     For each agent j (in random order):
-        - Enumerate A candidate first-actions (deterministic)
-        - Already-optimised agents use their π_mve at step 0
-        - All other actions sampled from policy network
-        - Accumulate agent j's discounted return over K steps + terminal value
-        - π_mve[j] = softmax(mean_return_per_candidate / τ)
+        Phase 1: Pre-sample other agents' step-0 actions (once per scenario)
+        Phase 2: Expand to (B*M,) — replicate across A candidates
+        Phase 3: Rollout K steps with CRN at step 0, independent at step>0
+        Phase 4: Aggregate: (B, spa, A) → mean over spa → softmax
 
     Args:
         model:   BaselineModel or OracleHyperMuZeroModel or InferHyperMuZeroModel
@@ -92,7 +100,7 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
     device = root_s.device
     is_hyper = _is_hyper_model(model)
 
-    spa = S // A          # samples per candidate action
+    spa = S // A          # samples per candidate action (scenarios)
     M = A * spa           # total trajectories per batch element per agent
 
     # Random agent ordering for coordinate descent
@@ -102,38 +110,65 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
     pi_mve = torch.zeros(B, N, A, device=device)
     optimised = set()
 
-    # Pre-compute candidate first-action indices (reused for every agent j)
-    # Layout: for batch b, candidate a, sample s → index b*M + a*spa + s, action = a
-    # Shape: (M,) repeated B times → (B*M,)
-    candidate_actions_template = torch.arange(A, device=device).repeat_interleave(spa)  # (M,)
-
     for j in agent_order:
-        # ── Expand root state and rule for this agent's search ────────
-        s_exp = root_s.repeat_interleave(M, dim=0)         # (B*M, latent)
-        rule_exp = _expand_rule(rule, M) if is_hyper else None
+        # ── Phase 1: Pre-sample other agents' step-0 actions (CRN) ─────
+        # Sample once per scenario at (B*spa,) granularity.
+        # All scenarios start from the same root_s (per batch element),
+        # so policy distributions are identical — pre-sampling is valid.
+        s_scenarios = root_s.repeat_interleave(spa, dim=0)  # (B*spa, latent)
+        rule_scenarios = _expand_rule(rule, spa) if is_hyper else None
+        B_spa = B * spa
+
+        step0_actions_per_scenario = {}  # agent_i -> (B*spa,) actions
+        for i in range(N):
+            if i == j:
+                continue  # agent j will be enumerated
+            if i in optimised:
+                # Already-optimised: sample from its π_mve, once per scenario
+                probs_i = pi_mve[:, i].repeat_interleave(spa, dim=0)  # (B*spa, A)
+                step0_actions_per_scenario[i] = Categorical(probs=probs_i).sample()
+            else:
+                # Not-yet-optimised: sample from policy network, once per scenario
+                step0_actions_per_scenario[i] = _sample_policy_action(
+                    model, s_scenarios, i, B_spa, device, is_hyper, rule_scenarios
+                )
+
+        # ── Phase 2: Expand to (B*M,) = (B*spa*A,) ────────────────────
+        # Layout: [b0_sc0_a0, b0_sc0_a1, ..., b0_sc0_a4,
+        #          b0_sc1_a0, ..., b0_sc1_a4,
+        #          ...,
+        #          b0_sc9_a0, ..., b0_sc9_a4,
+        #          b1_sc0_a0, ...]
+        # scenario outer, candidate inner
+        s_exp = s_scenarios.repeat_interleave(A, dim=0)  # (B*M, latent)
+        rule_exp = _expand_rule(rule_scenarios, A) if is_hyper else None
         BM = B * M
 
         cum_return_j = torch.zeros(BM, device=device)
         discount = 1.0
         curr_s = s_exp
 
-        # Agent j's deterministic first action: (B*M,)
-        first_action_j = candidate_actions_template.repeat(B)
+        # Agent j's candidate first-actions: [0,1,2,3,4, 0,1,2,3,4, ...]
+        # Each group of A corresponds to one scenario, all sharing same other-agent actions
+        first_action_j = torch.arange(A, device=device).repeat(B * spa)  # (B*M,)
 
+        # Expand other agents' step-0 actions: replicate each scenario action A times
+        step0_actions_expanded = {}
+        for i, a_scenario in step0_actions_per_scenario.items():
+            step0_actions_expanded[i] = a_scenario.repeat_interleave(A, dim=0)  # (B*M,)
+
+        # ── Phase 3: Rollout K steps ──────────────────────────────────
         for step in range(K):
-            # ── 1. Determine actions for all agents ───────────────────
             all_actions = []
             for i in range(N):
                 if step == 0 and i == j:
                     # Current agent, step 0: enumerated candidate (deterministic)
                     a_i = first_action_j
-                elif step == 0 and i in optimised:
-                    # Already-optimised agent, step 0: sample from its π_mve
-                    # pi_mve[:, i] is (B, A) → expand to (B*M, A) → sample
-                    probs_i = pi_mve[:, i].repeat_interleave(M, dim=0)  # (B*M, A)
-                    a_i = Categorical(probs=probs_i).sample()
+                elif step == 0 and i in step0_actions_expanded:
+                    # Other agent, step 0: CRN — same action within each scenario
+                    a_i = step0_actions_expanded[i]
                 else:
-                    # Not-yet-optimised agent or step > 0: sample from policy
+                    # Step > 0: independent sampling (states have diverged)
                     a_i = _sample_policy_action(
                         model, curr_s, i, BM, device, is_hyper, rule_exp
                     )
@@ -142,14 +177,14 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
             joint_actions = torch.stack(all_actions, dim=-1)        # (B*M, N)
             action_onehot = actions_to_one_hot(joint_actions, A)    # (B*M, N*A)
 
-            # ── 2. Objective state transition ─────────────────────────
+            # ── Objective state transition ──────────────────────────
             if is_hyper:
                 # θ_state depends only on rule (objective), any agent_id works
                 id_0 = torch.zeros(BM, dtype=torch.long, device=device)
                 model.set_context(rule_exp, id_0)
             s_next = model.transition(curr_s, action_onehot)
 
-            # ── 3. Subjective reward for agent j only ─────────────────
+            # ── Subjective reward for agent j only ──────────────────
             id_j = torch.full((BM,), j, dtype=torch.long, device=device)
             if is_hyper:
                 model.set_context(rule_exp, id_j)
@@ -164,7 +199,7 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
             curr_s = s_next
             discount *= gamma
 
-        # ── 4. Terminal value for agent j ─────────────────────────────
+        # ── Phase 3b: Terminal value for agent j ───────────────────
         id_j = torch.full((BM,), j, dtype=torch.long, device=device)
         if is_hyper:
             model.set_context(rule_exp, id_j)
@@ -176,9 +211,9 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
         v_j = inverse_scalar_transform(v_j_scaled).squeeze(-1)  # (B*M,)
         cum_return_j += discount * v_j
 
-        # ── 5. Aggregate: mean return per candidate action → softmax ──
-        # cum_return_j: (B*M,) → (B, A, spa) → mean over spa → (B, A)
-        returns_per_action = cum_return_j.view(B, A, spa).mean(dim=2)
+        # ── Phase 4: Aggregate with CRN layout ────────────────────
+        # CRN layout: (B*M,) → (B, spa, A) → mean over scenarios → (B, A)
+        returns_per_action = cum_return_j.view(B, spa, A).mean(dim=1)
         pi_mve[:, j] = F.softmax(returns_per_action / temperature, dim=-1)
 
         optimised.add(j)

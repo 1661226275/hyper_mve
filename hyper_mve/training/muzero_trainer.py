@@ -1,26 +1,26 @@
 """
-MuZero-style Unrolled Trainer for Hyper-MuZero (v4.5).
+MuZero-style Unrolled Trainer for Hyper-MuZero (v4.6).
 
 Training loop:
     1. Sample (B, K+1) sequences from episode buffer
     2. Random perspective sampling: pick agent_id per sample
     3. Initial encoding: s_0 = RepNet(obs_0)
     4. K-step unroll with gradient half-life
-    5. Compute losses per step: policy (CE+PG+entropy), value, reward, consistency
+    5. Compute losses per step: policy (CE), value, reward, consistency
     6. Loss averaged over K steps (v4.0)
     7. Unified backward + optimizer step
     8. [v4.4] EMA update target network + CosineAnnealingLR step
 
-Loss definitions (per step k) — v4.5:
-    L_policy  = ce_gate * w_ce * CE(p_k, pi_mve) + w_pg * PG(p_k, adv) - w_ent * H(p_k)
+Loss definitions (per step k) — v4.6:
+    L_policy  = CE(p_k, pi_mve)
     L_value   = MSE(v_k, h(z_{t+k}))      [z = N-step return via TARGET model, in scaled space]
     L_reward  = MSE(r_k, h(reward_{t+k}))  [in scaled space]
     L_consist = -CosineSim(Proj(s_pred), sg(Proj(RepNet(o_{t+k+1}))))  [v4.0]
 
-v4.5 changes:
-    - Policy gradient auxiliary loss (breaks planner deadlock)
-    - Entropy-gated CE loss (prevents CE from fighting PG when π_mve is uniform)
-    - Entropy bonus (prevents premature convergence)
+v4.6 changes:
+    - Removed PG auxiliary loss (off-policy bias causes l_pg runaway with replay buffer)
+    - Removed entropy-gated CE (no longer needed without PG)
+    - Planner CRN fix provides non-uniform π_mve, standard CE is sufficient
 
 v4.4 changes:
     - Target Network (EMA) for stable bootstrap in N-step return
@@ -28,7 +28,6 @@ v4.4 changes:
     - Adam eps=1e-5 for update stability
 """
 import copy
-import math
 
 import torch
 import torch.nn as nn
@@ -182,8 +181,6 @@ class MuZeroTrainer:
         actions_seq = batch['actions']  # (B, K, num_agents)
         rewards_seq = batch['rewards']  # (B, K, num_agents)
         policies_seq = batch['policies']  # (B, K, num_agents, num_actions)
-        # rules = batch['rules']        # (B,) — not used in Baseline
-        # dones = batch['dones']        # (B, K) — could mask, but for now ignore
 
         # Check if HyperMuZero model
         is_hyper = _is_hyper_model(model)
@@ -210,24 +207,11 @@ class MuZeroTrainer:
         # 3. Initial encoding
         s = model.encode(obs_seq[:, 0])  # (B, latent_dim)
 
-        # [v4.5] Pre-compute target model id_emb for PG advantage
-        with torch.no_grad():
-            id_emb_target = self.target_model.get_id_emb(agent_ids)
-
-        # [v4.5] Policy loss hyperparams
-        w_ce = getattr(cfg, 'w_ce', 1.0)
-        w_pg = getattr(cfg, 'w_pg', 1.0)
-        w_ent = getattr(cfg, 'w_entropy', 0.01)
-        max_ent = math.log(cfg.num_actions)
         batch_idx = torch.arange(B, device=self.device)
 
         # 4. K-step unroll
         total_loss = torch.tensor(0.0, device=self.device)
         loss_policy_sum = 0.0
-        loss_ce_sum = 0.0
-        loss_pg_sum = 0.0
-        entropy_sum = 0.0
-        ce_gate_sum = 0.0
         loss_value_sum = 0.0
         loss_reward_sum = 0.0
         loss_consist_sum = 0.0
@@ -265,35 +249,8 @@ class MuZeroTrainer:
                 proj_target = self.projector(s_target)  # (B, proj_dim)
 
             # 4.5 Compute losses
-            log_p = F.log_softmax(p_k, dim=-1)  # (B, A)
-
-            # ── [v4.5] CE loss with entropy gating ──
-            loss_ce = -(target_pi * log_p).sum(dim=-1).mean()
-            with torch.no_grad():
-                pi_ent = -(target_pi * (target_pi + 1e-8).log()).sum(dim=-1).mean()
-                ce_gate = (1.0 - pi_ent / max_ent).clamp(min=0.0)
-
-            # ── [v4.5] PG loss: advantage-weighted log-probability ──
-            a_taken = actions_seq[batch_idx, k, agent_ids]  # (B,) actual action
-            with torch.no_grad():
-                s_curr_real = self.target_model.encode(obs_seq[:, k])
-                s_next_real = self.target_model.encode(obs_seq[:, k + 1])
-                _, v_curr_sc = self.target_model.predict(s_curr_real, id_emb_target)
-                _, v_next_sc = self.target_model.predict(s_next_real, id_emb_target)
-                v_curr_real = inverse_scalar_transform(v_curr_sc).squeeze(-1)
-                v_next_real = inverse_scalar_transform(v_next_sc).squeeze(-1)
-                adv = rewards_i[:, k] + cfg.gamma * v_next_real - v_curr_real
-                adv = (adv - adv.mean()) / (adv.std() + 1e-8)  # normalize
-
-            log_prob_taken = log_p.gather(1, a_taken.unsqueeze(1).long()).squeeze(1)
-            loss_pg = -(log_prob_taken * adv).mean()
-
-            # ── [v4.5] Entropy bonus ──
-            probs = F.softmax(p_k, dim=-1)
-            entropy = -(probs * log_p).sum(dim=-1).mean()
-
-            # ── [v4.5] Combined policy loss ──
-            loss_policy = w_ce * ce_gate * loss_ce + w_pg * loss_pg - w_ent * entropy
+            # [v4.6] Plain CE — CRN-fixed planner provides meaningful π_mve targets
+            loss_policy = -(target_pi * F.log_softmax(p_k, dim=-1)).sum(dim=-1).mean()
 
             # Value loss: MSE in scaled space
             loss_value = F.mse_loss(v_k.squeeze(-1), target_z)
@@ -312,10 +269,6 @@ class MuZeroTrainer:
             total_loss = total_loss + step_loss
 
             loss_policy_sum += loss_policy.item()
-            loss_ce_sum += loss_ce.item()
-            loss_pg_sum += loss_pg.item()
-            entropy_sum += entropy.item()
-            ce_gate_sum += ce_gate.item()
             loss_value_sum += loss_value.item()
             loss_reward_sum += loss_reward.item()
             loss_consist_sum += loss_consist.item()
@@ -342,14 +295,10 @@ class MuZeroTrainer:
 
         return {
             'loss_total': total_loss.item(),
-            'loss_policy': loss_policy_sum / K,
-            'loss_ce': loss_ce_sum / K,
-            'loss_pg': loss_pg_sum / K,
-            'entropy': entropy_sum / K,
-            'ce_gate': ce_gate_sum / K,
-            'loss_value': loss_value_sum / K,
-            'loss_reward': loss_reward_sum / K,
-            'loss_consist': loss_consist_sum / K,
+            'l_pol': loss_policy_sum / K,
+            'l_val': loss_value_sum / K,
+            'l_rew': loss_reward_sum / K,
+            'l_con': loss_consist_sum / K,
             'lr': self.scheduler.get_last_lr()[0],
         }
 
@@ -415,24 +364,11 @@ class MuZeroTrainer:
         # 4. Initial encoding
         s = model.encode(obs_seq[:, 0])
 
-        # [v4.5] Pre-compute target model id_emb for PG advantage
-        with torch.no_grad():
-            id_emb_target = self.target_model.get_id_emb(agent_ids)
-
-        # [v4.5] Policy loss hyperparams
-        w_ce = getattr(cfg, 'w_ce', 1.0)
-        w_pg = getattr(cfg, 'w_pg', 1.0)
-        w_ent = getattr(cfg, 'w_entropy', 0.01)
-        max_ent = math.log(cfg.num_actions)
         batch_idx = torch.arange(B, device=self.device)
 
         # 5. K-step unroll (same structure as train_step)
         total_loss = torch.tensor(0.0, device=self.device)
         loss_policy_sum = 0.0
-        loss_ce_sum = 0.0
-        loss_pg_sum = 0.0
-        entropy_sum = 0.0
-        ce_gate_sum = 0.0
         loss_value_sum = 0.0
         loss_reward_sum = 0.0
         loss_consist_sum = 0.0
@@ -461,35 +397,8 @@ class MuZeroTrainer:
                 s_target = model.encode(obs_seq[:, k + 1])
                 proj_target = self.projector(s_target)  # (B, proj_dim)
 
-            log_p = F.log_softmax(p_k, dim=-1)
-
-            # ── [v4.5] CE loss with entropy gating ──
-            loss_ce = -(target_pi * log_p).sum(dim=-1).mean()
-            with torch.no_grad():
-                pi_ent = -(target_pi * (target_pi + 1e-8).log()).sum(dim=-1).mean()
-                ce_gate = (1.0 - pi_ent / max_ent).clamp(min=0.0)
-
-            # ── [v4.5] PG loss: advantage-weighted log-probability ──
-            a_taken = actions_seq[batch_idx, k, agent_ids]  # (B,)
-            with torch.no_grad():
-                s_curr_real = self.target_model.encode(obs_seq[:, k])
-                s_next_real = self.target_model.encode(obs_seq[:, k + 1])
-                _, v_curr_sc = self.target_model.predict(s_curr_real, id_emb_target)
-                _, v_next_sc = self.target_model.predict(s_next_real, id_emb_target)
-                v_curr_real = inverse_scalar_transform(v_curr_sc).squeeze(-1)
-                v_next_real = inverse_scalar_transform(v_next_sc).squeeze(-1)
-                adv = rewards_i[:, k] + cfg.gamma * v_next_real - v_curr_real
-                adv = (adv - adv.mean()) / (adv.std() + 1e-8)
-
-            log_prob_taken = log_p.gather(1, a_taken.unsqueeze(1).long()).squeeze(1)
-            loss_pg = -(log_prob_taken * adv).mean()
-
-            # ── [v4.5] Entropy bonus ──
-            probs = F.softmax(p_k, dim=-1)
-            entropy = -(probs * log_p).sum(dim=-1).mean()
-
-            # ── [v4.5] Combined policy loss ──
-            loss_policy = w_ce * ce_gate * loss_ce + w_pg * loss_pg - w_ent * entropy
+            # [v4.6] Plain CE — CRN-fixed planner provides meaningful π_mve targets
+            loss_policy = -(target_pi * F.log_softmax(p_k, dim=-1)).sum(dim=-1).mean()
 
             loss_value = F.mse_loss(v_k.squeeze(-1), target_z)
             loss_reward = F.mse_loss(r_k, target_r)
@@ -502,10 +411,6 @@ class MuZeroTrainer:
             total_loss = total_loss + step_loss
 
             loss_policy_sum += loss_policy.item()
-            loss_ce_sum += loss_ce.item()
-            loss_pg_sum += loss_pg.item()
-            entropy_sum += entropy.item()
-            ce_gate_sum += ce_gate.item()
             loss_value_sum += loss_value.item()
             loss_reward_sum += loss_reward.item()
             loss_consist_sum += loss_consist.item()
@@ -536,14 +441,10 @@ class MuZeroTrainer:
 
         return {
             'loss_total': total_loss.item(),
-            'loss_policy': loss_policy_sum / K,
-            'loss_ce': loss_ce_sum / K,
-            'loss_pg': loss_pg_sum / K,
-            'entropy': entropy_sum / K,
-            'ce_gate': ce_gate_sum / K,
-            'loss_value': loss_value_sum / K,
-            'loss_reward': loss_reward_sum / K,
-            'loss_consist': loss_consist_sum / K,
-            'loss_ctx': loss_ctx.item(),
+            'l_pol': loss_policy_sum / K,
+            'l_val': loss_value_sum / K,
+            'l_rew': loss_reward_sum / K,
+            'l_con': loss_consist_sum / K,
+            'l_ctx': loss_ctx.item(),
             'lr': self.scheduler.get_last_lr()[0],
         }

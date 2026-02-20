@@ -1,8 +1,8 @@
 """
-Hyper-MuZero Configuration (v4.5)
+Hyper-MuZero Configuration (v4.6)
 
 All hyperparameters for environment, model, and training.
-Aligned with DESIGN_DOC_FINAL.md (v4.5).
+Aligned with DESIGN_DOC_FINAL.md (v4.6).
 """
 
 
@@ -49,18 +49,13 @@ class BaseConfig:
     w_reward = 1.0
     w_consist = 0.5         # [v4.1 调整] 从 2.0 降至 0.5，防止初期坍缩 (l_pol长期不降)
 
-    # [v4.5] Policy loss decomposition: CE (planner) + PG (env feedback) + entropy
-    w_ce = 1.0              # CE loss weight (gated by π_mve entropy)
-    w_pg = 1.0              # Policy gradient loss weight
-    w_entropy = 0.01        # Entropy bonus weight (prevents premature convergence)
-
     # v4.0 HyperMuZero Improvements
     proj_dim = 64           # Projector 投影维度
     w_context = 0.01        # Context Hinge Loss 权重 (Exp3)
     target_context_std = 0.1  # Hinge Variance 阈值 (Exp3)
 
-    # MVE Planner (v4.5: per-agent coordinate descent)
-    mve_samples = 50        # samples per agent (split across A candidates)
+    # MVE Planner (v4.6: per-agent coordinate descent + CRN)
+    mve_samples = 50        # samples per agent (split across A candidates = 10 scenarios)
     mve_depth = 5           # rollout depth
     mve_temperature = 1.0   # softmax temperature for π_mve
 
@@ -68,9 +63,9 @@ class BaseConfig:
     reward_scale_eps = 0.001
 
     # Exploration (epsilon-greedy for discrete actions)
-    epsilon_init = 0.5          # [v4.5] 1.0→0.5, PG needs policy-chosen actions
+    epsilon_init = 1.0          # [v4.6] restored: no PG, standard ε-greedy
     epsilon_min = 0.05
-    epsilon_decay_steps = 20000  # [v4.5] 28000→20000, faster decay with PG signal
+    epsilon_decay_steps = 28000  # [v4.6] restored: standard decay schedule
 
     # Evaluation
     evaluate_freq = 500    # evaluate every N steps

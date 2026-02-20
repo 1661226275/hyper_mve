@@ -1,7 +1,7 @@
 # Hyper-MuZero: 基于超网络与视角自适应规划的非平稳多智能体强化学习框架
-## 最终设计文档 v4.4
+## 最终设计文档 v4.6
 
-> **本文档为最终实施版本**，整合了 v1.0(环境/实验)、v1.1(接口/依赖)、v3.0(MuZero训练/视角建模)、v3.2(稳定性防线) 的所有设计决策，并纳入 v4.0 四项关键改进（L2 Norm、Hinge Variance、Projection+CosineSim、Loss 平均化）、v4.1 统一评估框架、v4.2 阶段性冻结（对抗训练节奏控制）、v4.3 奖励正交化重构（Blocking Point + 信号消除修复），以及 **v4.4 训练稳定性改进（Target Network EMA + CosineAnnealingLR + Adam eps）**。
+> **本文档为最终实施版本**，整合了 v1.0(环境/实验)、v1.1(接口/依赖)、v3.0(MuZero训练/视角建模)、v3.2(稳定性防线) 的所有设计决策，并纳入 v4.0 四项关键改进（L2 Norm、Hinge Variance、Projection+CosineSim、Loss 平均化）、v4.1 统一评估框架、v4.2 阶段性冻结（对抗训练节奏控制）、v4.3 奖励正交化重构（Blocking Point + 信号消除修复）、v4.4 训练稳定性改进（Target Network EMA + CosineAnnealingLR + Adam eps），以及 **v4.6 Planner CRN 方差消减 + 回退 PG 辅助 Loss**。
 > 所有先前文档(DESIGN_DOC.md, DESIGN_DOC_v1.1_APPENDIX.md, design3.0.md, HYPER_MUZERO_IMPROVEMENTS.md)归档为参考，不再更新。
 
 ---
@@ -16,7 +16,7 @@
 ### 1.2 核心创新
 1. **视角即上下文 (Perspective as Context)**：将环境规则 Rule 和智能体身份 Agent_ID 统一为广义上下文 $C_{aug}$
 2. **双超网络架构 (DualHyperNetwork)**：客观状态转移 vs 主观奖励/价值分离
-3. **Per-Agent Coordinate Descent MVE Planner**：逐 Agent 坐标下降 K 步前瞻规划 (v4.5)
+3. **Per-Agent Coordinate Descent MVE Planner + CRN**：逐 Agent 坐标下降 + 相关采样方差消减 (v4.6)
 4. **MuZero 风格展开训练**：K 步 Unroll + Consistency Loss
 
 ---
@@ -368,74 +368,131 @@ class BaselinePredNet(nn.Module):
 
 ## 四、规划器设计 (Planner)
 
-### 4.1 Per-Agent Coordinate Descent MVE Planner (v4.5)
+### 4.1 Per-Agent Coordinate Descent MVE Planner + CRN (v4.6)
 
-> **v4.5 重写**：原 Joint-Space 采样在多 Agent 下完全失效（见 §5.8 问题诊断），改为逐 Agent 坐标下降搜索。
+> **v4.5 重写**：原 Joint-Space 采样在多 Agent 下完全失效，改为逐 Agent 坐标下降搜索。
+> **v4.6 修复**：加入 Common Random Numbers (CRN) 消除其他 Agent 随机动作的方差，使 Planner 能检测到候选动作间的真实 return 差异。
 
-#### 问题：联合动作空间爆炸
+#### 问题层级
+
+Planner 产出均匀分布 (`l_pol ≡ ln5 = 1.6094`) 存在两层独立的根因：
+
+| 层级 | 问题 | 解决方案 | 版本 |
+|------|------|---------|------|
+| 第1层 | 联合空间 $5^4=625$/step → 50 samples 覆盖率 ≈ 0.08 | Per-Agent Coordinate Descent → 5/step | v4.5 |
+| 第2层 | 其他 Agent 独立采样噪声淹没候选动作信号 (SNR ≈ 0.02) | CRN 相关采样 → 噪声完全抵消 | v4.6 |
+
+#### 第1层问题：联合动作空间爆炸 (v4.5 已解决)
 
 | 因素 | 单 Agent (Atari) | 4 Agent 设置 |
 |------|-----------------|-------------|
 | 每步动作空间 | 18 | $5^4 = 625$ |
-| K 步联合空间 | $18^5 \approx 190$ 万 | $625^5 \approx 10^{14}$ |
 | 50 samples 覆盖率 | $50/18 \approx 2.8$ per step | $50/625 \approx 0.08$ per step |
-| 找到好动作概率 | 较高 | **接近零** |
 
-**症状**：`l_pol` 恒为 $\ln 5 = 1.6094$（π_mve 退化为均匀分布，无搜索信号）。
+解决方案：Coordinate Descent 将搜索空间从 625/step 降到 5/step。
 
-#### 解决方案：Per-Agent Coordinate Descent
+#### 第2层问题：方差淹没信号 (v4.6 修复)
 
-核心思想：将联合空间搜索分解为逐 Agent 坐标优化。对每个 Agent j，**枚举** 其 A=5 个候选首动作，其余 Agent 走当前策略（已优化的走 π_mve，未优化的走 policy 网络），展开 K 步评估每个候选的期望回报。
+即使搜索空间只有 5 个候选，评估每个候选时，其他 3 个 Agent 的动作是**独立采样**的。其他 Agent 动作造成的 return 波动远大于 Agent j 动作选择带来的差异：
 
-搜索空间：$5 \times K = 25$（而非 $625^K$），50 个样本绰绰有余。
+```
+评估 "右" (10 个采样):
+    sample 1: Q = r(右, 其他agent随机动作_1) + ... = 3.2
+    sample 2: Q = r(右, 其他agent随机动作_2) + ... = -1.5
+    平均 Q_右 = 0.73
+
+评估 "左" (10 个采样):
+    sample 1: Q = r(左, 其他agent随机动作_A) + ... = -0.9
+    sample 2: Q = r(左, 其他agent随机动作_B) + ... = 2.1
+    平均 Q_左 = 0.69
+
+信号（agent j 的动作差异）:    ~0.02-0.1 / step
+噪声（其他 agent 随机动作）:   ~0.5-2.0 / step
+SNR ≈ 0.05 / 1.0 = 0.05
+
+10 个采样的标准误差 ≈ 1.0 / √10 ≈ 0.32
+信号 0.05 << 标准误差 0.32 → 完全淹没
+
+softmax([0.73, 0.69, 0.71, 0.70, 0.72] / 1.0) ≈ 均匀
+```
+
+#### 解决方案：Common Random Numbers (CRN)
+
+核心思想：评估不同候选动作时，让其他 Agent 的 **step-0 动作完全相同**。这样 return 差异只来自 Agent j 的动作选择，其他 Agent 的随机性完全抵消。
+
+```
+修复前（独立采样）:
+    评估 "右" sample_3: 其他agent动作 = [猎人0=上, 猎人1=右, 猎物=下]
+    评估 "左" sample_3: 其他agent动作 = [猎人0=左, 猎人1=停, 猎物=右]  ← 不同！
+
+    Q_右 - Q_左 = (signal差异) + (noise差异) ≈ noise差异 (信号被淹没)
+
+修复后（CRN 相关采样）:
+    评估 "右" sample_3: 其他agent动作 = [猎人0=上, 猎人1=右, 猎物=下]
+    评估 "左" sample_3: 其他agent动作 = [猎人0=上, 猎人1=右, 猎物=下]  ← 相同！
+
+    Q_右 - Q_左 = signal差异 (noise 完全抵消!)
+```
+
+**数据布局变更**：
+
+```
+v4.5 布局: candidate outer, sample inner
+    [a0_s0, a0_s1, ..., a0_s9, a1_s0, ..., a1_s9, ..., a4_s9]
+    reshape: (B, A, spa) → mean over spa → (B, A)
+
+v4.6 布局: scenario outer, candidate inner
+    [s0_a0, s0_a1, ..., s0_a4, s1_a0, ..., s1_a4, ..., s9_a4]
+    reshape: (B, spa, A) → mean over spa → (B, A)
+```
+
+**Step > 0 的处理**：只在 step 0 使用 CRN。Step > 0 状态已因不同候选动作而分叉，其他 Agent 面对的状态不同，不能严格共享动作。Step > 0 的独立噪声被 $\gamma^k$ 折扣，影响递减。
 
 ```python
 def sample_mve_plan(model, root_s, cfg, rule=None):
-    """Per-agent coordinate descent MVE planning."""
-    B, N, A, K, S = ...  # S = mve_samples (per agent)
-    spa = S // A          # samples per candidate action (e.g. 50//5=10)
+    """Per-agent coordinate descent MVE planning with CRN."""
+    B, N, A, K, S = ...
+    spa = S // A          # scenarios (e.g. 50//5=10)
     M = A * spa           # total trajectories per batch element
 
-    agent_order = random_permutation(N)  # 每次随机打乱
+    agent_order = random_permutation(N)
     pi_mve = zeros(B, N, A)
     optimised = set()
 
     for j in agent_order:
-        # 展开: (B, latent) → (B*M, latent), 所有候选并行
-        s_exp = root_s.repeat_interleave(M, dim=0)
-        cum_return_j = zeros(B * M)
+        # ── Phase 1: Pre-sample other agents' step-0 actions (CRN) ──
+        s_scenarios = root_s.repeat_interleave(spa, dim=0)  # (B*spa, latent)
+        step0_actions = {}
+        for i in range(N):
+            if i == j: continue
+            if i in optimised:
+                step0_actions[i] = sample(pi_mve[:, i], B*spa)  # once per scenario
+            else:
+                step0_actions[i] = sample(policy(s_scenarios, i))
 
-        # Agent j 的首动作: 确定性枚举 [0,0,..,1,1,..,A-1,..] × B
-        first_action_j = arange(A).repeat_interleave(spa).repeat(B)
+        # ── Phase 2: Expand to (B*M,) — replicate across A candidates ──
+        s_exp = s_scenarios.repeat_interleave(A, dim=0)  # (B*M, latent)
+        first_action_j = arange(A).repeat(B * spa)       # [0,1,2,3,4, 0,1,2,3,4, ...]
+        for i in step0_actions:
+            step0_actions[i] = step0_actions[i].repeat_interleave(A, dim=0)
 
+        # ── Phase 3: Rollout K steps ──
         for step in range(K):
             for i in range(N):
                 if step == 0 and i == j:
-                    a_i = first_action_j          # 枚举候选 (确定性)
-                elif step == 0 and i in optimised:
-                    a_i = sample(pi_mve[:, i])    # 从已优化 π_mve 采样
+                    a_i = first_action_j              # enumerated
+                elif step == 0 and i in step0_actions:
+                    a_i = step0_actions[i]            # CRN: same within scenario
                 else:
-                    a_i = sample(policy(curr_s, i)) # 从 policy 网络采样
-
-            # 客观状态转移 (一次调用)
-            s_next = model.transition(curr_s, joint_action)
-
-            # 仅计算 Agent j 的主观奖励
-            r_j = model.predict_reward(curr_s, joint_action, id_emb_j)
-            cum_return_j += discount * r_j
+                    a_i = sample(policy(curr_s, i))   # step>0: independent
             ...
 
-        # 终端价值 (Agent j 视角)
-        v_j = model.predict(curr_s, id_emb_j).value
-        cum_return_j += discount * v_j
-
-        # 聚合: 每个候选动作取均值 → softmax
-        returns_per_action = cum_return_j.view(B, A, spa).mean(dim=2)  # (B, A)
+        # ── Phase 4: Aggregate with CRN layout ──
+        returns_per_action = cum_return_j.view(B, spa, A).mean(dim=1)  # (B, A)
         pi_mve[:, j] = softmax(returns_per_action / temperature)
 
         optimised.add(j)
-
-    return pi_mve  # (B, N, A)
+    return pi_mve
 ```
 
 #### 关键设计决策
@@ -444,11 +501,11 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
 |------|------|------|
 | Agent 间搜索方式 | 顺序 Coordinate Descent | 后优化的 Agent 可利用前面的改进 |
 | 优化顺序 | 每次随机打乱 | 消除位置偏差，长期公平 |
-| 已优化 Agent 的 step 0 动作 | 从 π_mve 采样 | 保留随机性，避免过早承诺 |
+| Step 0 方差消减 | CRN (Common Random Numbers) | 消除其他 Agent 随机动作的噪声 |
+| Step > 0 | 独立采样 | 状态已分叉，CRN 不严格适用；γ^k 折扣降低影响 |
+| 已优化 Agent 的 step 0 动作 | CRN 采样：每 scenario 一次，复制给 A 个候选 | 保留随机性 + 噪声抵消 |
 | 当前 Agent 的 step 0 动作 | 枚举所有 A 个候选 | 确定性，消除首步采样方差 |
-| Step 1..K-1 动作 | 所有 Agent 从 policy 采样 | 估计 $Q^\pi(s, a_j)$ under current policy |
-| 每候选采样数 | $S / A$ (可配置 S) | 默认 50/5=10，提供合理方差估计 |
-| 计算开销 | ~2.7× 原版 | 可接受的代价换取有效搜索信号 |
+| 每候选采样数 (scenarios) | $S / A$ (默认 50/5=10) | CRN 下甚至 spa=1 也有信号，10 绰绰有余 |
 
 #### id_emb 多 Agent 切换（实现要点）
 
@@ -464,7 +521,7 @@ Baseline 模型无 `set_context`，通过 `get_id_emb(id)` 显式传入 id_emb�
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `mve_samples` | 50 | 每个 Agent 的采样总数（分配到 A 个候选） |
+| `mve_samples` | 50 | 每个 Agent 的采样总数（= A × scenarios = 5 × 10） |
 | `mve_depth` | 5 | 展开步数 K |
 | `mve_temperature` | 1.0 | π_mve softmax 温度 |
 
@@ -521,7 +578,7 @@ def compute_n_step_return(rewards_i, target_model, obs_seq, agent_id, params, n,
     return z
 ```
 
-### 5.3 训练步骤 (The Unroll Loop) — v4.4 更新
+### 5.3 训练步骤 (The Unroll Loop) — v4.6 更新
 
 > **v4.0 变更**：
 > 1. Consistency Loss 从 MSE(s, s_target) 升级为 **Projection + Negative Cosine Similarity**
@@ -532,6 +589,9 @@ def compute_n_step_return(rewards_i, target_model, obs_seq, agent_id, params, n,
 > 4. N-step return 的 bootstrap value 改用 **Target Network (EMA)** 计算（见 §5.7）
 > 5. 学习率调度器从 MultiStepLR 改为 **CosineAnnealingLR**
 > 6. Adam 优化器 eps 改为 1e-5
+>
+> **v4.6 变更**：
+> 7. Policy loss 恢复为纯 CE（移除 PG 辅助 loss + 熵门控，见 §5.8 + §5.9）
 
 ```python
 def train_step(self):
@@ -825,134 +885,104 @@ optimizer = torch.optim.Adam(params, lr=cfg.lr, eps=1e-5)
 | 网络结构 | 无任何架构变化 |
 | 奖励函数 | v4.3 正交化已完成 |
 
-### 5.8 Per-Agent Coordinate Descent MVE Planner (v4.5 新增)
+### 5.8 Planner 均匀分布修复历程 (v4.5 → v4.6)
 
-#### 问题诊断
+#### 原始问题
 
-训练中 `l_pol` 恒为 $\ln 5 = 1.6094$，即 π_mve 退化为均匀分布。根因：原 Joint-Space 采样 Planner 在多 Agent 离散动作空间下采样效率近零。
+训练中 `l_pol` 恒为 $\ln 5 = 1.6094$，即 π_mve 退化为均匀分布。
 
-#### 因果机制
+#### 第一层根因：联合动作空间爆炸 (v4.5 已解决)
 
 ```
 4 agents × 5 actions → 联合空间 625/step
-  │
-  └─→ 50 samples 覆盖率 = 50/625 ≈ 0.08
-        │
-        └─→ 50 条随机轨迹 return 几乎无差异
-              │
-              └─→ softmax 加权 → 均匀分布
-                    │
-                    └─→ π_mve = uniform → l_pol = ln(5) = 1.6094
-                          │
-                          └─→ policy 网络从 planner 获得零信号 → 无法改进
-                                │
-                                └─→ planner 依赖 policy 采样 → 永远均匀 (死锁)
+  └─→ 50 samples 覆盖率 ≈ 0.08 → softmax → 均匀分布
 ```
 
-#### 解决方案
+**v4.5 解决方案**：Per-Agent Coordinate Descent，搜索空间从 625/step 降到 5/step（详见 §4.1）。
 
-将联合空间搜索分解为逐 Agent 坐标下降（详见 §4.1）：
+#### 第二层根因：方差淹没信号 (v4.6 修复)
 
-- 搜索空间从 625/step 降到 5/step
-- 即使 policy 完全均匀，5 个候选动作的 mean return 也几乎不可能相同 → softmax 产生非均匀分布 → 打破死锁
-- Coordinate descent 顺序随机打乱，已优化 Agent 在后续 Agent 的评估中使用改进后的 π_mve
+Coordinate Descent 解决了搜索空间问题，但 π_mve 仍接近均匀。原因不是"预测噪声"，而是**其他 Agent 独立采样的方差**淹没了候选动作间的真实信号差异：
+
+```
+评估 agent j 的 5 个候选动作时，其他 3 个 Agent 的 step-0 动作独立采样:
+
+信号（agent j 动作差异）:    ~0.05 / step
+噪声（其他 agent 随机动作）:  ~1.0 / step
+SNR ≈ 0.05
+
+10 samples 标准误差 ≈ 1.0 / √10 ≈ 0.32
+信号 0.05 << 标准误差 0.32 → 完全淹没 → softmax → 均匀
+```
+
+**v4.6 解决方案**：Common Random Numbers (CRN)。评估不同候选动作时，让其他 Agent 的 step-0 动作**每 scenario 只采样一次**，复制给所有 A 个候选。噪声完全抵消，SNR → ∞（详见 §4.1）。
 
 #### 改动文件
 
 | 文件 | 改动 |
 |------|------|
-| `planning/mve_planner.py` | 核心重写 `sample_mve_plan` |
-| `config.py` | 新增 `mve_temperature` 参数 |
+| `planning/mve_planner.py` | 数据布局从 (B,A,spa) 改为 (B,spa,A)；新增 CRN pre-sampling 逻辑 |
+| `config.py` | 无变更（mve_samples/depth/temperature 不变） |
 | Worker / Trainer | **无改动**（接口 `sample_mve_plan(model, root_s, cfg, rule)` 保持不变） |
 
-### 5.9 Policy Gradient 辅助 Loss + 熵门控 CE (v4.5 新增)
+### 5.9 回退 Policy Gradient 辅助 Loss (v4.6)
 
-#### 问题诊断
+#### v4.5 曾引入的 PG + 熵门控 CE
 
-Per-Agent Planner (§5.8) 解决了搜索空间问题，但初期模型 reward/value 预测不准——5 个候选动作的 return 差异被预测噪声淹没，π_mve 仍接近均匀。形成新死锁：
-
-```
-模型预测不准 → π_mve ≈ 均匀
-  │
-  └─→ CE(pred, π_mve) 推 policy → 均匀
-        │
-        └─→ 均匀 policy → 随机数据 → 模型继续不准 (死锁)
-```
-
-#### 解决方案：PG 辅助 Loss + 熵门控 CE
-
-给 policy 一条不依赖 Planner 的学习通路。
-
-**关键修正**：当 π_mve 均匀时，CE loss 不是零梯度，而是 **主动拉 policy 回均匀**（梯度 = p_model - 1/A）。因此必须用熵门控 CE，否则 CE 和 PG 互相对抗。
+v4.5 为解决"π_mve 均匀 → CE 拉 policy 回均匀"的死锁，引入了 PG 辅助 loss + 熵门控 CE：
 
 ```python
-# ── Per step k in unroll loop ──
-
-# 1. CE loss + 熵门控
-loss_ce = -(target_pi * log_softmax(p_k)).sum(-1).mean()
-pi_ent = -(target_pi * log(target_pi)).sum(-1).mean()
-ce_gate = clamp(1.0 - pi_ent / ln(A), min=0)  # 均匀→0, 尖锐→1
-gated_ce = ce_gate * loss_ce
-
-# 2. PG loss (advantage from real observations via target model)
-s_curr = target_model.encode(obs_seq[:, k])
-s_next = target_model.encode(obs_seq[:, k+1])
-v_curr = target_model.predict(s_curr).value
-v_next = target_model.predict(s_next).value
-adv = r_k + γ * v_next - v_curr
-adv = normalize(adv)  # per-batch normalization
-
-log_prob = log_softmax(p_k).gather(a_taken)
-loss_pg = -(log_prob * adv).mean()
-
-# 3. Entropy bonus
-entropy = -(softmax(p_k) * log_softmax(p_k)).sum(-1).mean()
-
-# Combined
-loss_policy = w_ce * gated_ce + w_pg * loss_pg - w_ent * entropy
+# v4.5 (已移除):
+loss_policy = w_ce * ce_gate * loss_ce + w_pg * loss_pg - w_ent * entropy
 ```
 
-#### 三项 Loss 的协作机制
+#### l_pg 失控的根因：Off-Policy PG 的根本缺陷
 
-| 训练阶段 | CE 贡献 | PG 贡献 | 熵贡献 | 主导 |
-|----------|---------|---------|--------|------|
-| 初期 (π_mve≈均匀) | ce_gate≈0, **静默** | 有效 (环境 reward) | 防过早收敛 | **PG** |
-| 中期 (π_mve开始分化) | ce_gate↑, 逐渐恢复 | 持续有效 | 持续调节 | 混合 |
-| 后期 (π_mve尖锐) | ce_gate≈1, **全效** | 持续有效 | 维持探索 | CE + PG |
+实验观测：
 
-**自动过渡**：无需手动切换或 warmup schedule。ce_gate 由 π_mve 自身的信息量驱动。
+```
+Iter  250: l_pg = -0.003   (正常)
+Iter 2050: l_pg = -1.66    (异常)
+Iter 2450: l_pg = -2.46    (失控)
+```
 
-#### Advantage 计算：方案 B（真实观测编码）
+`loss_pg = -(log_prob_taken × adv).mean()` 假设 `a_taken ~ π_current`。但 Buffer 中的动作来自旧策略（高 ε 时代）。当前 policy 远离旧策略时：
 
-使用 target model 编码真实 `obs_seq`（非 transition 输出）计算 value，不依赖 StateTransNet 准确性。初期 transition 不准时 advantage 信号更可靠。
+```
+Buffer 中存储着 ε=0.5 时代的动作（大量随机动作）
+  └─→ 当前 policy 给这些旧动作赋予很低概率
+        └─→ log_prob_taken 变得非常负 (如 -4, -5...)
+              └─→ 对 adv < 0 的样本: -(很负 × 负) = -(正) → 很负的 loss
+                    └─→ 梯度推动 policy 进一步降低这些动作的概率
+                          └─→ log_prob 更负 → loss 更负 → 正反馈循环
+```
 
-#### 配置参数
+**本质问题**：PG 梯度 $\nabla \log \pi(a|s) \times \text{adv}$ 假设 $a$ 是从当前 $\pi$ 采样的。但 $a$ 是从旧策略采样的。这个 off-policy bias 导致 policy 优化的是"不做随机策略做过的事"，而非"做能获得高奖励的事"。
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `w_ce` | 1.0 | CE loss 权重（乘以 ce_gate） |
-| `w_pg` | 1.0 | PG loss 权重 |
-| `w_entropy` | 0.01 | 熵 bonus 权重 |
-| `epsilon_init` | 0.5 | 探索初始 ε（↓ from 1.0, PG 需要 policy 动作） |
-| `epsilon_decay_steps` | 10000 | ε 衰减步数（↓ from 28000） |
+#### v4.6 决策：移除 PG，恢复纯 CE
 
-#### 监控指标
+CRN 修复后 Planner 能产出非均匀 π_mve，标准 CE 即可提供有效学习信号，无需 PG 辅助：
 
-| 指标 | 含义 | 期望行为 |
-|------|------|----------|
-| `loss_pg` | PG loss | 初期有波动，逐渐稳定 |
-| `loss_ce` | CE loss (未门控) | 初期 = ln(5), 随 planner 改善而下降 |
-| `ce_gate` | 门控值 | 初期 ≈ 0, 逐渐升高 |
-| `entropy` | policy 熵 | 从 ln(5) 缓慢下降（不应归零） |
-| `loss_policy` | 组合 policy loss | l_pol 不再锁定在 1.6094 |
+```python
+# v4.6 (当前):
+loss_policy = CE(p_k, target_pi)  # 标准交叉熵，无门控
+```
+
+#### 配套参数恢复
+
+| 参数 | v4.5 值 | v4.6 值 | 原因 |
+|------|---------|---------|------|
+| `epsilon_init` | 0.5 | 1.0 | 无 PG，恢复标准 ε-greedy |
+| `epsilon_decay_steps` | 20000 | 28000 | 恢复标准衰减节奏 |
+| `w_ce`, `w_pg`, `w_entropy` | 1.0, 1.0, 0.01 | **移除** | 不再需要 |
 
 #### 改动文件
 
 | 文件 | 改动 |
 |------|------|
-| `config.py` | 新增 `w_ce`, `w_pg`, `w_entropy`；修改 `epsilon_init/decay` |
-| `training/muzero_trainer.py` | `train_step` + `train_step_infer` 添加 PG+entropy+CE 门控 |
-| `scripts/train_*.py` | 控制台 print 新增 `l_pg`, `ce_g` |
+| `training/muzero_trainer.py` | `train_step` + `train_step_infer` 移除 PG/entropy/gate |
+| `config.py` | 移除 `w_ce`, `w_pg`, `w_entropy`；恢复 `epsilon_init/decay` |
+| `scripts/train_*.py` | 控制台 print 移除 `l_pg`, `ce_g`；适配新 loss key names |
 
 ---
 
@@ -1272,7 +1302,7 @@ Loss_total = Σ_{k=0}^{K} (L_policy^k + L_value^k + L_reward^k + L_consistency^k
 | 风险 | 应对选项 |
 |------|---------|
 | 超网络输出爆炸 | A:小权重init(std=0.01) / B:LayerNorm / C:hyperfan_init |
-| MVE Planner 采样效率低 | ✅ **v4.5 已解决**: Per-Agent Coordinate Descent (§4.1, §5.8) |
+| MVE Planner 采样效率低 | ✅ **v4.6 已解决**: Coordinate Descent (v4.5) + CRN 方差消减 (v4.6) (§4.1, §5.8) |
 | MuZero展开梯度爆炸 | A:半衰trick / B:减小K / C:梯度裁剪 |
 | N-step return 方差大 | A:增大n / B:减小n / C:TD(λ) |
 | Baseline 不收敛 | A:固定Rule调试 / B:简化为1-step / C:检查obs/reward尺度 |
@@ -1282,7 +1312,8 @@ Loss_total = Σ_{k=0}^{K} (L_policy^k + L_value^k + L_reward^k + L_consistency^k
 
 ---
 
-*文档版本: v4.4 FINAL | 最后更新: 2026-02-18*
+*文档版本: v4.6 | 最后更新: 2026-02-20*
+*v4.6 新增: Planner CRN 方差消减 — Common Random Numbers 消除其他 Agent 随机动作噪声 (SNR 0.02→∞) + 数据布局 (B,A,spa)→(B,spa,A) + 回退 PG 辅助 loss (off-policy bias 导致 l_pg 正反馈失控) + 恢复纯 CE policy loss + epsilon_init 1.0 恢复*
 *v4.4 新增: 训练稳定性改进 — Target Network (EMA τ=0.99) 阻断 V 过估正反馈 + CosineAnnealingLR 平滑衰减 + Adam eps=1e-5 + freeze/epsilon 参数重新对齐 + buffer_size 20000→5000 提升数据新鲜度 + min_buffer_size=1000 warmup guard + 移除 PER 改用均匀采样 + Replay Ratio 82→2.56 (batch_size 512→256, episodes_per_iter 4→32, train_steps_per_iter 16→8)*
 *v4.3 新增: 奖励正交化重构 — Blocking Point 阻截位引导 + r_hunt/r_guard 信号消除修复 + Prey/Agent2 奖励正交化*
 *v4.2 新增: 阶段性冻结 (Phased Perspective Sampling) — 对抗训练节奏控制, 防止策略循环震荡*

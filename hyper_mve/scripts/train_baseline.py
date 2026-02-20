@@ -217,13 +217,11 @@ def main():
             print(f"[Iter {iteration:5d}] steps={total_train_steps:6d} "
                   f"eps={epsilon:.3f} buf={len(buffer):5d} "
                   f"phase={phase_name:>7s} "
-                  f"loss_total={losses['loss_total']:.4f} "
-                  f"l_pol={losses['loss_policy']:.4f} "
-                  f"l_pg={losses.get('loss_pg', 0):.4f} "
-                  f"ce_g={losses.get('ce_gate', 0):.3f} "
-                  f"l_val={losses['loss_value']:.4f} "
-                  f"l_rew={losses['loss_reward']:.4f} "
-                  f"l_con={losses['loss_consist']:.4f} "
+                  f"loss={losses['loss_total']:.4f} "
+                  f"l_pol={losses['l_pol']:.4f} "
+                  f"l_val={losses['l_val']:.4f} "
+                  f"l_rew={losses['l_rew']:.4f} "
+                  f"l_con={losses['l_con']:.4f} "
                   f"({elapsed:.0f}s)")
 
         # ── Evaluation ──────────────────────────────────────────
