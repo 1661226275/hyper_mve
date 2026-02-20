@@ -1,0 +1,1791 @@
+<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Hyper-MuZero&colon; &#x57fa;&#x4e8e;&#x8d85;&#x7f51;&#x7edc;&#x4e0e;&#x89c6;&#x89d2;&#x81ea;&#x9002;&#x5e94;&#x89c4;&#x5212;&#x7684;&#x975e;&#x5e73;&#x7a33;&#x591a;&#x667a;&#x80fd;&#x4f53;&#x5f3a;&#x5316;&#x5b66;&#x4e60;&#x6846;&#x67b6;</title>
+            <style>
+/* From extension vscode.github */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.vscode-dark img[src$=\#gh-light-mode-only],
+.vscode-light img[src$=\#gh-dark-mode-only],
+.vscode-high-contrast:not(.vscode-high-contrast-light) img[src$=\#gh-light-mode-only],
+.vscode-high-contrast-light img[src$=\#gh-dark-mode-only] {
+	display: none;
+}
+
+</style>
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex/dist/katex.min.css">
+<link href="https://cdn.jsdelivr.net/npm/katex-copytex@latest/dist/katex-copytex.min.css" rel="stylesheet" type="text/css">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/markdown.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/highlight.css">
+<style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        </style>
+        <style>
+.task-list-item {
+    list-style-type: none;
+}
+
+.task-list-item-checkbox {
+    margin-left: -20px;
+    vertical-align: middle;
+    pointer-events: none;
+}
+</style>
+<style>
+:root {
+  --color-note: #0969da;
+  --color-tip: #1a7f37;
+  --color-warning: #9a6700;
+  --color-severe: #bc4c00;
+  --color-caution: #d1242f;
+  --color-important: #8250df;
+}
+
+</style>
+<style>
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-note: #2f81f7;
+    --color-tip: #3fb950;
+    --color-warning: #d29922;
+    --color-severe: #db6d28;
+    --color-caution: #f85149;
+    --color-important: #a371f7;
+  }
+}
+
+</style>
+<style>
+.markdown-alert {
+  padding: 0.5rem 1rem;
+  margin-bottom: 16px;
+  color: inherit;
+  border-left: .25em solid #888;
+}
+
+.markdown-alert>:first-child {
+  margin-top: 0
+}
+
+.markdown-alert>:last-child {
+  margin-bottom: 0
+}
+
+.markdown-alert .markdown-alert-title {
+  display: flex;
+  font-weight: 500;
+  align-items: center;
+  line-height: 1
+}
+
+.markdown-alert .markdown-alert-title .octicon {
+  margin-right: 0.5rem;
+  display: inline-block;
+  overflow: visible !important;
+  vertical-align: text-bottom;
+  fill: currentColor;
+}
+
+.markdown-alert.markdown-alert-note {
+  border-left-color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: var(--color-note);
+}
+
+.markdown-alert.markdown-alert-important {
+  border-left-color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-important .markdown-alert-title {
+  color: var(--color-important);
+}
+
+.markdown-alert.markdown-alert-warning {
+  border-left-color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-warning .markdown-alert-title {
+  color: var(--color-warning);
+}
+
+.markdown-alert.markdown-alert-tip {
+  border-left-color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-tip .markdown-alert-title {
+  color: var(--color-tip);
+}
+
+.markdown-alert.markdown-alert-caution {
+  border-left-color: var(--color-caution);
+}
+
+.markdown-alert.markdown-alert-caution .markdown-alert-title {
+  color: var(--color-caution);
+}
+
+</style>
+        
+        </head>
+        <body class="vscode-body vscode-light">
+            <h1 id="hyper-muzero-基于超网络与视角自适应规划的非平稳多智能体强化学习框架">Hyper-MuZero: 基于超网络与视角自适应规划的非平稳多智能体强化学习框架</h1>
+<h2 id="最终设计文档-v43">最终设计文档 v4.3</h2>
+<blockquote>
+<p><strong>本文档为最终实施版本</strong>，整合了 v1.0(环境/实验)、v1.1(接口/依赖)、v3.0(MuZero训练/视角建模)、v3.2(稳定性防线) 的所有设计决策，并纳入 v4.0 四项关键改进（L2 Norm、Hinge Variance、Projection+CosineSim、Loss 平均化）、v4.1 统一评估框架、v4.2 阶段性冻结（对抗训练节奏控制），以及 <strong>v4.3 奖励正交化重构（Blocking Point + 信号消除修复）</strong>。
+所有先前文档(DESIGN_DOC.md, DESIGN_DOC_v1.1_APPENDIX.md, <a href="http://design3.0.html">design3.0.md</a>, HYPER_MUZERO_IMPROVEMENTS.md)归档为参考，不再更新。</p>
+</blockquote>
+<hr>
+<h2 id="一问题定义">一、问题定义</h2>
+<h3 id="11-核心问题">1.1 核心问题</h3>
+<p>在 <strong>非平稳多智能体环境</strong> 中，环境规则(Rule)随 Episode 动态变化：</p>
+<ul>
+<li>转移分布：<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>s</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub><mo>∼</mo><mi>P</mi><mo stretchy="false">(</mo><mo>⋅</mo><mi mathvariant="normal">∣</mi><msub><mi>s</mi><mi>t</mi></msub><mo separator="true">,</mo><msub><mi>a</mi><mi>t</mi></msub><mo separator="true">;</mo><mtext>Rule</mtext><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">s_{t+1} \sim P(\cdot | s_t, a_t; \text{Rule})</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6389em;vertical-align:-0.2083em;"></span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">t</span><span class="mbin mtight">+</span><span class="mord mtight">1</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2083em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">∼</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.13889em;">P</span><span class="mopen">(</span><span class="mord">⋅</span><span class="mord">∣</span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">t</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">a</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">t</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mpunct">;</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord text"><span class="mord">Rule</span></span><span class="mclose">)</span></span></span></span></li>
+<li>奖励函数：<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>r</mi><mrow><mi>t</mi><mo separator="true">,</mo><mi>i</mi></mrow></msub><mo>=</mo><msub><mi>R</mi><mi>i</mi></msub><mo stretchy="false">(</mo><msub><mi>s</mi><mi>t</mi></msub><mo separator="true">,</mo><msub><mi>a</mi><mi>t</mi></msub><mo separator="true">;</mo><mtext>Rule</mtext><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">r_{t,i} = R_i(s_t, a_t; \text{Rule})</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7167em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">t</span><span class="mpunct mtight">,</span><span class="mord mathnormal mtight">i</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.00773em;">R</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0077em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">t</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">a</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">t</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mpunct">;</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord text"><span class="mord">Rule</span></span><span class="mclose">)</span></span></span></span> （per-agent，取决于角色）</li>
+</ul>
+<h3 id="12-核心创新">1.2 核心创新</h3>
+<ol>
+<li><strong>视角即上下文 (Perspective as Context)</strong>：将环境规则 Rule 和智能体身份 Agent_ID 统一为广义上下文 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>C</mi><mrow><mi>a</mi><mi>u</mi><mi>g</mi></mrow></msub></mrow><annotation encoding="application/x-tex">C_{aug}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9694em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">ug</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span></span></span></span></li>
+<li><strong>双超网络架构 (DualHyperNetwork)</strong>：客观状态转移 vs 主观奖励/价值分离</li>
+<li><strong>Sample-based MVE Planner</strong>：基于采样的 K 步前瞻规划</li>
+<li><strong>MuZero 风格展开训练</strong>：K 步 Unroll + Consistency Loss</li>
+</ol>
+<hr>
+<h2 id="二非平稳环境设计nonstationarytag--faction-re-alignment-v2">二、非平稳环境设计（NonStationaryTag — Faction Re-alignment v2）</h2>
+<blockquote>
+<p>基于 v1.0 §三，v2 引入 <strong>阵营重组 (Faction Re-alignment)</strong> 机制：Rule 改变的不仅是 Agent 2 的行为，而是<strong>全局敌友关系矩阵</strong>，所有 Agent 的奖励函数都随 Rule 变化。</p>
+</blockquote>
+<h3 id="21-智能体角色">2.1 智能体角色</h3>
+<table>
+<thead>
+<tr>
+<th>智能体</th>
+<th>角色</th>
+<th>Rule=1 行为</th>
+<th>Rule=0 行为</th>
+<th>颜色</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent 0</td>
+<td>固定猎人</td>
+<td>追猎物，Agent 2 是队友</td>
+<td>追猎物，Agent 2 是障碍</td>
+<td>红色</td>
+</tr>
+<tr>
+<td>Agent 1</td>
+<td>固定猎人</td>
+<td>追猎物，Agent 2 是队友</td>
+<td>追猎物，Agent 2 是障碍</td>
+<td>红色</td>
+</tr>
+<tr>
+<td>Agent 2</td>
+<td><strong>可变角色</strong></td>
+<td>猎人（完全复用 Hunter reward）</td>
+<td>保镖（拦截猎人，保护猎物）</td>
+<td>黄色</td>
+</tr>
+<tr>
+<td>Agent 3</td>
+<td>猎物</td>
+<td>恐惧所有人（含 Agent 2）</td>
+<td>恐惧 {0,1}，<strong>靠近 Agent 2 寻求庇护</strong></td>
+<td>绿色</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-rule-机制阵营重组">2.2 Rule 机制（阵营重组）</h3>
+<ul>
+<li><code>Rule ∈ [0, 1]</code>，Episode 间采样，Episode 内不变</li>
+<li><strong>所有 Agent</strong> 的奖励 = <code>Rule × r_hunt + (1-Rule) × r_guard</code></li>
+<li><strong>Rule 不进入观测</strong>，仅记录在 info 中</li>
+</ul>
+<p><strong>阵营配置</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>Rule 值</th>
+<th>红方 (Hunters)</th>
+<th>黄绿联盟 (Defenders)</th>
+<th>博弈模式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rule = 1</td>
+<td>{0, 1, 2}</td>
+<td>—</td>
+<td>全面围剿：3 vs {0,1,2}</td>
+</tr>
+<tr>
+<td>Rule = 0</td>
+<td>{0, 1}</td>
+<td>{2, 3}</td>
+<td>保卫战：{0,1} vs {2,3}</td>
+</tr>
+<tr>
+<td>Rule ∈ (0,1)</td>
+<td>—</td>
+<td>—</td>
+<td>连续插值，行为渐变</td>
+</tr>
+</tbody>
+</table>
+<h3 id="23-正交化奖励设计v43-重构">2.3 正交化奖励设计（v4.3 重构）</h3>
+<blockquote>
+<p><strong>v4.3 变更</strong>：完全重构奖励函数，解决 v2 设计中的四层问题（P0 方向性缺失、P1 幅度不对称、P2 信号消除、P3 GRU 推断恶性循环）。核心思想：<strong>让 r_hunt 和 r_guard 关注不同的物理事件/几何特征，消除所有符号对冲</strong>。</p>
+</blockquote>
+<h4 id="231-设计原则">2.3.1 设计原则</h4>
+<ol>
+<li><strong>无符号对冲</strong>：同一物理事件不在 r_hunt / r_guard 中出现相反符号——每行要么同号叠加，要么一侧为零</li>
+<li><strong>独立密集引导</strong>：Hunt 用 dist_to_prey 引导；Guard 用 dist_to_block_point 引导。两个引导指向<strong>不同物理位置</strong></li>
+<li><strong>RewardHead 可预测性约束</strong>：奖励函数的每一项等价于&quot;某 agent 到某个由其他 agent 位置线性决定的参考点的距离的单调函数&quot;——这是 RewardHead（小 MLP）已验证能学会的函数类</li>
+<li><strong>渐进验证</strong>：先二值 rule {0,1} 验证极端模式，再扩展到连续 rule</li>
+</ol>
+<h4 id="232-阻截点blocking-point机制">2.3.2 阻截点（Blocking Point）机制</h4>
+<p><strong>核心思想</strong>：Guard 模式下，Agent 2 应被奖励&quot;站在猎人到猎物的路径上&quot;。定义阻截目标点，用点-点距离提供密集方向引导。</p>
+<p>对每个固定猎人 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>h</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">h_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">h</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>（<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>i</mi><mo>∈</mo><mo stretchy="false">{</mo><mn>0</mn><mo separator="true">,</mo><mn>1</mn><mo stretchy="false">}</mo></mrow><annotation encoding="application/x-tex">i \in \{0, 1\}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6986em;vertical-align:-0.0391em;"></span><span class="mord mathnormal">i</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">∈</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">{</span><span class="mord">0</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">1</span><span class="mclose">}</span></span></span></span>）：</p>
+<p class="katex-block"><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi mathvariant="bold">b</mi><mi>i</mi></msub><mo>=</mo><msub><mi mathvariant="bold">p</mi><msub><mi>h</mi><mi>i</mi></msub></msub><mo>+</mo><mi>α</mi><mo>⋅</mo><mo stretchy="false">(</mo><msub><mi mathvariant="bold">p</mi><mrow><mi>p</mi><mi>r</mi><mi>e</mi><mi>y</mi></mrow></msub><mo>−</mo><msub><mi mathvariant="bold">p</mi><msub><mi>h</mi><mi>i</mi></msub></msub><mo stretchy="false">)</mo><mo>=</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>α</mi><mo stretchy="false">)</mo><mo>⋅</mo><msub><mi mathvariant="bold">p</mi><msub><mi>h</mi><mi>i</mi></msub></msub><mo>+</mo><mi>α</mi><mo>⋅</mo><msub><mi mathvariant="bold">p</mi><mrow><mi>p</mi><mi>r</mi><mi>e</mi><mi>y</mi></mrow></msub></mrow><annotation encoding="application/x-tex">\mathbf{b}_i = \mathbf{p}_{h_i} + \alpha \cdot (\mathbf{p}_{prey} - \mathbf{p}_{h_i}) = (1-\alpha) \cdot \mathbf{p}_{h_i} + \alpha \cdot \mathbf{p}_{prey}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8444em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathbf">b</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8334em;vertical-align:-0.2501em;"></span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathnormal mtight">h</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3281em;"><span style="top:-2.357em;margin-left:0em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.143em;"><span></span></span></span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2501em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.4445em;"></span><span class="mord mathnormal" style="margin-right:0.0037em;">α</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">⋅</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1.0361em;vertical-align:-0.2861em;"></span><span class="mopen">(</span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">p</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">rey</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1.0001em;vertical-align:-0.2501em;"></span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathnormal mtight">h</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3281em;"><span style="top:-2.357em;margin-left:0em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.143em;"><span></span></span></span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2501em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord">1</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.0037em;">α</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">⋅</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8334em;vertical-align:-0.2501em;"></span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight"><span class="mord mathnormal mtight">h</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3281em;"><span style="top:-2.357em;margin-left:0em;margin-right:0.0714em;"><span class="pstrut" style="height:2.5em;"></span><span class="sizing reset-size3 size1 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.143em;"><span></span></span></span></span></span></span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2501em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.4445em;"></span><span class="mord mathnormal" style="margin-right:0.0037em;">α</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">⋅</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.7305em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">p</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">rey</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span></span></span></span></span></p>
+<p>单猎人 Shielding Score（线性衰减）：</p>
+<p class="katex-block"><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mtext>shield_score</mtext><mi>i</mi></msub><mo>=</mo><mi>max</mi><mo>⁡</mo><mrow><mo fence="true">(</mo><mn>0</mn><mo separator="true">,</mo><mtext>  </mtext><msub><mi>R</mi><mrow><mi>m</mi><mi>a</mi><mi>x</mi></mrow></msub><mo>⋅</mo><mrow><mo fence="true">(</mo><mn>1</mn><mo>−</mo><mfrac><mrow><mi mathvariant="normal">∥</mi><msub><mi mathvariant="bold">p</mi><mrow><mi>a</mi><mn>2</mn></mrow></msub><mo>−</mo><msub><mi mathvariant="bold">b</mi><mi>i</mi></msub><mi mathvariant="normal">∥</mi></mrow><msub><mi>d</mi><mrow><mi>m</mi><mi>a</mi><mi>x</mi></mrow></msub></mfrac><mo fence="true">)</mo></mrow><mo fence="true">)</mo></mrow></mrow><annotation encoding="application/x-tex">\text{shield\_score}_i = \max\left(0, \; R_{max} \cdot \left(1 - \frac{\|\mathbf{p}_{a2} - \mathbf{b}_i\|}{d_{max}}\right)\right)
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0541em;vertical-align:-0.3597em;"></span><span class="mord"><span class="mord text"><span class="mord">shield_score</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.102em;"><span style="top:-2.3403em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3597em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:2.4em;vertical-align:-0.95em;"></span><span class="mop">max</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="minner"><span class="mopen delimcenter" style="top:0em;"><span class="delimsizing size3">(</span></span><span class="mord">0</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.00773em;">R</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0077em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">ma</span><span class="mord mathnormal mtight">x</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">⋅</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="minner"><span class="mopen delimcenter" style="top:0em;"><span class="delimsizing size3">(</span></span><span class="mord">1</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.427em;"><span style="top:-2.314em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord"><span class="mord mathnormal">d</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">ma</span><span class="mord mathnormal mtight">x</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">∥</span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mtight">2</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mord"><span class="mord mathbf">b</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord">∥</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.836em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span><span class="mclose delimcenter" style="top:0em;"><span class="delimsizing size3">)</span></span></span><span class="mclose delimcenter" style="top:0em;"><span class="delimsizing size3">)</span></span></span></span></span></span></span></p>
+<p>多猎人聚合（取最大值——优先阻截最有效目标）：</p>
+<p class="katex-block"><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mtext>shield_reward</mtext><mo>=</mo><mi>max</mi><mo>⁡</mo><mo stretchy="false">(</mo><msub><mtext>shield_score</mtext><mn>0</mn></msub><mo separator="true">,</mo><mtext>  </mtext><msub><mtext>shield_score</mtext><mn>1</mn></msub><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">\text{shield\_reward} = \max(\text{shield\_score}_0, \; \text{shield\_score}_1)
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0044em;vertical-align:-0.31em;"></span><span class="mord text"><span class="mord">shield_reward</span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.1097em;vertical-align:-0.3597em;"></span><span class="mop">max</span><span class="mopen">(</span><span class="mord"><span class="mord text"><span class="mord">shield_score</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.0914em;"><span style="top:-2.3403em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3597em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord text"><span class="mord">shield_score</span></span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.0914em;"><span style="top:-2.3403em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.3597em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span></span></p>
+<pre><code>几何示意:
+
+场景 1: 单猎人                    场景 2: 双猎人
+
+H0 ------●------ Prey           H0 ---●--- Prey ---●--- H1
+          ↑                            ↑              ↑
+     block_point_0                 block_0        block_1
+     (H0→Prey 60%处)             Agent2 用 max 选较高 score 一侧
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>值</th>
+<th>依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>α</td>
+<td>0.6</td>
+<td>阻截点偏近猎物侧，符合护卫直觉；两极端场景均合理</td>
+</tr>
+<tr>
+<td>R_max</td>
+<td>0.5 / step</td>
+<td>完美护卫 episode 累计 ≈ +4.5，与 catch +10 同数量级</td>
+</tr>
+<tr>
+<td>d_max</td>
+<td>1.5</td>
+<td>≈ 半对角线，保证大部分地图有非零梯度</td>
+</tr>
+<tr>
+<td>聚合</td>
+<td>max</td>
+<td>语义清晰，离散动作下不可导问题不严重</td>
+</tr>
+</tbody>
+</table>
+<p><strong>RewardHead 可预测性论证</strong>：阻截点奖励 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>f</mi><mo stretchy="false">(</mo><mi mathvariant="normal">∥</mi><msub><mi mathvariant="bold">p</mi><mrow><mi>a</mi><mn>2</mn></mrow></msub><mo>−</mo><mo stretchy="false">(</mo><msub><mi>c</mi><mn>1</mn></msub><msub><mi mathvariant="bold">p</mi><mi>h</mi></msub><mo>+</mo><msub><mi>c</mi><mn>2</mn></msub><msub><mi mathvariant="bold">p</mi><mrow><mi>p</mi><mi>r</mi><mi>e</mi><mi>y</mi></mrow></msub><mo stretchy="false">)</mo><mi mathvariant="normal">∥</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">f(\|\mathbf{p}_{a2} - (c_1 \mathbf{p}_h + c_2 \mathbf{p}_{prey})\|)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord">∥</span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mtight">2</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal">c</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">h</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1.0361em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal">c</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">p</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">rey</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mord">∥</span><span class="mclose">)</span></span></span></span> 与 hunt shaped <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>g</mi><mo stretchy="false">(</mo><mi mathvariant="normal">∥</mi><msub><mi mathvariant="bold">p</mi><mrow><mi>a</mi><mn>2</mn></mrow></msub><mo>−</mo><msub><mi mathvariant="bold">p</mi><mrow><mi>p</mi><mi>r</mi><mi>e</mi><mi>y</mi></mrow></msub><mi mathvariant="normal">∥</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">g(\|\mathbf{p}_{a2} - \mathbf{p}_{prey}\|)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.03588em;">g</span><span class="mopen">(</span><span class="mord">∥</span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mtight">2</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1.0361em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathbf">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">p</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">rey</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mord">∥</span><span class="mclose">)</span></span></span></span> <strong>同构</strong>——都是 agent 到其他 agent 位置线性组合的距离的单调函数。RewardHead 能预测后者即能预测前者。</p>
+<h4 id="233-agent-2variable-agent完整奖励">2.3.3 Agent 2（Variable Agent）完整奖励</h4>
+<p class="katex-block"><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>r</mi><mrow><mi>a</mi><mi>g</mi><mi>e</mi><mi>n</mi><mi>t</mi><mn>2</mn></mrow></msub><mo>=</mo><mtext>rule</mtext><mo>×</mo><msub><mi>r</mi><mrow><mi>h</mi><mi>u</mi><mi>n</mi><mi>t</mi></mrow></msub><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mtext>rule</mtext><mo stretchy="false">)</mo><mo>×</mo><msub><mi>r</mi><mrow><mi>g</mi><mi>u</mi><mi>a</mi><mi>r</mi><mi>d</mi></mrow></msub><mo>−</mo><mtext>bound_penalty</mtext></mrow><annotation encoding="application/x-tex">r_{agent2} = \text{rule} \times r_{hunt} + (1 - \text{rule}) \times r_{guard} - \text{bound\_penalty}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7167em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3011em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">g</span><span class="mord mathnormal mtight">e</span><span class="mord mathnormal mtight">n</span><span class="mord mathnormal mtight">t</span><span class="mord mtight">2</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.7778em;vertical-align:-0.0833em;"></span><span class="mord text"><span class="mord">rule</span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.7333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">h</span><span class="mord mathnormal mtight">u</span><span class="mord mathnormal mtight">n</span><span class="mord mathnormal mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord">1</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord text"><span class="mord">rule</span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8694em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">gu</span><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span><span class="mord mathnormal mtight">d</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1.0044em;vertical-align:-0.31em;"></span><span class="mord text"><span class="mord">bound_penalty</span></span></span></span></span></span></p>
+<table>
+<thead>
+<tr>
+<th>事件</th>
+<th>r_hunt</th>
+<th>r_guard</th>
+<th>rule=0.5 合计</th>
+<th>消除？</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>接近猎物 shaped</td>
+<td>-0.1·d_prey</td>
+<td><strong>0</strong></td>
+<td>-0.05·d</td>
+<td>✅ 一侧为零</td>
+</tr>
+<tr>
+<td>阻截位 shaped</td>
+<td><strong>0</strong></td>
+<td>+shield_reward ≤ 0.5</td>
+<td>+0.5·shield</td>
+<td>✅ 一侧为零</td>
+</tr>
+<tr>
+<td>碰到猎物</td>
+<td>+10</td>
+<td><strong>0</strong></td>
+<td>+5.0</td>
+<td>✅ 一侧为零</td>
+</tr>
+<tr>
+<td>碰到固定猎人</td>
+<td>-1.0</td>
+<td><strong>0</strong></td>
+<td>-0.5</td>
+<td>✅ 一侧为零</td>
+</tr>
+<tr>
+<td>猎物被猎人抓</td>
+<td>0</td>
+<td>-10</td>
+<td>-5.0</td>
+<td>✅ 一侧为零</td>
+</tr>
+</tbody>
+</table>
+<p><strong>所有行对侧为零，无任何信号消除。</strong></p>
+<h4 id="234-preyagent-3完整奖励">2.3.4 Prey（Agent 3）完整奖励</h4>
+<p class="katex-block"><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>r</mi><mrow><mi>p</mi><mi>r</mi><mi>e</mi><mi>y</mi></mrow></msub><mo>=</mo><mtext>rule</mtext><mo>×</mo><msub><mi>r</mi><mrow><mi>h</mi><mi>u</mi><mi>n</mi><mi>t</mi></mrow></msub><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mtext>rule</mtext><mo stretchy="false">)</mo><mo>×</mo><msub><mi>r</mi><mrow><mi>g</mi><mi>u</mi><mi>a</mi><mi>r</mi><mi>d</mi></mrow></msub><mo>−</mo><mtext>bound_penalty</mtext></mrow><annotation encoding="application/x-tex">r_{prey} = \text{rule} \times r_{hunt} + (1 - \text{rule}) \times r_{guard} - \text{bound\_penalty}
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7167em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">p</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">rey</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.7778em;vertical-align:-0.0833em;"></span><span class="mord text"><span class="mord">rule</span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.7333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">h</span><span class="mord mathnormal mtight">u</span><span class="mord mathnormal mtight">n</span><span class="mord mathnormal mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord">1</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord text"><span class="mord">rule</span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:0.8694em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3361em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">gu</span><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight" style="margin-right:0.02778em;">r</span><span class="mord mathnormal mtight">d</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1.0044em;vertical-align:-0.31em;"></span><span class="mord text"><span class="mord">bound_penalty</span></span></span></span></span></span></p>
+<table>
+<thead>
+<tr>
+<th>事件</th>
+<th>r_hunt</th>
+<th>r_guard</th>
+<th>rule=0.5 合计</th>
+<th>消除？</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>远离固定猎人 shaped</td>
+<td>+0.1·d per h</td>
+<td>+0.1·d per h</td>
+<td>+0.1·d per h</td>
+<td>✅ 同号</td>
+</tr>
+<tr>
+<td>对 Agent 2 距离</td>
+<td><strong>0</strong></td>
+<td>+0.1·max(0, 2.0-d)</td>
+<td>+proximity/2</td>
+<td>✅ 一侧为零</td>
+</tr>
+<tr>
+<td>碰固定猎人</td>
+<td>-10</td>
+<td>-10</td>
+<td>-10</td>
+<td>✅ 同号</td>
+</tr>
+<tr>
+<td>碰 Agent 2</td>
+<td>-10</td>
+<td><strong>0</strong></td>
+<td>-5.0</td>
+<td>✅ 一侧为零</td>
+</tr>
+</tbody>
+</table>
+<p><strong>已知退化</strong>：rule=1 时 Prey 对 Agent 2 无距离 shaped → 通过碰撞 -10 间接学会闪避。如不足，回退方案：加回距离项系数 0.02。</p>
+<h4 id="235-fixed-huntersagent-0-1无变更">2.3.5 Fixed Hunters（Agent 0, 1）——无变更</h4>
+<table>
+<thead>
+<tr>
+<th>事件</th>
+<th>r_hunt</th>
+<th>r_guard</th>
+<th>rule=0.5 合计</th>
+<th>消除？</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>接近猎物 shaped</td>
+<td>-0.1·d</td>
+<td>-0.1·d</td>
+<td>-0.1·d</td>
+<td>✅ 同号</td>
+</tr>
+<tr>
+<td>碰猎物</td>
+<td>+10</td>
+<td>+10</td>
+<td>+10</td>
+<td>✅ 同号</td>
+</tr>
+<tr>
+<td>碰 Agent 2</td>
+<td>-1.0</td>
+<td>-0.5</td>
+<td>-0.75</td>
+<td>✅ 同号</td>
+</tr>
+</tbody>
+</table>
+<h4 id="236-行为光谱连续-rule-语义验证">2.3.6 行为光谱（连续 Rule 语义验证）</h4>
+<table>
+<thead>
+<tr>
+<th>rule</th>
+<th>Agent 2 密集引导</th>
+<th>稀疏激励</th>
+<th>行为解读</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.0</td>
+<td>100% 向猎物</td>
+<td>碰猎物 +10</td>
+<td>纯猎人</td>
+</tr>
+<tr>
+<td>0.7</td>
+<td>70% 向猎物 + 30% 向阻截点</td>
+<td>碰猎物 +7, 保护失败 -3</td>
+<td>偏攻——追猎物为主，路过阻截位有 bonus</td>
+</tr>
+<tr>
+<td>0.5</td>
+<td>50% + 50%</td>
+<td>碰猎物 +5, 保护失败 -5</td>
+<td>机会主义者——两个吸引子间权衡</td>
+</tr>
+<tr>
+<td>0.3</td>
+<td>30% + 70%</td>
+<td>碰猎物 +3, 保护失败 -7</td>
+<td>偏守——占位为主，被猎物微弱吸引</td>
+</tr>
+<tr>
+<td>0.0</td>
+<td>100% 向阻截点</td>
+<td>保护失败 -10</td>
+<td>纯护卫</td>
+</tr>
+</tbody>
+</table>
+<p><strong>数值标定</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>理想 episode 总奖励</th>
+<th>计算</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Guard (rule=0)</td>
+<td>≈ +3.5</td>
+<td>shield: 25×0.6×0.3 ≈ +4.5, boundary ≈ -1.0</td>
+</tr>
+<tr>
+<td>Hunt (rule=1)</td>
+<td>≈ +6.0</td>
+<td>catch +10, shaped ≈ -2.5, collision ≈ -1.0, boundary ≈ -0.5</td>
+</tr>
+</tbody>
+</table>
+<h4 id="237-与-v2-设计差异对照">2.3.7 与 v2 设计差异对照</h4>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>v2 原设计</th>
+<th>v4.3 新设计</th>
+<th>修改原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent 2 guard shaped</td>
+<td>-0.1·dist_to_prey</td>
+<td>+shield_reward(阻截点)</td>
+<td>P0: 引导方向与 hunt 一致，无法涌现拦截行为</td>
+</tr>
+<tr>
+<td>Agent 2 guard 碰猎人</td>
+<td>+1.0</td>
+<td>0</td>
+<td>P0+P2: 稀疏 + 与 hunt -1.0 符号对冲</td>
+</tr>
+<tr>
+<td>Agent 2 guard 碰猎物</td>
+<td>隐含在 -0.1d</td>
+<td>0</td>
+<td>正交化：guard 不关注猎物接触</td>
+</tr>
+<tr>
+<td>Prey hunt 远离 Agent 2</td>
+<td>+0.1·dist</td>
+<td>0</td>
+<td>P2: 消除与 guard proximity 的对冲</td>
+</tr>
+<tr>
+<td>Prey guard 贴身 Agent 2</td>
+<td>+1.0</td>
+<td>0</td>
+<td>消除与 hunt -10 的对立</td>
+</tr>
+<tr>
+<td>rule 采样</td>
+<td>U[0,1]</td>
+<td>阶段性：{0,1} → U[0,0.3]∪U[0.7,1.0] → U[0,1]</td>
+<td>渐进验证</td>
+</tr>
+<tr>
+<td>新增组件</td>
+<td>—</td>
+<td><code>_compute_shield_reward()</code></td>
+<td>阻截点计算</td>
+</tr>
+</tbody>
+</table>
+<h3 id="24-离散动作空间v31-新增">2.4 离散动作空间（v3.1 新增）</h3>
+<p>每个 Agent 有 <strong>5 个离散动作</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>动作ID</th>
+<th>语义</th>
+<th>力向量</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>停</td>
+<td>[0.0, 0.0]</td>
+</tr>
+<tr>
+<td>1</td>
+<td>右</td>
+<td>[1.0, 0.0]</td>
+</tr>
+<tr>
+<td>2</td>
+<td>左</td>
+<td>[-1.0, 0.0]</td>
+</tr>
+<tr>
+<td>3</td>
+<td>上</td>
+<td>[0.0, 1.0]</td>
+</tr>
+<tr>
+<td>4</td>
+<td>下</td>
+<td>[0.0, -1.0]</td>
+</tr>
+</tbody>
+</table>
+<p><strong>实现方式</strong>：DiscreteActionWrapper 将网络输出的 0-4 映射为环境需要的 [x, y] 力向量。</p>
+<pre><code class="language-python"><span class="hljs-keyword">class</span> <span class="hljs-title class_">DiscreteActionWrapper</span>(gym.ActionWrapper):
+    FORCE_MAP = {
+        <span class="hljs-number">0</span>: [<span class="hljs-number">0.0</span>, <span class="hljs-number">0.0</span>],  <span class="hljs-comment"># None</span>
+        <span class="hljs-number">1</span>: [<span class="hljs-number">1.0</span>, <span class="hljs-number">0.0</span>],  <span class="hljs-comment"># Right</span>
+        <span class="hljs-number">2</span>: [-<span class="hljs-number">1.0</span>, <span class="hljs-number">0.0</span>], <span class="hljs-comment"># Left</span>
+        <span class="hljs-number">3</span>: [<span class="hljs-number">0.0</span>, <span class="hljs-number">1.0</span>],  <span class="hljs-comment"># Up</span>
+        <span class="hljs-number">4</span>: [<span class="hljs-number">0.0</span>, -<span class="hljs-number">1.0</span>], <span class="hljs-comment"># Down</span>
+    }
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">action</span>(<span class="hljs-params">self, act_idx</span>):
+        <span class="hljs-keyword">return</span> self.FORCE_MAP[act_idx]
+</code></pre>
+<h3 id="25-环境接口">2.5 环境接口</h3>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>输入</th>
+<th>输出</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>reset(options=None)</code></td>
+<td><code>options</code>: 可选 dict, 支持 <code>{'rule': float}</code> 强制指定 Rule</td>
+<td><code>obs_n</code>, <code>rule</code></td>
+</tr>
+<tr>
+<td><code>step(action_n)</code></td>
+<td><code>List[int]</code> (每agent一个离散动作)</td>
+<td><code>obs_n, reward_n, done_n, info_n</code></td>
+</tr>
+<tr>
+<td><code>get_rule()</code></td>
+<td>—</td>
+<td><code>float</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>强制 Rule 机制 (v4.1 新增)</strong>：</p>
+<ul>
+<li><code>reset(options={'rule': 0.5})</code> → 该 episode 使用 Rule=0.5</li>
+<li><code>reset()</code> 或 <code>reset(options=None)</code> → 随机采样 Rule</li>
+<li>实现路径：<code>ns_environment.py</code> 将 <code>options['rule']</code> 存入 <code>world.force_rule</code>，<code>non_stationary_tag.py</code> 的 <code>reset_world</code> 优先使用 <code>force_rule</code></li>
+<li>颜色/奖励等均在 <code>reset_world</code> 内根据 Rule 正确设置，无时序漏洞</li>
+</ul>
+<hr>
+<h2 id="三系统架构设计">三、系统架构设计</h2>
+<h3 id="31-核心理念视角即上下文">3.1 核心理念：视角即上下文</h3>
+<p class="katex-block"><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msub><mi>C</mi><mrow><mi>a</mi><mi>u</mi><mi>g</mi></mrow></msub><mo>=</mo><mo stretchy="false">[</mo><mtext>RuleEncoder</mtext><mo stretchy="false">(</mo><mi>r</mi><mi>u</mi><mi>l</mi><mi>e</mi><mo stretchy="false">)</mo><mo separator="true">,</mo><mtext>Embedding</mtext><mo stretchy="false">(</mo><mi>a</mi><mi>g</mi><mi>e</mi><mi>n</mi><mi>t</mi><mi mathvariant="normal">_</mi><mi>i</mi><mi>d</mi><mo stretchy="false">)</mo><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">C_{aug} = [\text{RuleEncoder}(rule), \text{Embedding}(agent\_id)]
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9694em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">ug</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.06em;vertical-align:-0.31em;"></span><span class="mopen">[</span><span class="mord text"><span class="mord">RuleEncoder</span></span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="mord mathnormal">u</span><span class="mord mathnormal" style="margin-right:0.01968em;">l</span><span class="mord mathnormal">e</span><span class="mclose">)</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord text"><span class="mord">Embedding</span></span><span class="mopen">(</span><span class="mord mathnormal">a</span><span class="mord mathnormal" style="margin-right:0.03588em;">g</span><span class="mord mathnormal">e</span><span class="mord mathnormal">n</span><span class="mord mathnormal">t</span><span class="mord" style="margin-right:0.02778em;">_</span><span class="mord mathnormal">i</span><span class="mord mathnormal">d</span><span class="mclose">)]</span></span></span></span></span></p>
+<ul>
+<li><strong>Rule</strong>：决定客观物理反馈机制（如碰撞是否得分）</li>
+<li><strong>Agent ID</strong>：决定主观价值判断（如我想抓人还是想逃跑）</li>
+<li><strong>超网络</strong>：<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>H</mi><mo stretchy="false">(</mo><msub><mi>C</mi><mrow><mi>a</mi><mi>u</mi><mi>g</mi></mrow></msub><mo stretchy="false">)</mo><mo>→</mo><mi>θ</mi></mrow><annotation encoding="application/x-tex">H(C_{aug}) \to \theta</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0361em;vertical-align:-0.2861em;"></span><span class="mord mathnormal" style="margin-right:0.08125em;">H</span><span class="mopen">(</span><span class="mord"><span class="mord mathnormal" style="margin-right:0.07153em;">C</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:-0.0715em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">ug</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">→</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6944em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">θ</span></span></span></span>，生成&quot;在该规则下，身为该角色&quot;的世界观</li>
+</ul>
+<h3 id="32-网络架构总览">3.2 网络架构总览</h3>
+<pre><code>┌──────────────── Context Path ──────────────────────┐
+│  Rule ──→ [RuleEncoder] ──→ rule_emb               │
+│  Agent_ID ──→ [Embedding] ──→ id_emb               │
+│                                                      │
+│  hyper_trans(rule_emb)           → θ_state           │
+│  hyper_rew(rule_emb ⊕ id_emb)   → θ_reward          │
+│  hyper_pred(rule_emb ⊕ id_emb)  → θ_pred            │
+└──────────────────────────────────────────────────────┘
+
+┌──────────────── Perception Path ─────────────────────┐
+│  o_joint ──→ [RepresentationNet(固定权重)] ──→ s      │
+└──────────────────────────────────────────────────────┘
+
+┌──────────────── Dynamics Path ───────────────────────┐
+│  s, A_joint ──→ [StateTransNet(θ_state)] ──→ s'     │  ← 客观
+│  s, A_joint ──→ [RewardHead(θ_reward)] ──→ r_i      │  ← 主观 (因果性: r=R(s,a))
+└──────────────────────────────────────────────────────┘
+
+┌──────────────── Prediction Path ─────────────────────┐
+│  s ──→ [PredictionNet(θ_pred)] ──→ p_i [5], v_i [1] │  ← 主观
+└──────────────────────────────────────────────────────┘
+</code></pre>
+<h3 id="33-五大核心网络">3.3 五大核心网络</h3>
+<table>
+<thead>
+<tr>
+<th>网络</th>
+<th>输入</th>
+<th>输出</th>
+<th>权重来源</th>
+<th>客观/主观</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>RepresentationNet</strong></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>o</mi><mrow><mi>j</mi><mi>o</mi><mi>i</mi><mi>n</mi><mi>t</mi></mrow></msub></mrow><annotation encoding="application/x-tex">o_{joint}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7167em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal">o</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span><span class="mord mathnormal mtight">o</span><span class="mord mathnormal mtight">in</span><span class="mord mathnormal mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span></span></span></span></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>s</mi></mrow><annotation encoding="application/x-tex">s</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">s</span></span></span></span></td>
+<td>固定训练参数</td>
+<td>客观</td>
+</tr>
+<tr>
+<td><strong>StateTransNet</strong></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>s</mi><mo separator="true">,</mo><msub><mi>A</mi><mrow><mi>j</mi><mi>o</mi><mi>i</mi><mi>n</mi><mi>t</mi></mrow></msub></mrow><annotation encoding="application/x-tex">s, A_{joint}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9694em;vertical-align:-0.2861em;"></span><span class="mord mathnormal">s</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span><span class="mord mathnormal mtight">o</span><span class="mord mathnormal mtight">in</span><span class="mord mathnormal mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span></span></span></span></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mi>s</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup></mrow><annotation encoding="application/x-tex">s&#x27;</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7519em;"></span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.7519em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span></span></span></span></td>
+<td>hyper_trans(rule)</td>
+<td>客观</td>
+</tr>
+<tr>
+<td><strong>RewardHead</strong></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>s</mi><mo separator="true">,</mo><msub><mi>A</mi><mrow><mi>j</mi><mi>o</mi><mi>i</mi><mi>n</mi><mi>t</mi></mrow></msub></mrow><annotation encoding="application/x-tex">s, A_{joint}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.9694em;vertical-align:-0.2861em;"></span><span class="mord mathnormal">s</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span><span class="mord mathnormal mtight">o</span><span class="mord mathnormal mtight">in</span><span class="mord mathnormal mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span></span></span></span></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>r</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">r_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.5806em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span> (标量)</td>
+<td>hyper_rew(rule, id)</td>
+<td>主观</td>
+</tr>
+<tr>
+<td><strong>PredictionNet</strong></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>s</mi></mrow><annotation encoding="application/x-tex">s</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">s</span></span></span></span></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>p</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">p_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.625em;vertical-align:-0.1944em;"></span><span class="mord"><span class="mord mathnormal">p</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span> [5], <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>v</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">v_i</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.5806em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.03588em;">v</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0359em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathnormal mtight">i</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span> [1]</td>
+<td>hyper_pred(rule, id)</td>
+<td>主观</td>
+</tr>
+<tr>
+<td><strong>ContextEncoder</strong></td>
+<td>rule, agent_id</td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>c</mi><mrow><mi>a</mi><mi>u</mi><mi>g</mi></mrow></msub></mrow><annotation encoding="application/x-tex">c_{aug}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7167em;vertical-align:-0.2861em;"></span><span class="mord"><span class="mord mathnormal">c</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.1514em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">ug</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span></span></span></span></td>
+<td>固定训练参数</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>RewardHead 输入说明</strong>：使用当前状态 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>s</mi></mrow><annotation encoding="application/x-tex">s</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">s</span></span></span></span>（而非 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mi>s</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup></mrow><annotation encoding="application/x-tex">s&#x27;</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7519em;"></span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.7519em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span></span></span></span>），符合 MDP 因果性 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>r</mi><mo>=</mo><mi>R</mi><mo stretchy="false">(</mo><mi>s</mi><mo separator="true">,</mo><mi>a</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">r = R(s, a)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal" style="margin-right:0.02778em;">r</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathnormal" style="margin-right:0.00773em;">R</span><span class="mopen">(</span><span class="mord mathnormal">s</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">a</span><span class="mclose">)</span></span></span></span>，即&quot;在状态 s 执行动作 a 得到奖励 r&quot;。避免 reward 预测对 transition 输出质量的耦合依赖。</p>
+</blockquote>
+<h3 id="34-dualhypernetwork">3.4 DualHyperNetwork</h3>
+<pre><code class="language-python"><span class="hljs-keyword">class</span> <span class="hljs-title class_">DualHyperNetwork</span>(nn.Module):
+    <span class="hljs-string">&quot;&quot;&quot;三路超网络：客观转移 + 主观奖励 + 主观预测&quot;&quot;&quot;</span>
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">__init__</span>(<span class="hljs-params">self, rule_dim, id_dim, trans_params, rew_params, pred_params</span>):
+        self.hyper_trans = SimpleMLP(rule_dim, trans_params)           <span class="hljs-comment"># Rule only</span>
+        self.hyper_rew   = SimpleMLP(rule_dim + id_dim, rew_params)   <span class="hljs-comment"># Rule + ID</span>
+        self.hyper_pred  = SimpleMLP(rule_dim + id_dim, pred_params)  <span class="hljs-comment"># Rule + ID</span>
+
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">forward</span>(<span class="hljs-params">self, rule_emb, id_emb</span>):
+        θ_state  = self.hyper_trans(rule_emb)
+        θ_reward = self.hyper_rew(cat([rule_emb, id_emb]))
+        θ_pred   = self.hyper_pred(cat([rule_emb, id_emb]))
+        <span class="hljs-keyword">return</span> θ_state, θ_reward, θ_pred
+</code></pre>
+<h3 id="35-functional-net-稳定性设计-v32-新增">3.5 Functional Net 稳定性设计 (v3.2 新增)</h3>
+<p>超网络动态生成权重存在&quot;权重爆炸 → 激活爆炸 → Loss 爆炸&quot;的风险链。v3.2 引入三层稳定性防线：</p>
+<h4 id="351-adaptive-layernorm-adaln--切断激活爆炸链">3.5.1 Adaptive LayerNorm (AdaLN) — 切断激活爆炸链</h4>
+<p>所有 Functional Net 的<strong>隐藏层</strong>内嵌 AdaLN：超网络除了生成每层的 <code>weight</code> 和 <code>bias</code>，还额外生成 <code>gamma</code> 和 <code>beta</code>。</p>
+<pre><code>每层参数: weight (out, in) + bias (out) + gamma (out) + beta (out)
+
+Forward: x = W·x + b → LayerNorm → x * gamma + beta → ReLU
+</code></pre>
+<p><strong>原理</strong>：无论权重 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>W</mi></mrow><annotation encoding="application/x-tex">W</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.13889em;">W</span></span></span></span> 多大，LayerNorm 都会将激活值归一化到 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="script">N</mi><mo stretchy="false">(</mo><mn>0</mn><mo separator="true">,</mo><mn>1</mn><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">\mathcal{N}(0, 1)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathcal" style="margin-right:0.14736em;">N</span><span class="mopen">(</span><span class="mord">0</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">1</span><span class="mclose">)</span></span></span></span>，然后由超网络生成的 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>γ</mi><mo separator="true">,</mo><mi>β</mi></mrow><annotation encoding="application/x-tex">\gamma, \beta</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8889em;vertical-align:-0.1944em;"></span><span class="mord mathnormal" style="margin-right:0.05556em;">γ</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal" style="margin-right:0.05278em;">β</span></span></span></span> 做可控的仿射变换。</p>
+<p><strong>适用范围</strong>：</p>
+<ul>
+<li>StateTransNet: FC1, FC2 加 AdaLN，输出层 FC3 不加（接固定 LayerNorm）</li>
+<li>RewardHead: FC1, FC2 加 AdaLN，输出层 FC3 不加（输出标量 reward）</li>
+<li>PredictionNet: shared trunk 的 FC1, FC2 加 AdaLN，PolicyHead/ValueHead 不加（单层线性映射）</li>
+</ul>
+<pre><code class="language-python"><span class="hljs-comment"># AdaLN Forward (per hidden layer)</span>
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">adaln_forward</span>(<span class="hljs-params">x, weight, bias, gamma, beta</span>):
+    h = functional_linear(x, weight, bias)
+    <span class="hljs-comment"># Instance-wise LayerNorm (per-sample normalization)</span>
+    mean = h.mean(dim=-<span class="hljs-number">1</span>, keepdim=<span class="hljs-literal">True</span>)
+    var = h.var(dim=-<span class="hljs-number">1</span>, keepdim=<span class="hljs-literal">True</span>, unbiased=<span class="hljs-literal">False</span>)
+    h = (h - mean) / torch.sqrt(var + <span class="hljs-number">1e-5</span>)
+    <span class="hljs-comment"># Adaptive affine transform (generated by HyperNet)</span>
+    h = h * gamma + beta
+    <span class="hljs-keyword">return</span> F.relu(h)
+</code></pre>
+<h4 id="352-残差连接-residual-connection--statetransnet-安全网">3.5.2 残差连接 (Residual Connection) — StateTransNet 安全网</h4>
+<p>StateTransNet 使用残差结构，学习状态变化量 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>s</mi></mrow><annotation encoding="application/x-tex">\Delta s</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord">Δ</span><span class="mord mathnormal">s</span></span></span></span> 而非绝对状态：</p>
+<p class="katex-block"><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msup><mi>s</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup><mo>=</mo><mi>s</mi><mo>+</mo><mtext>TransNet</mtext><mo stretchy="false">(</mo><mi>s</mi><mo separator="true">,</mo><msub><mi>A</mi><mrow><mi>j</mi><mi>o</mi><mi>i</mi><mi>n</mi><mi>t</mi></mrow></msub><mo separator="true">;</mo><msub><mi>θ</mi><mrow><mi>s</mi><mi>t</mi><mi>a</mi><mi>t</mi><mi>e</mi></mrow></msub><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">s&#x27; = s + \text{TransNet}(s, A_{joint}; \theta_{state})
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8019em;"></span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8019em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6667em;vertical-align:-0.0833em;"></span><span class="mord mathnormal">s</span><span class="mspace" style="margin-right:0.2222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222em;"></span></span><span class="base"><span class="strut" style="height:1.0361em;vertical-align:-0.2861em;"></span><span class="mord text"><span class="mord">TransNet</span></span><span class="mopen">(</span><span class="mord mathnormal">s</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal">A</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span><span class="mord mathnormal mtight">o</span><span class="mord mathnormal mtight">in</span><span class="mord mathnormal mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mpunct">;</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">θ</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">s</span><span class="mord mathnormal mtight">t</span><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight">t</span><span class="mord mathnormal mtight">e</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span></span></p>
+<p><strong>初始行为</strong>：当超网络输出接近零时，<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mtext>TransNet</mtext></mrow><annotation encoding="application/x-tex">\text{TransNet}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord text"><span class="mord">TransNet</span></span></span></span></span> 输出 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>≈</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">\approx 0</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.4831em;"></span><span class="mrel">≈</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.6444em;"></span><span class="mord">0</span></span></span></span>，因此 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mi>s</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup><mo>≈</mo><mi>s</mi></mrow><annotation encoding="application/x-tex">s&#x27; \approx s</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7519em;"></span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.7519em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">≈</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.4306em;"></span><span class="mord mathnormal">s</span></span></span></span>（静止不动）。这比随机输出一个巨大的 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mi>s</mi><mo mathvariant="normal" lspace="0em" rspace="0em">′</mo></msup></mrow><annotation encoding="application/x-tex">s&#x27;</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7519em;"></span><span class="mord"><span class="mord mathnormal">s</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.7519em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">′</span></span></span></span></span></span></span></span></span></span></span></span> 合理得多。</p>
+<blockquote>
+<p>注意：仅 StateTransNet 使用残差。RewardHead（输出标量）和 PredictionNet（输出 policy+value）的维度不匹配，不适合残差。</p>
+</blockquote>
+<h4 id="353-超网络输出-l2-归一化--可学习缩放-v40-升级--方向模长解耦">3.5.3 超网络输出 L2 归一化 + 可学习缩放 (v4.0 升级) — 方向/模长解耦</h4>
+<blockquote>
+<p><strong>v4.0 变更</strong>：原 v3.2 仅使用标量 <code>output_scale=0.1</code> 缩放，实验发现不足以约束权重模长的剧烈波动。v4.0 升级为 <strong>L2 归一化 + 小初始模长</strong>，将&quot;方向&quot;和&quot;模长&quot;解耦。</p>
+</blockquote>
+<p>ChunkedHyperNetWrapper 在输出端使用：</p>
+<pre><code class="language-python">self.norm_output = <span class="hljs-literal">True</span>  <span class="hljs-comment"># 默认开启 L2 归一化</span>
+self.output_scale = nn.Parameter(torch.tensor(<span class="hljs-number">0.01</span>))  <span class="hljs-comment"># 可学习模长 (初始=0.01)</span>
+
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">forward</span>(<span class="hljs-params">self, context</span>):
+    raw = self.hnet.forward(cond_input=context, ret_format=<span class="hljs-string">&quot;flattened&quot;</span>)
+    <span class="hljs-comment"># [v4.0] L2 归一化：固定方向分布，模长恒为 1.0</span>
+    <span class="hljs-keyword">if</span> self.norm_output:
+        norms = torch.linalg.norm(raw, dim=-<span class="hljs-number">1</span>, keepdim=<span class="hljs-literal">True</span>)
+        raw = raw / (norms + <span class="hljs-number">1e-8</span>)
+    <span class="hljs-keyword">return</span> raw * self.output_scale  <span class="hljs-comment"># 初始模长 = 0.01</span>
+</code></pre>
+<p><strong>初始行为链</strong>：</p>
+<ol>
+<li>L2 Norm → 参数向量模长 = 1.0（方向随机，但模长固定）</li>
+<li>× output_scale(0.01) → 实际模长 = 0.01</li>
+<li>其中 gamma/beta ≈ 0.01 → AdaLN 输出 ≈ LayerNorm 输出 → <strong>静默启动 (Quiet Start)</strong></li>
+<li>训练过程中 output_scale 逐渐增长，超网络从&quot;微调方向&quot;起步</li>
+</ol>
+<p><strong>为何 0.01 而非 0.1</strong>：L2 Norm 后模长恒为 1.0（vs 原始随机初始化模长 ≈ 0.1×std），所以需要更小的 scale 来补偿。</p>
+<p><strong>四层防线协作</strong> (v4.0)：</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>机制</th>
+<th>保护对象</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>第0层</td>
+<td>L2 归一化</td>
+<td>固定参数模长，防止方向/模长耦合波动</td>
+</tr>
+<tr>
+<td>第1层</td>
+<td>output_scale=0.01</td>
+<td>全局缩小至安全模长</td>
+</tr>
+<tr>
+<td>第2层</td>
+<td>AdaLN (每层)</td>
+<td>切断层间激活爆炸链</td>
+</tr>
+<tr>
+<td>第3层</td>
+<td>残差连接 (StateTransNet)</td>
+<td>保证初始状态转移合理</td>
+</tr>
+</tbody>
+</table>
+<h3 id="36-baseline-exp1-的等价实现">3.6 Baseline (Exp1) 的等价实现</h3>
+<p>Exp1 无超网络。保持<strong>完全相同的网络结构</strong>，但用固定权重 + agent_id 拼接输入：</p>
+<pre><code class="language-python"><span class="hljs-comment"># Baseline: 无 HyperNet，agent_id 作为输入特征</span>
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">BaselineDynamicNet</span>(nn.Module):
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">state_transition</span>(<span class="hljs-params">self, s, A_joint</span>):
+        <span class="hljs-keyword">return</span> self.state_mlp(cat([s, A_joint]))  <span class="hljs-comment"># 无 agent_id</span>
+
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">reward</span>(<span class="hljs-params">self, s_next, A_joint, id_emb</span>):
+        <span class="hljs-keyword">return</span> self.reward_mlp(cat([s_next, A_joint, id_emb]))  <span class="hljs-comment"># 拼接 id</span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">BaselinePredNet</span>(nn.Module):
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">forward</span>(<span class="hljs-params">self, s, id_emb</span>):
+        x = cat([s, id_emb])
+        <span class="hljs-keyword">return</span> self.policy_head(x), self.value_head(x)
+</code></pre>
+<hr>
+<h2 id="四规划器设计-planner">四、规划器设计 (Planner)</h2>
+<h3 id="41-sample-based-mve-planner-lite-mode">4.1 Sample-based MVE Planner (Lite Mode)</h3>
+<pre><code class="language-python"><span class="hljs-keyword">def</span> <span class="hljs-title function_">sample_mve_plan</span>(<span class="hljs-params">root_s, model, params, num_agents, k=<span class="hljs-number">5</span>, num_samples=<span class="hljs-number">50</span></span>):
+    <span class="hljs-string">&quot;&quot;&quot;
+    Args:
+        root_s:      [B, S] - 当前隐状态
+        model:       包含 pred_net, state_trans, reward_head
+        params:      dict of {θ_state, θ_reward[N], θ_pred[N]}
+        num_agents:  N
+        k:           展开步数
+        num_samples: 采样轨迹数
+    Returns:
+        pi_mve: [B, N, 5] - 每个agent的搜索策略分布
+    &quot;&quot;&quot;</span>
+    B = root_s.shape[<span class="hljs-number">0</span>]
+    <span class="hljs-comment"># Expand: [B, S] → [B*num_samples, S]</span>
+    s_exp = root_s.repeat_interleave(num_samples, dim=<span class="hljs-number">0</span>)
+
+    cum_rewards = torch.zeros(B * num_samples, num_agents, <span class="hljs-number">1</span>)
+    first_actions = <span class="hljs-literal">None</span>
+    curr_s = s_exp
+    discount = <span class="hljs-number">1.0</span>
+
+    <span class="hljs-keyword">for</span> step <span class="hljs-keyword">in</span> <span class="hljs-built_in">range</span>(k):
+        <span class="hljs-comment"># 1. 每个agent独立输出策略 (batch处理N个视角)</span>
+        all_logits = []  <span class="hljs-comment"># [N, B*S, 5]</span>
+        <span class="hljs-keyword">for</span> i <span class="hljs-keyword">in</span> <span class="hljs-built_in">range</span>(num_agents):
+            p_i, _ = model.pred_net(curr_s, params[<span class="hljs-string">&#x27;pred&#x27;</span>][i])
+            all_logits.append(p_i)
+
+        <span class="hljs-comment"># 2. 独立采样动作</span>
+        actions = []  <span class="hljs-comment"># [N, B*S]</span>
+        <span class="hljs-keyword">for</span> i <span class="hljs-keyword">in</span> <span class="hljs-built_in">range</span>(num_agents):
+            a_i = Categorical(logits=all_logits[i]).sample()
+            actions.append(a_i)
+        joint_action = stack(actions, dim=-<span class="hljs-number">1</span>)  <span class="hljs-comment"># [B*S, N]</span>
+
+        <span class="hljs-keyword">if</span> step == <span class="hljs-number">0</span>:
+            first_actions = joint_action
+
+        <span class="hljs-comment"># 3. 客观状态转移 (只算一次)</span>
+        s_next = model.state_trans(curr_s, joint_action, params[<span class="hljs-string">&#x27;state&#x27;</span>])
+
+        <span class="hljs-comment"># 4. 主观奖励评估 (并行算N个视角)</span>
+        <span class="hljs-keyword">for</span> i <span class="hljs-keyword">in</span> <span class="hljs-built_in">range</span>(num_agents):
+            r_i = model.reward_head(s_next, joint_action, params[<span class="hljs-string">&#x27;reward&#x27;</span>][i])
+            cum_rewards[:, i] += discount * r_i
+
+        curr_s = s_next
+        discount *= gamma
+
+    <span class="hljs-comment"># 5. 终端价值</span>
+    <span class="hljs-keyword">for</span> i <span class="hljs-keyword">in</span> <span class="hljs-built_in">range</span>(num_agents):
+        _, v_i = model.pred_net(curr_s, params[<span class="hljs-string">&#x27;pred&#x27;</span>][i])
+        cum_rewards[:, i] += discount * v_i
+
+    <span class="hljs-comment"># 6. 策略蒸馏 (Softmax 加权聚合, 替代 Independent Argmax)</span>
+    <span class="hljs-comment"># </span>
+    <span class="hljs-comment"># 原 Argmax 问题: 各 Agent 独立选最优轨迹 → 动作不匹配 → 协同失效</span>
+    <span class="hljs-comment"># 改进: 对所有以动作 a 开头的轨迹做 Softmax 加权, 产生 soft 分布</span>
+    <span class="hljs-comment">#</span>
+    <span class="hljs-comment"># Q_mve(agent_i, action_u) = Σ_k softmax(G_k^i / τ) * 1[a_k^i == u]</span>
+    
+    returns = cum_rewards.view(B, num_samples, num_agents, <span class="hljs-number">1</span>).squeeze(-<span class="hljs-number">1</span>)
+    first_actions = first_actions.view(B, num_samples, num_agents)
+
+    pi_mve = torch.zeros(B, num_agents, <span class="hljs-number">5</span>)
+    temperature = <span class="hljs-number">1.0</span>  <span class="hljs-comment"># Softmax 温度 (可调)</span>
+    
+    <span class="hljs-keyword">for</span> i <span class="hljs-keyword">in</span> <span class="hljs-built_in">range</span>(num_agents):
+        <span class="hljs-comment"># 轨迹权重: softmax(returns / τ)</span>
+        traj_weights = F.softmax(returns[:, :, i] / temperature, dim=<span class="hljs-number">1</span>)  <span class="hljs-comment"># [B, K]</span>
+        
+        <span class="hljs-comment"># 首动作 one-hot: [B, K, 5]</span>
+        act_one_hot = F.one_hot(first_actions[:, :, i].long(), num_classes=<span class="hljs-number">5</span>).<span class="hljs-built_in">float</span>()
+        
+        <span class="hljs-comment"># 加权聚合: Σ_k weight_k * one_hot_action_k → [B, 5]</span>
+        pi_mve[:, i] = (traj_weights.unsqueeze(-<span class="hljs-number">1</span>) * act_one_hot).<span class="hljs-built_in">sum</span>(dim=<span class="hljs-number">1</span>)
+
+    <span class="hljs-keyword">return</span> pi_mve  <span class="hljs-comment"># [B, N, 5] soft probability distribution</span>
+</code></pre>
+<h3 id="42-mcts-planner-pro-mode-phase-5-预留">4.2 MCTS Planner (Pro Mode, Phase 5+ 预留)</h3>
+<ul>
+<li>标准 MuZero MCTS，使用超网络生成的 DynNet 模拟</li>
+<li>暂不实现，预留接口</li>
+</ul>
+<hr>
+<h2 id="五训练流程-muzero-unroll">五、训练流程 (MuZero Unroll)</h2>
+<h3 id="51-episode-replay-buffer">5.1 Episode Replay Buffer</h3>
+<p><strong>存储项（per episode）</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>Shape</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>obs</code></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">(</mo><mi>T</mi><mo separator="true">,</mo><msub><mi>O</mi><mrow><mi>j</mi><mi>o</mi><mi>i</mi><mi>n</mi><mi>t</mi></mrow></msub><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(T, O_{joint})</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0361em;vertical-align:-0.2861em;"></span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.13889em;">T</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.02778em;">O</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.3117em;"><span style="top:-2.55em;margin-left:-0.0278em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight" style="margin-right:0.05724em;">j</span><span class="mord mathnormal mtight">o</span><span class="mord mathnormal mtight">in</span><span class="mord mathnormal mtight">t</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span></td>
+<td>联合观测序列</td>
+</tr>
+<tr>
+<td><code>actions</code></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">(</mo><mi>T</mi><mo separator="true">,</mo><msub><mi>N</mi><mrow><mi>a</mi><mi>g</mi><mi>e</mi><mi>n</mi><mi>t</mi><mi>s</mi></mrow></msub><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(T, N_{agents})</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0361em;vertical-align:-0.2861em;"></span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.13889em;">T</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:-0.109em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">g</span><span class="mord mathnormal mtight">e</span><span class="mord mathnormal mtight">n</span><span class="mord mathnormal mtight">t</span><span class="mord mathnormal mtight">s</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span></td>
+<td>离散动作序列 (int)</td>
+</tr>
+<tr>
+<td><code>rewards</code></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">(</mo><mi>T</mi><mo separator="true">,</mo><msub><mi>N</mi><mrow><mi>a</mi><mi>g</mi><mi>e</mi><mi>n</mi><mi>t</mi><mi>s</mi></mrow></msub><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(T, N_{agents})</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0361em;vertical-align:-0.2861em;"></span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.13889em;">T</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:-0.109em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">g</span><span class="mord mathnormal mtight">e</span><span class="mord mathnormal mtight">n</span><span class="mord mathnormal mtight">t</span><span class="mord mathnormal mtight">s</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mclose">)</span></span></span></span></td>
+<td>per-agent 真实奖励</td>
+</tr>
+<tr>
+<td><code>search_policies</code></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">(</mo><mi>T</mi><mo separator="true">,</mo><msub><mi>N</mi><mrow><mi>a</mi><mi>g</mi><mi>e</mi><mi>n</mi><mi>t</mi><mi>s</mi></mrow></msub><mo separator="true">,</mo><mn>5</mn><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(T, N_{agents}, 5)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.0361em;vertical-align:-0.2861em;"></span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.13889em;">T</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord"><span class="mord mathnormal" style="margin-right:0.10903em;">N</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:-0.109em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">a</span><span class="mord mathnormal mtight" style="margin-right:0.03588em;">g</span><span class="mord mathnormal mtight">e</span><span class="mord mathnormal mtight">n</span><span class="mord mathnormal mtight">t</span><span class="mord mathnormal mtight">s</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.2861em;"><span></span></span></span></span></span></span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord">5</span><span class="mclose">)</span></span></span></span></td>
+<td>Planner 输出的 π_mve</td>
+</tr>
+<tr>
+<td><code>rule</code></td>
+<td>scalar</td>
+<td>该episode的Rule值</td>
+</tr>
+<tr>
+<td><code>dones</code></td>
+<td><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">(</mo><mi>T</mi><mo separator="true">,</mo><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(T,)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord mathnormal" style="margin-right:0.13889em;">T</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mclose">)</span></span></span></span></td>
+<td>终止标志</td>
+</tr>
+</tbody>
+</table>
+<p><strong>采样方式</strong>：</p>
+<ol>
+<li>随机选 episode</li>
+<li>在该 episode 内随机选起始位置 t（确保 t+K ≤ T）</li>
+<li>取 [t, t+K] 的连续序列</li>
+</ol>
+<h3 id="52-n-step-return-训练时实时计算">5.2 N-step Return (训练时实时计算)</h3>
+<pre><code class="language-python"><span class="hljs-keyword">def</span> <span class="hljs-title function_">compute_n_step_return</span>(<span class="hljs-params">rewards_i, model, obs_seq, agent_id, params, n, gamma</span>):
+    <span class="hljs-string">&quot;&quot;&quot;
+    训练时用最新的 V 实时计算 per-agent n-step return
+    rewards_i: [B, T] - agent_i 的真实奖励序列
+    &quot;&quot;&quot;</span>
+    z = torch.zeros(B)
+    <span class="hljs-keyword">for</span> k <span class="hljs-keyword">in</span> <span class="hljs-built_in">range</span>(n):
+        z += gamma**k * rewards_i[:, k]
+    <span class="hljs-comment"># Bootstrap with latest V</span>
+    s_n = model.repr_net(obs_seq[:, n])
+    _, v_n = model.pred_net(s_n, params[<span class="hljs-string">&#x27;pred&#x27;</span>][agent_id])
+    z += gamma**n * v_n.squeeze()
+    <span class="hljs-keyword">return</span> z
+</code></pre>
+<h3 id="53-训练步骤-the-unroll-loop--v40-更新">5.3 训练步骤 (The Unroll Loop) — v4.0 更新</h3>
+<blockquote>
+<p><strong>v4.0 变更</strong>：</p>
+<ol>
+<li>Consistency Loss 从 MSE(s, s_target) 升级为 <strong>Projection + Negative Cosine Similarity</strong></li>
+<li>Total Loss 循环结束后除以 K（平均化），防止梯度累积过大</li>
+<li>Exp3 额外加入 Hinge Variance Context Loss</li>
+</ol>
+</blockquote>
+<pre><code class="language-python"><span class="hljs-keyword">def</span> <span class="hljs-title function_">train_step</span>(<span class="hljs-params">self</span>):
+    batch = buffer.sample_sequence(batch_size, unroll_K)
+    <span class="hljs-comment"># batch.obs:     [B, K+1, O]</span>
+    <span class="hljs-comment"># batch.actions: [B, K, N]</span>
+    <span class="hljs-comment"># batch.rewards: [B, K, N]</span>
+    <span class="hljs-comment"># batch.pi_mve:  [B, K, N, 5]</span>
+    <span class="hljs-comment"># batch.rule:    [B]</span>
+
+    <span class="hljs-comment"># 1. 视角采样 (可选: 阶段性冻结控制, 见 §5.4)</span>
+    agent_ids = sample_agent_ids(batch_size, active_agents)  <span class="hljs-comment"># None=全员, [0,1,2]=猎人, [3]=猎物</span>
+
+    <span class="hljs-comment"># 2. 生成参数 (per-sample perspective)</span>
+    rule_emb = rule_encoder(batch.rule)
+    id_emb = id_embedding(agent_ids)
+    θ_state = hyper_trans(rule_emb)
+    θ_reward = hyper_rew(cat([rule_emb, id_emb]))
+    θ_pred = hyper_pred(cat([rule_emb, id_emb]))
+
+    <span class="hljs-comment"># 3. 初始编码</span>
+    s = repr_net(batch.obs[:, <span class="hljs-number">0</span>])  <span class="hljs-comment"># [B, S]</span>
+
+    total_loss = <span class="hljs-number">0</span>
+    <span class="hljs-keyword">for</span> k <span class="hljs-keyword">in</span> <span class="hljs-built_in">range</span>(K):
+        <span class="hljs-comment"># 3.1 Prediction (该视角)</span>
+        p_k, v_k = pred_net(s, θ_pred)  <span class="hljs-comment"># [B, 5], [B, 1]</span>
+
+        <span class="hljs-comment"># 3.2 Dynamics</span>
+        s_next = state_trans_net(s, batch.actions[:, k], θ_state)  <span class="hljs-comment"># [B, S]</span>
+        r_k = reward_head(s, batch.actions[:, k], θ_reward)        <span class="hljs-comment"># [B, 1]  ← r=R(s,a)</span>
+
+        <span class="hljs-comment"># 3.3 Targets</span>
+        target_pi = batch.pi_mve[:, k, agent_ids]    <span class="hljs-comment"># [B, 5]</span>
+        target_r  = batch.rewards[:, k, agent_ids]    <span class="hljs-comment"># [B]</span>
+        target_z  = compute_n_step_return(...)         <span class="hljs-comment"># [B] 实时计算</span>
+
+        <span class="hljs-comment"># 3.4 Consistency target — [v4.0] Projection + Cosine Similarity</span>
+        proj_pred = projector(s_next)                  <span class="hljs-comment"># [B, proj_dim]</span>
+        <span class="hljs-keyword">with</span> torch.no_grad():
+            s_target = repr_net(batch.obs[:, k+<span class="hljs-number">1</span>])
+            proj_target = projector(s_target)           <span class="hljs-comment"># [B, proj_dim]</span>
+
+        <span class="hljs-comment"># 3.5 Losses</span>
+        loss_policy  = F.cross_entropy(p_k, target_pi)
+        loss_value   = F.mse_loss(v_k.squeeze(), target_z)
+        loss_reward  = F.mse_loss(r_k.squeeze(), target_r)
+        loss_consist = negative_cosine_similarity(proj_pred, proj_target)  <span class="hljs-comment"># [v4.0]</span>
+
+        total_loss += (w_policy * loss_policy 
+                     + w_value  * loss_value 
+                     + w_reward * loss_reward 
+                     + w_consist * loss_consist)
+
+        <span class="hljs-comment"># 3.6 梯度半衰 (保留)</span>
+        s = <span class="hljs-number">0.5</span> * s_next + <span class="hljs-number">0.5</span> * s_next.detach()
+
+    <span class="hljs-comment"># 4. [v4.0] Loss 平均化 (除以展开步数 K，在循环结束后)</span>
+    total_loss = total_loss / K
+
+    <span class="hljs-comment"># 5. [v4.0][Exp3 only] Context 正则化 (Hinge Variance)</span>
+    <span class="hljs-keyword">if</span> is_infer_mode:
+        ctx_loss = context_variance_loss(rule_emb, target_std=<span class="hljs-number">0.1</span>)
+        total_loss += w_context * ctx_loss
+
+    <span class="hljs-comment"># 6. 统一 backward</span>
+    optimizer.zero_grad()
+    total_loss.backward()
+    clip_grad_norm_(model.parameters(), grad_clip)
+    optimizer.step()
+</code></pre>
+<h3 id="54-阶段性冻结--对抗训练节奏控制-v42-新增">5.4 阶段性冻结 — 对抗训练节奏控制 (v4.2 新增)</h3>
+<h4 id="动机">动机</h4>
+<p>在猎人-猎物对抗环境中，双方策略同时更新会导致<strong>策略循环震荡</strong>：猎人学会了追击策略 → 猎物适应逃跑 → 猎人策略失效 → 重新学习 → 循环往复。通过控制视角采样节奏，让一方暂时&quot;静止&quot;，使另一方有时间收敛到稳定策略。</p>
+<h4 id="核心机制phased-perspective-sampling">核心机制：Phased Perspective Sampling</h4>
+<p><strong>不冻结网络参数</strong>，而是通过控制 <code>train_step</code> 中 <code>agent_ids</code> 的采样范围来限制哪些 agent 视角的主观 Loss（policy/value/reward）参与训练。</p>
+<ul>
+<li>世界模型（RepNet/StateTransNet）持续收到 consistency loss 梯度 → <strong>客观学习不中断</strong></li>
+<li>只有主观网络（PredNet/RewardHead）的特定视角暂停进化</li>
+</ul>
+<h4 id="phase-调度时间线">Phase 调度时间线</h4>
+<pre><code>步数:  0 ─────── 5000 ──────── 15000 ──────── 25000 ──────── 35000 ──── ...
+Phase: [ Warmup (全员) ] [ Hunters ] [  Prey  ] [ Hunters ] [  Prey  ] ...
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>active_agents</th>
+<th>训练的主观网络</th>
+<th>静止的主观网络</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Warmup (&lt; warmup_steps)</td>
+<td>[0,1,2,3]</td>
+<td>全部</td>
+<td>无</td>
+</tr>
+<tr>
+<td>Hunter Phase (偶数)</td>
+<td>[0,1,2]</td>
+<td>Hunter/Agent2 视角的 PredNet+RewardHead</td>
+<td>Prey 视角</td>
+</tr>
+<tr>
+<td>Prey Phase (奇数)</td>
+<td>[3]</td>
+<td>Prey 视角的 PredNet+RewardHead</td>
+<td>Hunter/Agent2 视角</td>
+</tr>
+</tbody>
+</table>
+<h4 id="实现">实现</h4>
+<pre><code class="language-python"><span class="hljs-keyword">def</span> <span class="hljs-title function_">get_active_agents</span>(<span class="hljs-params">train_steps, cfg</span>):
+    <span class="hljs-keyword">if</span> <span class="hljs-keyword">not</span> cfg.freeze_enabled:
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">None</span>, <span class="hljs-string">&#x27;All&#x27;</span>
+    <span class="hljs-keyword">if</span> train_steps &lt; cfg.freeze_warmup_steps:
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">None</span>, <span class="hljs-string">&#x27;Warmup&#x27;</span>
+    elapsed = train_steps - cfg.freeze_warmup_steps
+    phase_idx = elapsed // cfg.freeze_phase_steps
+    <span class="hljs-keyword">if</span> phase_idx % <span class="hljs-number">2</span> == <span class="hljs-number">0</span>:
+        <span class="hljs-keyword">return</span> cfg.freeze_hunter_agents, <span class="hljs-string">&#x27;Hunters&#x27;</span>  <span class="hljs-comment"># [0, 1, 2]</span>
+    <span class="hljs-keyword">else</span>:
+        <span class="hljs-keyword">return</span> cfg.freeze_prey_agents, <span class="hljs-string">&#x27;Prey&#x27;</span>        <span class="hljs-comment"># [3]</span>
+
+<span class="hljs-comment"># In MuZeroTrainer.train_step():</span>
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">_sample_agent_ids</span>(<span class="hljs-params">self, B, active_agents=<span class="hljs-literal">None</span></span>):
+    <span class="hljs-keyword">if</span> active_agents <span class="hljs-keyword">is</span> <span class="hljs-literal">None</span>:
+        <span class="hljs-keyword">return</span> torch.randint(<span class="hljs-number">0</span>, self.cfg.num_agents, (B,))
+    <span class="hljs-keyword">else</span>:
+        source = torch.tensor(active_agents, device=self.device)
+        <span class="hljs-keyword">return</span> source[torch.randint(<span class="hljs-number">0</span>, <span class="hljs-built_in">len</span>(active_agents), (B,))]
+</code></pre>
+<h4 id="对不同实验的影响">对不同实验的影响</h4>
+<ul>
+<li><strong>HyperMuZero (Exp2/3)</strong>：HyperNet 为不同 agent 生成不同 θ_pred/θ_reward。不采样某 agent 的视角 → 对应 HyperNet 映射区域无梯度 → 该 agent 策略真正冻结。✅ 效果最佳</li>
+<li><strong>Baseline (Exp1)</strong>：共享权重但输入不同 (<code>cat([s, id_emb])</code>)。不采样 agent_i → 网络对 id_i 输入区域的响应不被主动修正。虽有共享层干扰，但作为 Baseline 已足够。✅ 可接受</li>
+</ul>
+<h4 id="配置参数">配置参数</h4>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>默认值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>freeze_enabled</code></td>
+<td>True</td>
+<td>总开关，设 False 可完全关闭</td>
+</tr>
+<tr>
+<td><code>freeze_warmup_steps</code></td>
+<td>5000</td>
+<td>全员训练预热期</td>
+</tr>
+<tr>
+<td><code>freeze_phase_steps</code></td>
+<td>10000</td>
+<td>每个阶段持续训练步数（对称）</td>
+</tr>
+<tr>
+<td><code>freeze_hunter_agents</code></td>
+<td>[0, 1, 2]</td>
+<td>Hunter 阶段活跃 agent</td>
+</tr>
+<tr>
+<td><code>freeze_prey_agents</code></td>
+<td>[3]</td>
+<td>Prey 阶段活跃 agent</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>禁用对照</strong>：设 <code>freeze_enabled = False</code> 即可回退到原始全员训练，方便 A/B 对比。</p>
+</blockquote>
+<h3 id="55-projection-head-与-cosine-similarity-v40-新增">5.5 Projection Head 与 Cosine Similarity (v4.0 新增)</h3>
+<pre><code class="language-python"><span class="hljs-keyword">class</span> <span class="hljs-title class_">Projector</span>(nn.Module):
+    <span class="hljs-string">&quot;&quot;&quot;非线性映射头，用于 Consistency Loss 的投影空间&quot;&quot;&quot;</span>
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">__init__</span>(<span class="hljs-params">self, latent_dim, proj_dim=<span class="hljs-number">64</span></span>):
+        <span class="hljs-built_in">super</span>().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim, proj_dim),
+            nn.ReLU(),
+            nn.Linear(proj_dim, proj_dim)
+        )
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">forward</span>(<span class="hljs-params">self, x</span>):
+        <span class="hljs-keyword">return</span> self.net(x)
+
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">negative_cosine_similarity</span>(<span class="hljs-params">p, z</span>):
+    <span class="hljs-string">&quot;&quot;&quot;p: predicted projection, z: target projection (detached)&quot;&quot;&quot;</span>
+    p = F.normalize(p, p=<span class="hljs-number">2</span>, dim=-<span class="hljs-number">1</span>)
+    z = F.normalize(z, p=<span class="hljs-number">2</span>, dim=-<span class="hljs-number">1</span>)
+    <span class="hljs-keyword">return</span> -(p * z).<span class="hljs-built_in">sum</span>(dim=-<span class="hljs-number">1</span>).mean()
+</code></pre>
+<blockquote>
+<p><strong>Projector 共享</strong>：RepNet 输出和 StateTransNet 输出共用同一个 Projector。三组实验 (Exp1/2/3) 全部使用 Projection + Cosine Sim，确保对比公平。</p>
+</blockquote>
+<h3 id="56-hinge-variance-context-loss-v40-新增-exp3-专用">5.6 Hinge Variance Context Loss (v4.0 新增, Exp3 专用)</h3>
+<pre><code class="language-python"><span class="hljs-keyword">def</span> <span class="hljs-title function_">context_variance_loss</span>(<span class="hljs-params">rule_emb, target_std=<span class="hljs-number">0.1</span></span>):
+    <span class="hljs-string">&quot;&quot;&quot;
+    鼓励 batch 内 rule_emb 的标准差不低于 target_std
+    防止 embedding 坍缩，替代不稳定的 1/var 正则
+    &quot;&quot;&quot;</span>
+    batch_std = torch.std(rule_emb, dim=<span class="hljs-number">0</span>).mean()  <span class="hljs-comment"># per-dim std 的均值</span>
+    <span class="hljs-keyword">return</span> torch.relu(target_std - batch_std)
+</code></pre>
+<hr>
+<h2 id="六三组对比实验">六、三组对比实验</h2>
+<table>
+<thead>
+<tr>
+<th>实验</th>
+<th>名称</th>
+<th>Context 来源</th>
+<th>HyperNet</th>
+<th>特点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Exp1</strong></td>
+<td>Baseline</td>
+<td>agent_id 拼接输入</td>
+<td>❌ 固定权重</td>
+<td>无规则适应能力</td>
+</tr>
+<tr>
+<td><strong>Exp2</strong></td>
+<td>Oracle-HyperMuZero</td>
+<td>Rule(显式) + agent_id</td>
+<td>✅ DualHyperNet</td>
+<td>训练时已知Rule</td>
+</tr>
+<tr>
+<td><strong>Exp3</strong></td>
+<td>Infer-HyperMuZero</td>
+<td>GRU推断Rule + agent_id</td>
+<td>✅ DualHyperNet</td>
+<td>训练测试都不知Rule</td>
+</tr>
+</tbody>
+</table>
+<h3 id="exp1-baseline-细节">Exp1 Baseline 细节</h3>
+<ul>
+<li>网络结构与 Exp2/3 完全相同</li>
+<li>DynNet state head: 固定权重，输入 (s, A)</li>
+<li>DynNet reward head: 固定权重，输入 (s, A, id_emb)  — r=R(s,a) 因果性</li>
+<li>PredNet: 固定权重，输入 (s, id_emb)</li>
+<li>同样使用 MVE Planner + MuZero 训练</li>
+</ul>
+<h3 id="exp2-oracle-细节">Exp2 Oracle 细节</h3>
+<ul>
+<li>rule 直接输入 ContextEncoder</li>
+<li>HyperNet(rule) → θ_state</li>
+<li>HyperNet(rule, id) → θ_reward, θ_pred</li>
+<li>测试时不提供 rule → 用训练集平均 context 作为 fallback</li>
+</ul>
+<h3 id="exp3-infer-细节">Exp3 Infer 细节</h3>
+<ul>
+<li>GRU 从历史 (obs, action, reward) 推断 rule_embedding</li>
+<li>替代显式 rule 输入</li>
+<li>额外 loss: context 正则化 <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>L</mi><mrow><mi>c</mi><mi>t</mi><mi>x</mi></mrow></msub></mrow><annotation encoding="application/x-tex">L_{ctx}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathnormal">L</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.2806em;"><span style="top:-2.55em;margin-left:0em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathnormal mtight">c</span><span class="mord mathnormal mtight">t</span><span class="mord mathnormal mtight">x</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span></li>
+<li>episode 初期推断不准，随步数增加趋于准确</li>
+</ul>
+<hr>
+<h2 id="61-统一评估框架-v41-新增">6.1 统一评估框架 (v4.1 新增)</h2>
+<h3 id="设计原则">设计原则</h3>
+<p>三组实验的 Model 接口差异较大（Baseline 传 <code>id_emb</code>、Oracle 传 <code>rule+id</code>、Infer 从历史推断），因此采用 <strong>&quot;各自 evaluate + 公共指标收集&quot;</strong> 的架构，而非一个通用 Evaluator 硬塞 <code>hasattr</code> 判断。</p>
+<h3 id="架构分层">架构分层</h3>
+<pre><code>┌─────────────────────────────────────────────────┐
+│  scripts/train_xxx.py                            │
+│    └── evaluate_xxx(model, env, ...)             │  ← 各实验独立的 evaluate 函数
+│          ├── 模型调用逻辑（接口各异）              │     (保持各自的 set_context / predict 方式)
+│          └── 返回统一格式的 EvalResult dict        │
+│                                                   │
+│  utils/evaluator.py                              │
+│    └── Evaluator                                 │  ← 公共指标收集 + TensorBoard 日志
+│          ├── run_eval_suite(evaluate_fn, ...)     │     对 test_rules=[0.0, 0.5, 1.0] 循环调用
+│          ├── log_results(results, step)           │     统一写 TensorBoard
+│          └── print_summary(results)              │     格式化打印对比表
+└─────────────────────────────────────────────────┘
+</code></pre>
+<h3 id="evalresult-统一格式">EvalResult 统一格式</h3>
+<p>每次 evaluate 函数返回：</p>
+<pre><code class="language-python">{
+    <span class="hljs-string">&#x27;mean_rewards&#x27;</span>: np.array([r0, r1, r2, r3]),  <span class="hljs-comment"># per-agent 平均奖励</span>
+    <span class="hljs-string">&#x27;mean_total_reward&#x27;</span>: <span class="hljs-built_in">float</span>,                    <span class="hljs-comment"># 全体奖励之和</span>
+    <span class="hljs-string">&#x27;mean_ep_length&#x27;</span>: <span class="hljs-built_in">float</span>,                       <span class="hljs-comment"># 平均 episode 长度</span>
+}
+</code></pre>
+<h3 id="evaluator-核心接口">Evaluator 核心接口</h3>
+<pre><code class="language-python"><span class="hljs-keyword">class</span> <span class="hljs-title class_">Evaluator</span>:
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">__init__</span>(<span class="hljs-params">self, cfg, device, writer=<span class="hljs-literal">None</span></span>):
+        self.test_rules = [<span class="hljs-number">0.0</span>, <span class="hljs-number">0.5</span>, <span class="hljs-number">1.0</span>]  <span class="hljs-comment"># 固定测试 Rule 集合</span>
+    
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">run_eval_suite</span>(<span class="hljs-params">self, evaluate_fn, model, env, step, **kwargs</span>):
+        <span class="hljs-string">&quot;&quot;&quot;
+        对 test_rules 中的每个 Rule 调用 evaluate_fn，收集结果。
+        
+        Args:
+            evaluate_fn: 各实验自己的 evaluate 函数 (model, cfg, device, ..., fixed_rule) -&gt; EvalResult
+            model: 当前模型
+            env: 环境实例
+            step: 当前训练步数
+        Returns:
+            dict[rule_value -&gt; EvalResult]
+        &quot;&quot;&quot;</span>
+        
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">log_results</span>(<span class="hljs-params">self, results, step, prefix=<span class="hljs-string">&#x27;eval&#x27;</span></span>):
+        <span class="hljs-string">&quot;&quot;&quot;写入 TensorBoard: per-rule 总奖励 + per-agent 分项&quot;&quot;&quot;</span>
+        <span class="hljs-comment"># eval/{prefix}/rule_{rule}/total_reward</span>
+        <span class="hljs-comment"># eval/{prefix}/rule_{rule}/agent_{i}_reward</span>
+        <span class="hljs-comment"># eval/{prefix}/rule_{rule}/ep_length</span>
+        
+    <span class="hljs-keyword">def</span> <span class="hljs-title function_">print_summary</span>(<span class="hljs-params">self, results, step</span>):
+        <span class="hljs-string">&quot;&quot;&quot;格式化打印 Agent-wise 对比表&quot;&quot;&quot;</span>
+        <span class="hljs-comment"># [Eval step=5000]</span>
+        <span class="hljs-comment"># Rule | Agent0 | Agent1 | Agent2 | Agent3 | Total | EpLen</span>
+        <span class="hljs-comment"># 0.0  |  -2.30 |  -1.80 |  +3.50 |  -5.20 |  -5.8 | 22.3</span>
+        <span class="hljs-comment"># 0.5  |  +1.20 |  +1.50 |  +0.80 |  -8.00 |  -4.5 | 18.7</span>
+        <span class="hljs-comment"># 1.0  |  +3.40 |  +3.10 |  +2.90 | -12.00 |  -2.6 | 15.2</span>
+</code></pre>
+<h3 id="环境-force_rule-机制">环境 force_rule 机制</h3>
+<p>评估时通过 <code>env.reset(options={'rule': rule_val})</code> 强制指定 Rule，确保：</p>
+<ol>
+<li>Rule 在 <code>reset_world</code> 内部生效（颜色、奖励函数均正确）</li>
+<li>无需在 reset 后手动覆盖 <code>env.world.rule</code>（消除时序漏洞）</li>
+<li>向后兼容：不传 options 时行为不变（随机采样）</li>
+</ol>
+<h3 id="agent-wise-关键指标">Agent-wise 关键指标</h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>说明</th>
+<th>预期行为差异</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent 0,1 (Hunter) reward</td>
+<td>追捕效率</td>
+<td>Rule↑ → reward↑ (更多帮手)</td>
+</tr>
+<tr>
+<td>Agent 2 (Variable) reward</td>
+<td>角色适应</td>
+<td>Rule=1 猎人高分, Rule=0 保镖高分</td>
+</tr>
+<tr>
+<td>Agent 3 (Prey) reward</td>
+<td>生存能力</td>
+<td>Rule=0 → 有庇护更易存活</td>
+</tr>
+<tr>
+<td>Episode length</td>
+<td>博弈持续时间</td>
+<td>Rule=1 → 快速围剿(短), Rule=0 → 保卫战(长)</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="七代码文件结构v31-重构">七、代码文件结构（v3.1 重构）</h2>
+<pre><code>D:/RL/hyper_mve/                      # 目录暂保留原名，避免破坏环境
+├── config.py                          # [重写] 新架构配置
+│
+├── envs/                              # [修改] 支持离散动作
+│   ├── __init__.py
+│   ├── non_stationary_tag.py          # [修改] 确保离散兼容
+│   ├── ns_environment.py              # [修改] DiscreteActionWrapper
+│   └── make_env.py                    # [修改] discrete=True
+│
+├── models/                            # [大量重写]
+│   ├── __init__.py
+│   ├── interfaces.py                  # [重写] 新接口定义
+│   ├── representation_net.py          # [保留] 微调
+│   ├── functional_nets.py             # [新建] FunctionalMLP (支持外部权重)
+│   ├── dynamic_net.py                 # [新建] StateTransNet + RewardHead (functional)
+│   ├── prediction_net.py              # [新建] PredictionNet: policy+value (functional)
+│   ├── context_encoder.py             # [新建] AugmentedContextEncoder (Rule+ID)
+│   ├── hyper_network.py               # [新建] DualHyperNetwork (3路)
+│   ├── hyper_muzero_model.py          # [新建] 总模型封装 (Exp2/3)
+│   └── baseline_model.py             # [重写] Exp1 (固定权重+id_emb输入)
+│
+├── planning/                          # [新建] 规划器模块
+│   ├── __init__.py
+│   ├── mve_planner.py                 # [新建] Sample-based MVE
+│   └── mcts.py                        # [预留] MCTS Pro Mode
+│
+├── training/                          # [大量重写]
+│   ├── __init__.py
+│   ├── episode_buffer.py              # [重写] Episode序列Buffer
+│   ├── muzero_trainer.py              # [新建] MuZero展开训练
+│   ├── n_step_return.py               # [新建] 实时N-step return计算
+│   └── worker.py                      # [新建] 数据收集worker
+│
+├── utils/
+│   ├── __init__.py
+│   ├── utils.py                       # 通用工具
+│   └── evaluator.py                   # [v4.1新建] 公共评估指标收集+日志
+│
+├── scripts/
+│   ├── train_baseline.py              # [重写] Exp1
+│   ├── train_oracle.py                # [新建] Exp2
+│   ├── train_oracle_v2.py             # [新建] Exp2 + ChunkedHMLP
+│   ├── train_infer.py                 # [新建] Exp3
+│   ├── train_infer_v2.py              # [新建] Exp3 + ChunkedHMLP
+│   └── evaluate_all.py                # [新建] 对比评估
+│
+└── multiagent/                        # [保留] MPE核心
+    ├── core.py
+    ├── environment.py
+    ├── multi_discrete.py
+    ├── rendering.py
+    └── scenario.py
+</code></pre>
+<hr>
+<h2 id="八实施阶段v31-重构">八、实施阶段（v3.1 重构）</h2>
+<h3 id="phase-1-环境离散化">Phase 1: 环境离散化</h3>
+<ul class="contains-task-list">
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> 实现 DiscreteActionWrapper</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> 修改 make_env.py 支持 discrete=True</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> 验证环境可正常运行（随机离散策略测试）</li>
+<li><strong>验证标准</strong>：4个agent各输出0-4，env.step正常返回</li>
+</ul>
+<h3 id="phase-2-核心网络--baselineexp1">Phase 2: 核心网络 + Baseline(Exp1)</h3>
+<ul class="contains-task-list">
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> RepresentationNet (保留/微调)</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> FunctionalMLP (支持外部权重的MLP骨架)</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> BaselineDynamicNet (StateTransNet + RewardHead, 固定权重+id_emb)</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> BaselinePredNet (PolicyHead + ValueHead, 固定权重+id_emb)</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> EpisodeReplayBuffer (完整episode存储+序列采样)</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> Sample-based MVE Planner</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> MuZero展开训练循环 + 实时N-step return</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> <strong>端到端训练Baseline, 固定Rule验证收敛</strong></li>
+<li><strong>验证标准</strong>：固定Rule=0.5，loss下降，eval reward上升</li>
+</ul>
+<h3 id="phase-3-oracle-hypermuzeroexp2">Phase 3: Oracle-HyperMuZero(Exp2)</h3>
+<ul class="contains-task-list">
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> AugmentedContextEncoder (Rule + Agent ID)</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> DualHyperNetwork (hyper_trans + hyper_rew + hyper_pred)</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> FunctionalDynamicNet (外部权重版 StateTransNet + RewardHead)</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> FunctionalPredNet (外部权重版 PredictionNet)</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> HyperMuZeroModel 总封装</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> 训练 + 验证已知Rule时优于Baseline</li>
+<li><strong>验证标准</strong>：多Rule训练，已知Rule评估优于Exp1</li>
+</ul>
+<h3 id="phase-4-infer-hypermuzeroexp3-核心贡献">Phase 4: Infer-HyperMuZero(Exp3, 核心贡献)</h3>
+<ul class="contains-task-list">
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> GRUContextEncoder (历史轨迹推断rule_embedding)</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> Context正则化Loss</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> 修改Buffer支持历史窗口</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> 训练 + 三组实验对比</li>
+<li><strong>验证标准</strong>：Exp3 &gt; Exp1，接近 Exp2</li>
+</ul>
+<h3 id="phase-5-高级扩展可选">Phase 5: 高级扩展(可选)</h3>
+<ul class="contains-task-list">
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> MCTS Pro Mode</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> hypnettorch ChunkedHMLP 替换简单超网络</li>
+<li class="task-list-item enabled"><input class="task-list-item-checkbox"type="checkbox"> 可视化/分析</li>
+</ul>
+<hr>
+<h2 id="九关键超参数">九、关键超参数</h2>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>num_agents</code></td>
+<td>4</td>
+<td>2捕猎+1可变+1猎物</td>
+</tr>
+<tr>
+<td><code>num_actions</code></td>
+<td>5</td>
+<td>离散动作数</td>
+</tr>
+<tr>
+<td><code>latent_dim</code></td>
+<td>64</td>
+<td>隐状态维度</td>
+</tr>
+<tr>
+<td><code>hidden_dim</code></td>
+<td>128</td>
+<td>网络隐藏层</td>
+</tr>
+<tr>
+<td><code>rule_emb_dim</code></td>
+<td>16</td>
+<td>Rule编码维度</td>
+</tr>
+<tr>
+<td><code>id_emb_dim</code></td>
+<td>16</td>
+<td>Agent ID编码维度</td>
+</tr>
+<tr>
+<td><code>context_dim</code></td>
+<td>32</td>
+<td>rule_emb + id_emb</td>
+</tr>
+<tr>
+<td><code>unroll_K</code></td>
+<td>5</td>
+<td>展开步数</td>
+</tr>
+<tr>
+<td><code>mve_samples</code></td>
+<td>50</td>
+<td>MVE采样轨迹数</td>
+</tr>
+<tr>
+<td><code>mve_depth</code></td>
+<td>5</td>
+<td>MVE展开深度</td>
+</tr>
+<tr>
+<td><code>n_step</code></td>
+<td>5</td>
+<td>N-step return 的 n</td>
+</tr>
+<tr>
+<td><code>gamma</code></td>
+<td>0.95</td>
+<td>折扣因子</td>
+</tr>
+<tr>
+<td><code>lr</code></td>
+<td>3e-4</td>
+<td>学习率</td>
+</tr>
+<tr>
+<td><code>batch_size</code></td>
+<td>256</td>
+<td>批大小</td>
+</tr>
+<tr>
+<td><code>buffer_size</code></td>
+<td>5000</td>
+<td>Buffer episode数</td>
+</tr>
+<tr>
+<td><code>grad_clip</code></td>
+<td>10.0</td>
+<td>梯度裁剪</td>
+</tr>
+<tr>
+<td><code>episode_limit</code></td>
+<td>25</td>
+<td>Episode步数</td>
+</tr>
+<tr>
+<td><code>proj_dim</code></td>
+<td>64</td>
+<td>Projector 投影维度 (v4.0)</td>
+</tr>
+<tr>
+<td><code>output_scale_init</code></td>
+<td>0.01</td>
+<td>HyperNet 可学习模长初始值 (v4.0)</td>
+</tr>
+<tr>
+<td><code>w_policy</code></td>
+<td>1.0</td>
+<td>Policy Loss 权重</td>
+</tr>
+<tr>
+<td><code>w_value</code></td>
+<td>0.25</td>
+<td>Value Loss 权重</td>
+</tr>
+<tr>
+<td><code>w_reward</code></td>
+<td>1.0</td>
+<td>Reward Loss 权重</td>
+</tr>
+<tr>
+<td><code>w_consist</code></td>
+<td>0.5</td>
+<td>Consistency Loss 权重 (v4.1: 2.0→0.5 防止表征坍缩)</td>
+</tr>
+<tr>
+<td><code>w_context</code></td>
+<td>0.01</td>
+<td>Context Hinge Loss 权重 (Exp3)</td>
+</tr>
+<tr>
+<td><code>target_context_std</code></td>
+<td>0.1</td>
+<td>Hinge Variance 阈值 (Exp3)</td>
+</tr>
+<tr>
+<td><code>freeze_enabled</code></td>
+<td>True</td>
+<td>阶段性冻结总开关 (v4.2)</td>
+</tr>
+<tr>
+<td><code>freeze_warmup_steps</code></td>
+<td>5000</td>
+<td>冻结预热期 (v4.2)</td>
+</tr>
+<tr>
+<td><code>freeze_phase_steps</code></td>
+<td>10000</td>
+<td>每阶段步数 (v4.2)</td>
+</tr>
+<tr>
+<td><code>shield_alpha</code></td>
+<td>0.6</td>
+<td>阻截点插值系数 (v4.3)</td>
+</tr>
+<tr>
+<td><code>shield_r_max</code></td>
+<td>0.5</td>
+<td>阻截位奖励每步上限 (v4.3)</td>
+</tr>
+<tr>
+<td><code>shield_d_max</code></td>
+<td>1.5</td>
+<td>阻截位奖励衰减距离 (v4.3)</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="十梯度传播设计">十、梯度传播设计</h2>
+<h3 id="101-统一optimizer">10.1 统一Optimizer</h3>
+<p>一个 Adam 管理所有参数（RepNet + HyperNet + FunctionalNets 由HyperNet间接优化）。</p>
+<h3 id="102-unroll-梯度流">10.2 Unroll 梯度流</h3>
+<pre><code>Loss_total = Σ_{k=0}^{K} (L_policy^k + L_value^k + L_reward^k + L_consistency^k)
+
+每步 k 的梯度路径:
+  L_policy^k  → PredNet(θ_pred) → HyperNet_pred → ContextEncoder
+  L_value^k   → PredNet(θ_pred) → HyperNet_pred → ContextEncoder
+  L_reward^k  → RewardHead(θ_rew) → HyperNet_rew → ContextEncoder
+  L_consist^k → Projector → s_pred → StateTransNet(θ_state) → HyperNet_trans
+               (target 侧 Projector+RepNet 均 detach，不接受 consist 梯度)
+
+所有 Loss 都回传到 RepNet（因为 s_0 = RepNet(obs)，且展开链未断）
+梯度半衰 s = 0.5*s + 0.5*sg(s) 防止长展开爆炸
+</code></pre>
+<h3 id="103-consistency-loss-的梯度-v40-更新">10.3 Consistency Loss 的梯度 (v4.0 更新)</h3>
+<ul>
+<li><code>L_consist = -CosineSim(Projector(s_pred), sg(Projector(RepNet(o_next))))</code></li>
+<li>sg = stop_gradient (detach)</li>
+<li>梯度路径: L_consist → Projector(参数) → s_pred → StateTransNet(θ_state) → HyperNet_trans</li>
+<li>target 侧 Projector + RepNet 均 detach，不接受 consistency 梯度</li>
+<li>但 RepNet 通过初始编码 s_0 = RepNet(o_0) 仍然收到其他 Loss 的梯度</li>
+<li>Projector 的参数由 consistency loss 的 pred 侧训练（target 侧 detach）</li>
+</ul>
+<hr>
+<h2 id="十一现有代码影响评估">十一、现有代码影响评估</h2>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>状态</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>multiagent/*</code></td>
+<td>✅ 保留</td>
+<td>无需修改</td>
+</tr>
+<tr>
+<td><code>envs/non_stationary_tag.py</code></td>
+<td>🔧 微调</td>
+<td>确保离散兼容</td>
+</tr>
+<tr>
+<td><code>envs/ns_environment.py</code></td>
+<td>🔧 修改</td>
+<td>加 DiscreteActionWrapper</td>
+</tr>
+<tr>
+<td><code>envs/make_env.py</code></td>
+<td>🔧 修改</td>
+<td>discrete=True</td>
+</tr>
+<tr>
+<td><code>models/representation_net.py</code></td>
+<td>✅ 保留</td>
+<td>可能微调维度</td>
+</tr>
+<tr>
+<td><code>models/baseline_model.py</code></td>
+<td>❌ 重写</td>
+<td>Actor+ValueNet → PredNet+DynNet</td>
+</tr>
+<tr>
+<td><code>models/interfaces.py</code></td>
+<td>❌ 重写</td>
+<td>新接口定义</td>
+</tr>
+<tr>
+<td><code>training/buffer.py</code></td>
+<td>❌ 重写</td>
+<td>transition → episode sequence</td>
+</tr>
+<tr>
+<td><code>training/mve.py</code></td>
+<td>❌ 删除</td>
+<td>被 planning/mve_planner.py 替代</td>
+</tr>
+<tr>
+<td><code>scripts/train_baseline.py</code></td>
+<td>❌ 重写</td>
+<td>MuZero训练循环</td>
+</tr>
+<tr>
+<td><code>config.py</code></td>
+<td>❌ 重写</td>
+<td>新参数体系</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="十二风险与应对">十二、风险与应对</h2>
+<table>
+<thead>
+<tr>
+<th>风险</th>
+<th>应对选项</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>超网络输出爆炸</td>
+<td>A:小权重init(std=0.01) / B:LayerNorm / C:hyperfan_init</td>
+</tr>
+<tr>
+<td>MVE Planner 采样效率低</td>
+<td>A:增加num_samples / B:CEM迭代优化 / C:混合greedy+sample</td>
+</tr>
+<tr>
+<td>MuZero展开梯度爆炸</td>
+<td>A:半衰trick / B:减小K / C:梯度裁剪</td>
+</tr>
+<tr>
+<td>N-step return 方差大</td>
+<td>A:增大n / B:减小n / C:TD(λ)</td>
+</tr>
+<tr>
+<td>Baseline 不收敛</td>
+<td>A:固定Rule调试 / B:简化为1-step / C:检查obs/reward尺度</td>
+</tr>
+<tr>
+<td>策略循环震荡</td>
+<td>A:阶段性冻结(freeze_enabled) / B:增大Buffer / C:降低Replay Ratio</td>
+</tr>
+<tr>
+<td>GRU推断不准(Exp3)</td>
+<td>A:增加历史窗口 / B:调正则系数 / C:Gumbel-Softmax</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<p><em>文档版本: v4.3 FINAL | 最后更新: 2026-02-16</em>
+<em>v4.3 新增: 奖励正交化重构 — Blocking Point 阻截位引导 + r_hunt/r_guard 信号消除修复 + Prey/Agent2 奖励正交化</em>
+<em>v4.2 新增: 阶段性冻结 (Phased Perspective Sampling) — 对抗训练节奏控制, 防止策略循环震荡</em>
+<em>v4.1 新增: 统一评估框架(Evaluator + force_rule) + Consistency Loss 改为 (1-cos) + w_consist 2.0→0.5</em>
+<em>v4.0 新增: HyperNet L2 归一化(output_scale=0.01) + Projection+CosineSim Consistency + Hinge Variance Context Loss + Loss/K 平均化</em>
+<em>v3.2 新增: Functional Net 稳定性三层防线 (AdaLN + 残差连接 + 输出缩放)</em>
+<em>整合来源: DESIGN_DOC.md(v1.0), DESIGN_DOC_v1.1_APPENDIX.md, <a href="http://design3.0.html">design3.0.md</a>, HYPER_MUZERO_IMPROVEMENTS.md</em>
+<em>所有先前文档归档为参考，本文档为唯一实施依据</em></p>
+
+            <script async src="https://cdn.jsdelivr.net/npm/katex-copytex@latest/dist/katex-copytex.min.js"></script>
+            
+        </body>
+        </html>
