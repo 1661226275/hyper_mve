@@ -31,7 +31,7 @@ class BaseConfig:
     # ── Training (MuZero-style) ──────────────────────────────────
     max_train_steps = 200000
     lr = 1e-4
-    lr_min = 1e-5               # [v4.4] CosineAnnealingLR eta_min
+    lr_min = 5e-6               # [v4.4] CosineAnnealingLR eta_min
     adam_eps = 1e-5             # [v4.4] Adam optimizer epsilon
     gamma = 0.95
     batch_size = 256            # [v4.4] 从 512 降至 256，降低 replay ratio

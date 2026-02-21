@@ -25,11 +25,17 @@ v4.6 key fix — Common Random Numbers (CRN):
 Supports BaselineModel, OracleHyperMuZeroModel, InferHyperMuZeroModel via duck-typing.
 For HyperMuZero: set_context() is called before each agent's perspective.
 """
+import math
 import torch
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from utils.utils import actions_to_one_hot, inverse_scalar_transform
+
+# ── Debug flag: set True to enable CRN diagnostics ──────────
+_DEBUG_CRN = True
+_DEBUG_COUNTER = 0       # only print every N-th call
+_DEBUG_INTERVAL = 8000    # print once per 200 calls
 
 
 def _is_hyper_model(model):
@@ -90,6 +96,8 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
     Returns:
         pi_mve: (B, num_agents, num_actions) - search policy distribution per agent
     """
+    global _DEBUG_COUNTER
+
     B = root_s.shape[0]
     N = cfg.num_agents
     A = cfg.num_actions
@@ -103,12 +111,18 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
     spa = S // A          # samples per candidate action (scenarios)
     M = A * spa           # total trajectories per batch element per agent
 
+    # Debug: throttle output
+    do_debug = _DEBUG_CRN and (_DEBUG_COUNTER % _DEBUG_INTERVAL == 0)
+    _DEBUG_COUNTER += 1
+
     # Random agent ordering for coordinate descent
     agent_order = torch.randperm(N).tolist()
 
     # Output: per-agent search policy
     pi_mve = torch.zeros(B, N, A, device=device)
     optimised = set()
+
+    is_first_agent = True  # only debug-print the first agent in coordinate descent
 
     for j in agent_order:
         # ── Phase 1: Pre-sample other agents' step-0 actions (CRN) ─────
@@ -157,6 +171,20 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
         for i, a_scenario in step0_actions_per_scenario.items():
             step0_actions_expanded[i] = a_scenario.repeat_interleave(A, dim=0)  # (B*M,)
 
+        # ── DEBUG Level 1: Verify CRN is working ────────────────────
+        if do_debug and is_first_agent:
+            print(f"\n{'='*60}")
+            print(f"[CRN DEBUG] Agent j={j}, agent_order={agent_order}")
+            print(f"  B={B}, spa={spa}, A={A}, M={M}, K={K}")
+            print(f"  first_action_j[:10] = {first_action_j[:10].cpu().tolist()}")
+            for i in step0_actions_expanded:
+                # b=0, scenario=0 → indices [0..A-1]; scenario=1 → [A..2A-1]
+                acts_sc0 = step0_actions_expanded[i][:A].cpu().tolist()
+                acts_sc1 = step0_actions_expanded[i][A:2*A].cpu().tolist()
+                print(f"  Agent {i} step0 actions: sc0={acts_sc0}, sc1={acts_sc1}")
+                # Expect: all A values in sc0 identical, all A in sc1 identical
+                # sc0 and sc1 may differ (different scenarios)
+
         # ── Phase 3: Rollout K steps ──────────────────────────────────
         for step in range(K):
             all_actions = []
@@ -173,6 +201,7 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
                         model, curr_s, i, BM, device, is_hyper, rule_exp
                     )
                 all_actions.append(a_i)
+
 
             joint_actions = torch.stack(all_actions, dim=-1)        # (B*M, N)
             action_onehot = actions_to_one_hot(joint_actions, A)    # (B*M, N*A)
@@ -196,6 +225,30 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
             r_j = inverse_scalar_transform(r_j_scaled).squeeze(-1)  # (B*M,)
             cum_return_j += discount * r_j
 
+            # ── DEBUG Level 4: Check step-0 reward diversity ────────
+            if do_debug and is_first_agent and step == 0:
+                r_b0_sc0 = r_j[:A].cpu().numpy()
+                print(f"  [Step-0 Reward] 5 candidates: {r_b0_sc0}")
+                print(f"    range={r_b0_sc0.max()-r_b0_sc0.min():.6f}, "
+                      f"std={r_b0_sc0.std():.6f}")
+
+            # ── DEBUG Level 5: Verify action_onehot varies + model scale ─
+            if do_debug and is_first_agent and step == 0:
+                # Check that action_onehot differs across A candidates
+                oh_b0_sc0 = action_onehot[:A]  # (A, N*A) — 5 candidates
+                oh_diffs = (oh_b0_sc0[1:] - oh_b0_sc0[0]).abs().sum(dim=-1)
+                print(f"  [Action OH] diff from candidate 0: {oh_diffs.cpu().tolist()}")
+                # Check s_next diversity
+                s_b0_sc0 = s_next[:A]
+                s_diffs = (s_b0_sc0[1:] - s_b0_sc0[0]).abs().sum(dim=-1)
+                print(f"  [s_next] diff from candidate 0: {s_diffs.cpu().tolist()}")
+                # HyperNet output_scale (if applicable)
+                if is_hyper and hasattr(model, 'hyper_net'):
+                    scales = {name: p.item() for name, p in
+                              model.hyper_net.named_parameters()
+                              if 'output_scale' in name}
+                    print(f"  [HyperNet] output_scales: {scales}")
+
             curr_s = s_next
             discount *= gamma
 
@@ -211,11 +264,42 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
         v_j = inverse_scalar_transform(v_j_scaled).squeeze(-1)  # (B*M,)
         cum_return_j += discount * v_j
 
+        # ── DEBUG Level 2: Check Q-value distribution ───────────────
+        if do_debug and is_first_agent:
+            returns_reshaped = cum_return_j.view(B, spa, A)  # (B, spa, A)
+            q_b0 = returns_reshaped[0].cpu().numpy()  # (spa, A) = (10, 5)
+            q_means = q_b0.mean(axis=0)   # (5,) mean Q per candidate
+            q_stds = q_b0.std(axis=0)     # (5,) std per candidate across scenarios
+            q_range = q_means.max() - q_means.min()
+            q_std_mean = q_stds.mean()
+            print(f"  [Q-values] batch=0:")
+            print(f"    means = {q_means}")
+            print(f"    stds  = {q_stds}")
+            print(f"    range = {q_range:.6f}, mean_std = {q_std_mean:.6f}")
+            print(f"    SNR (range/std) = {q_range/q_std_mean:.4f}" if q_std_mean > 1e-8
+                  else "    SNR = N/A (std≈0)")
+
         # ── Phase 4: Aggregate with CRN layout ────────────────────
         # CRN layout: (B*M,) → (B, spa, A) → mean over scenarios → (B, A)
         returns_per_action = cum_return_j.view(B, spa, A).mean(dim=1)
-        pi_mve[:, j] = F.softmax(returns_per_action / temperature, dim=-1)
+        
+        # [v4.6] Q-value normalization: auto-adapt to any Q magnitude
+        q_mean = returns_per_action.mean(dim=-1, keepdim=True)
+        q_std = returns_per_action.std(dim=-1, keepdim=True) + 1e-8
+        q_normalized = (returns_per_action - q_mean) / q_std
+        pi_mve[:, j] = F.softmax(q_normalized / temperature, dim=-1)
+
+        # ── DEBUG Level 3: Check π_mve output ───────────────────────
+        if do_debug and is_first_agent:
+            pi_b0 = pi_mve[0, j].cpu()
+            ent = -(pi_b0 * (pi_b0 + 1e-8).log()).sum().item()
+            print(f"  [π_mve] {pi_b0.numpy()}")
+            print(f"    entropy={ent:.4f} (uniform={math.log(A):.4f})")
+            print(f"    returns_per_action[0] = {returns_per_action[0].cpu().numpy()}")
+            print(f"    q_normalized[0] = {q_normalized[0].cpu().numpy()}")
+            print(f"{'='*60}")
 
         optimised.add(j)
+        is_first_agent = False
 
     return pi_mve  # (B, N, A) soft probability distribution

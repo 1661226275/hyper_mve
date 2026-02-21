@@ -252,8 +252,8 @@ def main():
             if use_tb:
                 log_results(writer, eval_results, total_train_steps, prefix='eval')
 
-            os.makedirs(cfg.save_dir, exist_ok=True)
-            ckpt_path = os.path.join(cfg.save_dir, f'infer_step{total_train_steps}.pt')
+            os.makedirs(f'{cfg.save_dir}/infer/freeze_{cfg.freeze_enabled}_lr{cfg.lr}_gamma{cfg.gamma}', exist_ok=True)
+            ckpt_path = os.path.join(f'{cfg.save_dir}/infer/freeze_{cfg.freeze_enabled}_lr{cfg.lr}_gamma{cfg.gamma}', f'infer_step{total_train_steps}.pt')
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'projector_state_dict': projector.state_dict(),
