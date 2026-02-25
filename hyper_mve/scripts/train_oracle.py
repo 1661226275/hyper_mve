@@ -128,7 +128,7 @@ def main():
     # ── TensorBoard (optional) ──────────────────────────────────
     try:
         from torch.utils.tensorboard import SummaryWriter
-        writer = SummaryWriter(log_dir=os.path.join(cfg.log_dir, f'oracle/freeze_{cfg.freeze_enabled}_lr{cfg.lr}_gamma{cfg.gamma}'))
+        writer = SummaryWriter(log_dir=os.path.join(cfg.log_dir, f'oracle/freeze_{cfg.freeze_enabled}_lr{cfg.lr}_gamma{cfg.gamma}_batch_size{cfg.batch_size}_buffer_size{cfg.buffer_size}'))
         use_tb = True
         print("TensorBoard logging enabled")
     except ImportError:
@@ -209,9 +209,16 @@ def main():
                                   1 if phase_name == 'Hunters' else 2,
                                   total_train_steps)
 
+                # [Monitoring] Hypernetwork diagnostics (every 500 steps)
+                if total_train_steps % 500 == 0:
+                    diag = trainer.compute_hypernet_diagnostics()
+                    for dkey, dval in diag.items():
+                        writer.add_scalar(dkey, dval, total_train_steps)
+
         # ── Console logging ─────────────────────────────────────
         if iteration % 50 == 0:
             elapsed = time.time() - t_train_start
+            div_str = f"l_div={losses.get('l_div', 0):.4f} " if losses.get('l_div', 0) > 0 else ""
             print(f"[Iter {iteration:5d}] steps={total_train_steps:6d} "
                   f"eps={epsilon:.3f} buf={len(buffer):5d} "
                   f"phase={phase_name:>7s} "
@@ -220,7 +227,7 @@ def main():
                   f"l_val={losses['l_val']:.4f} "
                   f"l_rew={losses['l_rew']:.4f} "
                   f"l_con={losses['l_con']:.4f} "
-                  f"({elapsed:.0f}s)")
+                  f"{div_str}({elapsed:.0f}s)")
 
         # ── Evaluation ──────────────────────────────────────────
         if iteration % cfg.evaluate_freq == 0 and total_train_steps > 0:
@@ -238,7 +245,7 @@ def main():
 
             # Save checkpoint
             os.makedirs(f'{cfg.save_dir}/oracle/freeze_{cfg.freeze_enabled}_lr{cfg.lr}_gamma{cfg.gamma}', exist_ok=True)
-            ckpt_path = os.path.join(f'{cfg.save_dir}/oracle/freeze_{cfg.freeze_enabled}_lr{cfg.lr}_gamma{cfg.gamma}', f'oracle_step{total_train_steps}.pt')
+            ckpt_path = os.path.join(f'{cfg.save_dir}/oracle/freeze_{cfg.freeze_enabled}_lr{cfg.lr}_gamma{cfg.gamma}_batch_size{cfg.batch_size}_buffer_size{cfg.buffer_size}', f'oracle_step{total_train_steps}.pt')
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'projector_state_dict': projector.state_dict(),

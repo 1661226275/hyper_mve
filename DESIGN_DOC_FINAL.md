@@ -1,7 +1,7 @@
 # Hyper-MuZero: 基于超网络与视角自适应规划的非平稳多智能体强化学习框架
-## 最终设计文档 v4.6
+## 最终设计文档 v4.7
 
-> **本文档为最终实施版本**，整合了 v1.0(环境/实验)、v1.1(接口/依赖)、v3.0(MuZero训练/视角建模)、v3.2(稳定性防线) 的所有设计决策，并纳入 v4.0 四项关键改进（L2 Norm、Hinge Variance、Projection+CosineSim、Loss 平均化）、v4.1 统一评估框架、v4.2 阶段性冻结（对抗训练节奏控制）、v4.3 奖励正交化重构（Blocking Point + 信号消除修复）、v4.4 训练稳定性改进（Target Network EMA + CosineAnnealingLR + Adam eps），以及 **v4.6 Planner CRN 方差消减 + 回退 PG 辅助 Loss**。
+> **本文档为最终实施版本**，整合了 v1.0(环境/实验)、v1.1(接口/依赖)、v3.0(MuZero训练/视角建模)、v3.2(稳定性防线) 的所有设计决策，并纳入 v4.0 四项关键改进（L2 Norm、Hinge Variance、Projection+CosineSim、Loss 平均化）、v4.1 统一评估框架、v4.2 阶段性冻结（对抗训练节奏控制）、v4.3 奖励正交化重构（Blocking Point + 信号消除修复）、v4.4 训练稳定性改进（Target Network EMA + CosineAnnealingLR + Adam eps）、v4.6 Planner CRN 方差消减 + 回退 PG 辅助 Loss，以及 **v4.7 Reward HyperNet 分化改进（output_scale 初始化陷阱修复 + Diversity Loss + 加深 hyper_rew + Warmup Cosine LR）**。
 > 所有先前文档(DESIGN_DOC.md, DESIGN_DOC_v1.1_APPENDIX.md, design3.0.md, HYPER_MUZERO_IMPROVEMENTS.md)归档为参考，不再更新。
 
 ---
@@ -1047,6 +1047,172 @@ FC2: W₂ @ h₁ ≈ 128 * 6e-5 * 1.0 ≈ 8e-3 (比修复前大 10⁵ 倍!)
 | `models/functional_nets.py` | `adaln_forward`: `h * gamma` → `h * (1 + gamma)` |
 | `planning/mve_planner.py` | 新增 Level 5 诊断：action_onehot 差异、s_next 差异、output_scale 值 |
 
+### 5.11 Reward HyperNet 分化改进 (v4.7)
+
+#### 问题诊断
+
+训练监控发现 `hyper_rew` 的 θ_reward 在 agent 2 vs agent 3 配对上余弦相似度持续坍缩（cos_sim ≈ 0.88，无下降趋势），而其他 agent 对（如 0v2, 0v3, 1v2）均在正常分化（cos_sim 从 0.85 降至 0.58-0.69）。hyper_pred 的分化效果相对正常。
+
+**坍缩不是全局性的，而是特异性地发生在 (2,3) 配对上。**
+
+#### 根因分析：output_scale 初始化陷阱
+
+**核心根因：`output_scale=0.01` 导致 AdaLN 调制在训练初期完全无效**
+
+```
+θ_rew 有 28033 个参数
+L2 归一化后每个参数 ≈ 1/√28033 ≈ 0.006
+× output_scale(0.01) → 每个参数 ≈ 0.00006
+
+AdaLN: h * (1 + gamma) + beta
+gamma ≈ 0.00006 → (1 + 0.00006) ≈ 1.0
+→ 所有 agent 的 reward prediction 几乎完全相同
+→ reward MSE 对不同 agent 产生几乎相同的梯度
+→ 无分化信号
+```
+
+output_scale 是可学习的，但增长速度受 l_rew 梯度控制：
+
+```
+l_rew ≈ 0.05（弱梯度源），l_pol ≈ 1.5（强梯度源，30x）
+
+hyper_rew 的 output_scale 增长: ~2.2e-5/step → 从 0.01 到 0.1 需 ~4000 步
+hyper_pred 的 output_scale 增长: ~6.6e-4/step → 从 0.01 到 0.1 需 ~130 步
+```
+
+**在 output_scale 增长到有意义的值之前（~4000 步），hyper_rew 的 MLP 权重已在"零区分"环境中坍缩。** 这解释了为什么 hyper_pred（30x 更快的 output_scale 增长）能正常分化而 hyper_rew 不能——不是架构问题，而是初始化 + 梯度幅度的组合导致 hyper_rew 错过了分化窗口。
+
+**(2,3) 特异性坍缩的附加因素**：Agent 2（可变角色）的 reward 在不同 rule 下方向冲突（rule=0 是猎人，rule=1 偏向 prey），使 hyper_rew 更难学习 (rule, id=2) 的复杂交互映射。
+
+#### 解决方案：四项改动
+
+**改动 1: hyper_rew output_scale 初始化提升 — 打破初始化陷阱（核心）**
+
+将 hyper_rew 的 `output_scale_init` 从 0.01 提升到 0.1：
+
+```python
+class HyperNetMLP(nn.Module):
+    def __init__(self, ..., output_scale_init=0.01):
+        self.output_scale = nn.Parameter(torch.tensor(float(output_scale_init)))
+
+class DualHyperNetwork(nn.Module):
+    def __init__(self, ..., rew_output_scale_init=0.01):
+        self.hyper_rew = HyperNetMLP(..., output_scale_init=rew_output_scale_init)
+        # hyper_trans 和 hyper_pred 保持默认 0.01
+```
+
+**效果**：初始 θ_rew 参数放大 10x → AdaLN 调制从 (1+6e-5)≈1.0 到 (1+6e-4)≈1.0006 → 虽仍小，但不同 agent 的 random MLP 输出方向差异被 10x 放大 → reward prediction 产生可测量的 agent 间差异 → reward MSE 立即产生分化梯度。
+
+**仅影响 hyper_rew**：hyper_trans 和 hyper_pred 保持 0.01，避免影响已正常工作的部分。
+
+**改动 2: Reward Diversity Loss — 直接对抗方向坍缩**
+
+显式惩罚不同 agent 的 θ_reward 方向过于相似。使用 Hinge 机制，cos_sim 降到阈值以下后自动关闭：
+
+```python
+def reward_diversity_loss(hyper_rew, rule_emb, id_embedding, num_agents,
+                          target_cos=0.5, skip_pairs=None):
+    thetas = {}
+    for aid in range(num_agents):
+        id_emb = id_embedding(full(B, aid))
+        aug_ctx = cat([rule_emb, id_emb], dim=-1)
+        thetas[aid] = hyper_rew(aug_ctx)
+    loss = 0
+    for i, j in agent_pairs:  # 排除 skip_pairs
+        cos_sim = cosine_similarity(thetas[i], thetas[j], dim=-1)
+        loss += relu(cos_sim - target_cos).mean()
+    return loss / count
+```
+
+**设计决策**：
+- `target_cos = 0.5`：只管真正坍缩的 pair（如 2v3 ~0.88 → penalty 0.38），不干扰自然分化到 0.6-0.7 的 pair（如 0v3 ~0.58 → penalty 0.08）
+- `skip_pairs = [(0, 1)]`：Agent 0 和 1 是同角色固定猎人，θ_reward 相似是正确的
+- **cos_sim 是 scale-invariant 的**：output_scale 改变不影响 diversity loss → 两个机制互补而非重叠
+
+**改动 3: 加深 hyper_rew MLP — 增强 (rule, id) 交互建模**
+
+hyper_rew 从 [256, 256] 加深为 [256, 256, 256]。更深的 MLP 有更强的 rule_emb × id_emb 交互建模能力，这正是 (2,3) 坍缩的关键——需要学习 agent 2 在不同 rule 下的复杂条件映射。
+
+**改动 4: w_reward 温和放大 — 搭配 output_scale 综合提升**
+
+`w_reward` 从 1.0 提升到 3.0（非 5.0，因真正的杠杆在 output_scale）。
+
+```
+梯度到达 context_encoder 的贡献比:
+  w=1, scale=0.01: ∝ 0.01  → ~1%（完全被淹没）
+  w=3, scale=0.1:  ∝ 0.3   → ~30%（有意义的贡献）
+  w=5, scale=0.01: ∝ 0.05  → ~5%（仍不够）
+```
+
+3.0 + output_scale=0.1 的综合贡献比 ~30%，给了 reward pathway 有意义的影响力，且避免 5.0 对已正常分化 pair 的过度放大。
+
+#### 四项改动的协作
+
+```
+训练初期 (ε=1.0):
+  output_scale=0.1 → θ_rew 产生可测量的 agent 间差异 → 打破初始化陷阱
+  Diversity Loss → 在方向空间推开 θ_reward 向量 → 打破方向坍缩
+  w_reward=3.0 → 放大 reward MSE 的自然分化梯度
+
+训练中期 (策略改善):
+  Diversity Loss → cos_sim < 0.5 后对正常 pair 自动关闭
+  output_scale 继续增长 → reward prediction 差异越来越显著
+  深层 hyper_rew → 创建更精细的 agent-specific 参数区域
+
+训练后期 (收敛):
+  Diversity Loss → 仅在偶尔回升时激活（安全网）
+  所有梯度来自自然的 reward/policy/value loss
+```
+
+#### LR Schedule: Warmup Cosine (v4.7)
+
+训练数据显示约 5k 步时出现不稳定震荡（GRU 表征相变 + replay buffer 数据分布变化）。引入 warmup_cosine LR 调度，在 5000 步内从 lr_min 线性升至 lr，然后余弦衰减：
+
+```python
+# config.py
+lr_schedule = 'warmup_cosine'   # 'cosine' | 'multistep' | 'warmup_cosine'
+lr_warmup_steps = 5000          # 覆盖 GRU 相变期 + buffer 分布变化期
+```
+
+#### 阶段性冻结改为全员训练 (v4.7)
+
+v4.2 引入的阶段性冻结将多任务学习问题转化为 continual learning，导致灾难性遗忘。v4.7 恢复全员训练（`freeze_enabled = False`），依赖超网络通过 context 输入区分不同 agent 视角来避免负迁移。
+
+#### 监控指标
+
+| 指标 | TensorBoard key | 预期行为 |
+|------|----------------|---------|
+| θ_rew 余弦相似度 | `hyper/*/cos_rew_{i}v{j}` | (2,3) 从 ~0.88 降至 < 0.5；其他 pair 自然分化 |
+| output_scale 增长 | `hyper/output_scale_rew` | 从 0.1 逐步增长（对比 trans/pred 从 0.01 增长） |
+| 梯度范数 | `train/grad_norm` | 监控 5k 步附近是否有 spike |
+| diversity loss | `train/l_div` | 初始正值，随分化推进逐步下降 |
+
+#### 配置参数
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| `rew_output_scale_init` | 0.1 | hyper_rew 的 output_scale 初始值（打破初始化陷阱） |
+| `hyper_rew_hidden_dims` | [256, 256, 256] | hyper_rew 独立隐藏层（更深） |
+| `w_reward` | 3.0 | Reward Loss 权重（原 1.0，搭配 output_scale=0.1 综合贡献比 ~30%） |
+| `w_rew_diversity` | 0.1 | Diversity Loss 权重 |
+| `rew_diversity_target_cos` | 0.5 | Hinge 阈值（只管真正坍缩的 pair） |
+| `rew_diversity_skip_pairs` | [(0, 1)] | 跳过同角色 agent 对 |
+| `lr_schedule` | 'warmup_cosine' | LR 调度策略 |
+| `lr_warmup_steps` | 5000 | Warmup 步数（覆盖 5k 不稳定期） |
+| `freeze_enabled` | False | 全员训练（移除阶段性冻结） |
+
+#### 改动文件
+
+| 文件 | 改动 |
+|------|------|
+| `config.py` | 新增 rew_output_scale_init, lr_schedule, lr_warmup_steps; w_reward 1.0→3.0; target_cos 0.3→0.5 |
+| `models/hyper_network.py` | HyperNetMLP 支持 output_scale_init; DualHyperNetwork 支持 rew_output_scale_init + rew_hidden_dims; 新增 reward_diversity_loss() |
+| `models/hyper_muzero_model.py` | 传递 rew_hidden_dims + rew_output_scale_init |
+| `models/infer_muzero_model.py` | 传递 rew_hidden_dims + rew_output_scale_init |
+| `training/muzero_trainer.py` | 新增 _build_scheduler (warmup_cosine); diversity loss 计算; 梯度范数 logging; output_scale 监控 |
+| `scripts/train_oracle.py` | 控制台新增 l_div 输出 |
+| `scripts/train_infer.py` | 控制台新增 l_div 输出 |
+
 ---
 
 ## 六、三组对比实验
@@ -1296,15 +1462,18 @@ D:/RL/hyper_mve/                      # 目录暂保留原名，避免破坏环�
 | `output_scale_init` | 0.01 | HyperNet 可学习模长初始值 (v4.0) |
 | `w_policy` | 1.0 | Policy Loss 权重 |
 | `w_value` | 0.25 | Value Loss 权重 |
-| `w_reward` | 1.0 | Reward Loss 权重 |
+| `w_reward` | 5.0 | Reward Loss 权重 (v4.7: 1.0→5.0 放大梯度信号) |
 | `w_consist` | 0.5 | Consistency Loss 权重 (v4.1: 2.0→0.5 防止表征坍缩) |
 | `w_context` | 0.01 | Context Hinge Loss 权重 (Exp3) |
 | `target_context_std` | 0.1 | Hinge Variance 阈值 (Exp3) |
 | `ema_tau` | 0.99 | Target Network EMA 系数 (v4.4) |
-| `freeze_enabled` | True | 阶段性冻结总开关 (v4.2) |
+| `freeze_enabled` | False | 阶段性冻结总开关 (v4.7: True→False 全员训练) |
 | `freeze_warmup_steps` | 4000 | 冻结预热期 (v4.4: 5000→4000) |
-| `freeze_phase_steps` | 2400 | 每阶段步数 (v4.4: 10000→2400) |
+| `freeze_phase_steps` | 4000 | 每阶段步数 (v4.4: 10000→2400, v4.7: 2400→4000) |
 | `epsilon_decay_steps` | 28000 | Epsilon 衰减步数 (v4.4: 与 lr 衰减对齐) |
+| `hyper_rew_hidden_dims` | [256, 256, 256] | hyper_rew 独立隐藏层 (v4.7 新增) |
+| `w_rew_diversity` | 0.1 | Reward Diversity Loss 权重 (v4.7 新增) |
+| `rew_diversity_target_cos` | 0.3 | Diversity Hinge 阈值 (v4.7 新增) |
 | `shield_alpha` | 0.6 | 阻截点插值系数 (v4.3) |
 | `shield_r_max` | 0.5 | 阻截位奖励每步上限 (v4.3) |
 | `shield_d_max` | 1.5 | 阻截位奖励衰减距离 (v4.3) |
@@ -1373,10 +1542,12 @@ Loss_total = Σ_{k=0}^{K} (L_policy^k + L_value^k + L_reward^k + L_consistency^k
 | 策略循环震荡 | A:阶段性冻结(freeze_enabled) / B:Target Network EMA(v4.4) / C:降低Replay Ratio |
 | V 值过估正反馈 | A:Target Network EMA(v4.4) / B:Clipped Double-Q / C:减小 n_step |
 | GRU推断不准(Exp3) | A:增加历史窗口 / B:调正则系数 / C:Gumbel-Softmax |
+| **hyper_rew 参数坍缩** (cos_sim→1) | ✅ **v4.7 已解决**: Diversity Loss + 加深 hyper_rew [256,256,256] + w_reward 5× 放大 (§5.11) |
 
 ---
 
-*文档版本: v4.6 | 最后更新: 2026-02-20*
+*文档版本: v4.7 | 最后更新: 2026-02-22*
+*v4.7 新增: Reward HyperNet 分化改进 — Reward Diversity Loss (Hinge cos_sim<0.3) 打破初始坍缩 + hyper_rew 加深至 [256,256,256] 增强分化容量 + w_reward 1.0→5.0 放大梯度信号 + 全员训练 freeze_enabled=False 避免 continual learning 灾难性遗忘 (§5.11)*
 *v4.6 新增: Planner CRN 方差消减 — Common Random Numbers 消除其他 Agent 随机动作噪声 (SNR 0.02→∞) + 数据布局 (B,A,spa)→(B,spa,A) + 回退 PG 辅助 loss (off-policy bias 导致 l_pg 正反馈失控) + 恢复纯 CE policy loss + epsilon_init 1.0 恢复 + AdaLN 残差调制 h\*(1+gamma)+beta 修复 Functional Net 信号衰减 (§5.10)*
 *v4.4 新增: 训练稳定性改进 — Target Network (EMA τ=0.99) 阻断 V 过估正反馈 + CosineAnnealingLR 平滑衰减 + Adam eps=1e-5 + freeze/epsilon 参数重新对齐 + buffer_size 20000→5000 提升数据新鲜度 + min_buffer_size=1000 warmup guard + 移除 PER 改用均匀采样 + Replay Ratio 82→2.56 (batch_size 512→256, episodes_per_iter 4→32, train_steps_per_iter 16→8)*
 *v4.3 新增: 奖励正交化重构 — Blocking Point 阻截位引导 + r_hunt/r_guard 信号消除修复 + Prey/Agent2 奖励正交化*

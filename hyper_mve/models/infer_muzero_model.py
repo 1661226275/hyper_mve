@@ -88,6 +88,8 @@ class InferHyperMuZeroModel(nn.Module):
             rew_param_count=self.func_reward_head.total_params,
             pred_param_count=self.func_pred_net.total_params,
             hidden_dims=cfg.hyper_hidden_dims,
+            rew_hidden_dims=getattr(cfg, 'hyper_rew_hidden_dims', None),
+            rew_output_scale_init=getattr(cfg, 'rew_output_scale_init', 0.01),
         )
 
         # ── Internal context cache ──────────────────────────────

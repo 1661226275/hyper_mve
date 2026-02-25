@@ -36,6 +36,7 @@ import torch.nn.functional as F
 from utils.utils import actions_to_one_hot, scalar_transform, inverse_scalar_transform
 from planning.mve_planner import _is_hyper_model
 from models.gru_context_encoder import context_variance_loss
+from models.hyper_network import reward_diversity_loss
 from models.representation_net import negative_cosine_similarity
 
 
@@ -77,14 +78,56 @@ class MuZeroTrainer:
             params, lr=cfg.lr, eps=getattr(cfg, 'adam_eps', 1e-5)
         )
 
-        # [v4.4] CosineAnnealingLR replacing MultiStepLR
-        lr_min = getattr(cfg, 'lr_min', 1e-5)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer,
-            T_max=cfg.max_train_steps,
-            eta_min=lr_min,
-        )
+        # [v4.7] Configurable LR schedule: 'cosine' | 'multistep' | 'warmup_cosine'
+        self.scheduler = self._build_scheduler(cfg)
         self.train_step_count = 0
+
+    def _build_scheduler(self, cfg):
+        """
+        [v4.7] Build LR scheduler based on config.
+
+        Supported schedules:
+            'cosine':        CosineAnnealingLR (v4.4 default)
+            'multistep':     MultiStepLR with configurable milestones
+            'warmup_cosine': Linear warmup (lr_min -> lr) then CosineAnnealing
+
+        Returns:
+            LR scheduler instance
+        """
+        lr_min = getattr(cfg, 'lr_min', 1e-5)
+        schedule = getattr(cfg, 'lr_schedule', 'cosine')
+
+        if schedule == 'cosine':
+            return torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=cfg.max_train_steps, eta_min=lr_min,
+            )
+        elif schedule == 'multistep':
+            milestones = getattr(cfg, 'lr_milestones', [10000, 40000, 80000])
+            gamma = getattr(cfg, 'lr_gamma', 0.3)
+            return torch.optim.lr_scheduler.MultiStepLR(
+                self.optimizer, milestones=milestones, gamma=gamma,
+            )
+        elif schedule == 'warmup_cosine':
+            warmup_steps = getattr(cfg, 'lr_warmup_steps', 2000)
+            cosine_steps = cfg.max_train_steps - warmup_steps
+
+            warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+                self.optimizer,
+                start_factor=lr_min / cfg.lr,  # start at lr_min
+                end_factor=1.0,                 # ramp up to lr
+                total_iters=warmup_steps,
+            )
+            cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=cosine_steps, eta_min=lr_min,
+            )
+            return torch.optim.lr_scheduler.SequentialLR(
+                self.optimizer,
+                schedulers=[warmup_scheduler, cosine_scheduler],
+                milestones=[warmup_steps],
+            )
+        else:
+            raise ValueError(f"Unknown lr_schedule: {schedule}. "
+                             f"Choose from 'cosine', 'multistep', 'warmup_cosine'.")
 
     def _soft_update_target(self):
         """[v4.4] EMA update: target = tau * target + (1-tau) * online."""
@@ -216,6 +259,18 @@ class MuZeroTrainer:
         loss_reward_sum = 0.0
         loss_consist_sum = 0.0
 
+        # [Diagnostic] Per-component weighted loss tensors (for gradient attribution)
+        total_pol_t = torch.tensor(0.0, device=self.device)
+        total_val_t = torch.tensor(0.0, device=self.device)
+        total_rew_t = torch.tensor(0.0, device=self.device)
+        total_con_t = torch.tensor(0.0, device=self.device)
+
+        # [Monitoring] Per-agent loss accumulators (gradient domination detection)
+        num_agents = cfg.num_agents
+        per_agent_pol = {i: 0.0 for i in range(num_agents)}
+        per_agent_val = {i: 0.0 for i in range(num_agents)}
+        per_agent_rew = {i: 0.0 for i in range(num_agents)}
+
         for k in range(K):
             # 4.1 Prediction for current state (subjective)
             p_k, v_k = model.predict(s, id_emb)  # (B, A), (B, 1)
@@ -248,18 +303,30 @@ class MuZeroTrainer:
                 s_target = model.encode(obs_seq[:, k + 1])  # (B, latent_dim)
                 proj_target = self.projector(s_target)  # (B, proj_dim)
 
-            # 4.5 Compute losses
+            # 4.5 Compute losses (per-sample first, then batch average)
             # [v4.6] Plain CE — CRN-fixed planner provides meaningful π_mve targets
-            loss_policy = -(target_pi * F.log_softmax(p_k, dim=-1)).sum(dim=-1).mean()
+            loss_pol_per = -(target_pi * F.log_softmax(p_k, dim=-1)).sum(dim=-1)  # (B,)
+            loss_policy = loss_pol_per.mean()
 
             # Value loss: MSE in scaled space
-            loss_value = F.mse_loss(v_k.squeeze(-1), target_z)
+            loss_val_per = F.mse_loss(v_k.squeeze(-1), target_z, reduction='none')  # (B,)
+            loss_value = loss_val_per.mean()
 
             # Reward loss: MSE in scaled space
-            loss_reward = F.mse_loss(r_k, target_r)
+            loss_rew_per = F.mse_loss(r_k, target_r, reduction='none').squeeze(-1)  # (B,)
+            loss_reward = loss_rew_per.mean()
 
             # Consistency loss: negative cosine similarity in projection space [v4.0]
             loss_consist = negative_cosine_similarity(proj_pred, proj_target)
+
+            # [Monitoring] Per-agent loss accumulation (detached, logging only)
+            with torch.no_grad():
+                for aid in range(num_agents):
+                    mask = (agent_ids == aid)
+                    if mask.any():
+                        per_agent_pol[aid] += loss_pol_per[mask].mean().item()
+                        per_agent_val[aid] += loss_val_per[mask].mean().item()
+                        per_agent_rew[aid] += loss_rew_per[mask].mean().item()
 
             # Accumulate
             step_loss = (cfg.w_policy * loss_policy +
@@ -267,6 +334,12 @@ class MuZeroTrainer:
                          cfg.w_reward * loss_reward +
                          cfg.w_consist * loss_consist)
             total_loss = total_loss + step_loss
+
+            # [Diagnostic] Accumulate weighted per-component losses (with grad)
+            total_pol_t = total_pol_t + cfg.w_policy * loss_policy
+            total_val_t = total_val_t + cfg.w_value * loss_value
+            total_rew_t = total_rew_t + cfg.w_reward * loss_reward
+            total_con_t = total_con_t + cfg.w_consist * loss_consist
 
             loss_policy_sum += loss_policy.item()
             loss_value_sum += loss_value.item()
@@ -279,12 +352,54 @@ class MuZeroTrainer:
         # 5. [v4.0] Loss averaging over K steps
         total_loss = total_loss / K
 
+        # 5.1 [v4.7] Reward diversity regularization (HyperMuZero only)
+        loss_div = torch.tensor(0.0, device=self.device)
+        if is_hyper and getattr(cfg, 'w_rew_diversity', 0) > 0:
+            rule_emb = model._current_rule_emb  # cached from set_context()
+            loss_div = reward_diversity_loss(
+                hyper_rew=model.hyper_net.hyper_rew,
+                rule_emb=rule_emb,
+                id_embedding=model.context_encoder.id_embedding,
+                num_agents=cfg.num_agents,
+                target_cos=getattr(cfg, 'rew_diversity_target_cos', 0.3),
+                skip_pairs=getattr(cfg, 'rew_diversity_skip_pairs', None),
+            )
+            total_loss = total_loss + cfg.w_rew_diversity * loss_div
+
+        # 5.2 [Diagnostic] Per-loss gradient norms to context_encoder (every N steps)
+        grad_diag = {}
+        diag_interval = getattr(cfg, 'grad_diag_interval', 50)
+        if is_hyper and self.train_step_count % diag_interval == 0:
+            ctx_params = [p for p in model.context_encoder.parameters() if p.requires_grad]
+            components = [
+                ('pol', total_pol_t / K),
+                ('val', total_val_t / K),
+                ('rew', total_rew_t / K),
+                ('con', total_con_t / K),
+            ]
+            for name, lc in components:
+                self.optimizer.zero_grad()
+                lc.backward(retain_graph=True)
+                grads = [p.grad.flatten() for p in ctx_params if p.grad is not None]
+                grad_diag[f'gd_ctx_{name}'] = torch.cat(grads).norm().item() if grads else 0.0
+
+            gd_total = sum(grad_diag.values()) + 1e-10
+            print(f"  [GradDiag] step={self.train_step_count}"
+                  f"  ctx_encoder grad norms:"
+                  f"  pol={grad_diag['gd_ctx_pol']:.6f} ({grad_diag['gd_ctx_pol']/gd_total:.0%}),"
+                  f"  val={grad_diag['gd_ctx_val']:.6f} ({grad_diag['gd_ctx_val']/gd_total:.0%}),"
+                  f"  rew={grad_diag['gd_ctx_rew']:.6f} ({grad_diag['gd_ctx_rew']/gd_total:.0%}),"
+                  f"  con={grad_diag['gd_ctx_con']:.6f} ({grad_diag['gd_ctx_con']/gd_total:.0%})")
+
         # 6. Unified backward
         self.optimizer.zero_grad()
         total_loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+
+        # [v4.7] Monitor gradient norms before clipping
+        grad_norm_model = nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+        grad_norm_proj = 0.0
         if self.projector is not None:
-            nn.utils.clip_grad_norm_(self.projector.parameters(), cfg.grad_clip)
+            grad_norm_proj = nn.utils.clip_grad_norm_(self.projector.parameters(), cfg.grad_clip)
         self.optimizer.step()
 
         # 7. [v4.4] EMA update target network + LR schedule step
@@ -293,14 +408,26 @@ class MuZeroTrainer:
 
         self.train_step_count += 1
 
-        return {
+        result = {
             'loss_total': total_loss.item(),
             'l_pol': loss_policy_sum / K,
             'l_val': loss_value_sum / K,
             'l_rew': loss_reward_sum / K,
             'l_con': loss_consist_sum / K,
+            'l_div': loss_div.item(),
             'lr': self.scheduler.get_last_lr()[0],
+            'grad_norm': float(grad_norm_model),
         }
+        result.update(grad_diag)
+
+        # [Monitoring] Per-agent losses (averaged over K steps)
+        for aid in range(num_agents):
+            if (agent_ids == aid).any():
+                result[f'l_pol_a{aid}'] = per_agent_pol[aid] / K
+                result[f'l_val_a{aid}'] = per_agent_val[aid] / K
+                result[f'l_rew_a{aid}'] = per_agent_rew[aid] / K
+
+        return result
 
     def train_step_infer(self, buffer, active_agents=None):
         """
@@ -373,6 +500,12 @@ class MuZeroTrainer:
         loss_reward_sum = 0.0
         loss_consist_sum = 0.0
 
+        # [Monitoring] Per-agent loss accumulators (gradient domination detection)
+        num_agents = cfg.num_agents
+        per_agent_pol = {i: 0.0 for i in range(num_agents)}
+        per_agent_val = {i: 0.0 for i in range(num_agents)}
+        per_agent_rew = {i: 0.0 for i in range(num_agents)}
+
         id_emb = model.get_id_emb(agent_ids)
 
         for k in range(K):
@@ -397,12 +530,26 @@ class MuZeroTrainer:
                 s_target = model.encode(obs_seq[:, k + 1])
                 proj_target = self.projector(s_target)  # (B, proj_dim)
 
-            # [v4.6] Plain CE — CRN-fixed planner provides meaningful π_mve targets
-            loss_policy = -(target_pi * F.log_softmax(p_k, dim=-1)).sum(dim=-1).mean()
+            # [v4.6] Plain CE (per-sample first, then batch average)
+            loss_pol_per = -(target_pi * F.log_softmax(p_k, dim=-1)).sum(dim=-1)  # (B,)
+            loss_policy = loss_pol_per.mean()
 
-            loss_value = F.mse_loss(v_k.squeeze(-1), target_z)
-            loss_reward = F.mse_loss(r_k, target_r)
+            loss_val_per = F.mse_loss(v_k.squeeze(-1), target_z, reduction='none')  # (B,)
+            loss_value = loss_val_per.mean()
+
+            loss_rew_per = F.mse_loss(r_k, target_r, reduction='none').squeeze(-1)  # (B,)
+            loss_reward = loss_rew_per.mean()
+
             loss_consist = negative_cosine_similarity(proj_pred, proj_target)
+
+            # [Monitoring] Per-agent loss accumulation (detached, logging only)
+            with torch.no_grad():
+                for aid in range(num_agents):
+                    mask = (agent_ids == aid)
+                    if mask.any():
+                        per_agent_pol[aid] += loss_pol_per[mask].mean().item()
+                        per_agent_val[aid] += loss_val_per[mask].mean().item()
+                        per_agent_rew[aid] += loss_rew_per[mask].mean().item()
 
             step_loss = (cfg.w_policy * loss_policy +
                          cfg.w_value * loss_value +
@@ -425,12 +572,29 @@ class MuZeroTrainer:
         loss_ctx = context_variance_loss(inferred_rule_emb, target_std=target_std)
         total_loss = total_loss + cfg.w_context * loss_ctx
 
+        # 7.1 [v4.7] Reward diversity regularization
+        loss_div = torch.tensor(0.0, device=self.device)
+        if getattr(cfg, 'w_rew_diversity', 0) > 0:
+            # For Infer model, use the GRU-inferred rule_emb
+            loss_div = reward_diversity_loss(
+                hyper_rew=model.hyper_net.hyper_rew,
+                rule_emb=inferred_rule_emb,
+                id_embedding=model.context_encoder.id_embedding,
+                num_agents=cfg.num_agents,
+                target_cos=getattr(cfg, 'rew_diversity_target_cos', 0.3),
+                skip_pairs=getattr(cfg, 'rew_diversity_skip_pairs', None),
+            )
+            total_loss = total_loss + cfg.w_rew_diversity * loss_div
+
         # 8. Unified backward
         self.optimizer.zero_grad()
         total_loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+
+        # [v4.7] Monitor gradient norms before clipping
+        grad_norm_model = nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+        grad_norm_proj = 0.0
         if self.projector is not None:
-            nn.utils.clip_grad_norm_(self.projector.parameters(), cfg.grad_clip)
+            grad_norm_proj = nn.utils.clip_grad_norm_(self.projector.parameters(), cfg.grad_clip)
         self.optimizer.step()
 
         # 9. [v4.4] EMA update target network + LR schedule step
@@ -439,12 +603,116 @@ class MuZeroTrainer:
 
         self.train_step_count += 1
 
-        return {
+        result = {
             'loss_total': total_loss.item(),
             'l_pol': loss_policy_sum / K,
             'l_val': loss_value_sum / K,
             'l_rew': loss_reward_sum / K,
             'l_con': loss_consist_sum / K,
             'l_ctx': loss_ctx.item(),
+            'l_div': loss_div.item(),
             'lr': self.scheduler.get_last_lr()[0],
+            'grad_norm': float(grad_norm_model),
         }
+
+        # [Monitoring] Per-agent losses (averaged over K steps)
+        for aid in range(num_agents):
+            if (agent_ids == aid).any():
+                result[f'l_pol_a{aid}'] = per_agent_pol[aid] / K
+                result[f'l_val_a{aid}'] = per_agent_val[aid] / K
+                result[f'l_rew_a{aid}'] = per_agent_rew[aid] / K
+
+        return result
+
+    def compute_hypernet_diagnostics(self, rules=None):
+        """
+        Compute hypernetwork output differentiation metrics.
+
+        Measures cosine similarity of generated parameters between agent pairs,
+        indicating whether the hypernetwork produces sufficiently different
+        parameters for different agents (negative transfer detection).
+
+        Also measures ID embedding pairwise cosine similarity.
+
+        Only applicable to HyperMuZero models.
+
+        Args:
+            rules: list of float rule values to test. Default [0.0, 0.5, 1.0].
+                   Ignored for InferHyperMuZeroModel (uses default embedding).
+
+        Returns:
+            dict of metric_name -> float value
+        """
+        model = self.model
+        if not _is_hyper_model(model):
+            return {}
+
+        from models.hyper_muzero_model import OracleHyperMuZeroModel
+        from models.infer_muzero_model import InferHyperMuZeroModel
+
+        is_oracle = isinstance(model, OracleHyperMuZeroModel)
+        is_infer = isinstance(model, InferHyperMuZeroModel)
+
+        if not (is_oracle or is_infer):
+            return {}
+
+        device = self.device
+        num_agents = self.cfg.num_agents
+        results = {}
+
+        if rules is None:
+            rules = [0.0, 0.5, 1.0]
+
+        # For Infer model, rule-based theta comparison uses default embedding
+        rule_list = rules if is_oracle else [0.0]
+
+        for rule_val in rule_list:
+            thetas_pred = {}
+            thetas_rew = {}
+
+            for aid in range(num_agents):
+                id_t = torch.tensor([aid], dtype=torch.long, device=device)
+                with torch.no_grad():
+                    if is_oracle:
+                        rule_t = torch.tensor([rule_val], dtype=torch.float32, device=device)
+                        model.set_context(rule_t, id_t)
+                    else:
+                        model.set_context_default(id_t, batch_size=1)
+
+                    thetas_pred[aid] = model._theta_pred.detach().clone()
+                    thetas_rew[aid] = model._theta_reward.detach().clone()
+
+            rule_tag = f'r{rule_val:.1f}' if is_oracle else 'default'
+            for i in range(num_agents):
+                for j in range(i + 1, num_agents):
+                    cos_p = F.cosine_similarity(
+                        thetas_pred[i], thetas_pred[j], dim=-1
+                    ).item()
+                    cos_r = F.cosine_similarity(
+                        thetas_rew[i], thetas_rew[j], dim=-1
+                    ).item()
+                    results[f'hyper/{rule_tag}/cos_pred_{i}v{j}'] = cos_p
+                    results[f'hyper/{rule_tag}/cos_rew_{i}v{j}'] = cos_r
+
+        # ID embedding pairwise cosine similarity (rule-independent)
+        for i in range(num_agents):
+            for j in range(i + 1, num_agents):
+                id_i = torch.tensor([i], dtype=torch.long, device=device)
+                id_j = torch.tensor([j], dtype=torch.long, device=device)
+                with torch.no_grad():
+                    emb_i = model.get_id_emb(id_i)
+                    emb_j = model.get_id_emb(id_j)
+                    cos_id = F.cosine_similarity(emb_i, emb_j, dim=-1).item()
+                results[f'hyper/cos_id_{i}v{j}'] = cos_id
+
+        # [v4.7] Output scale monitoring (track initialization trap recovery)
+        if hasattr(model, 'hyper_net'):
+            hn = model.hyper_net
+            results['hyper/output_scale_trans'] = hn.hyper_trans.output_scale.item()
+            results['hyper/output_scale_rew'] = hn.hyper_rew.output_scale.item()
+            results['hyper/output_scale_pred'] = hn.hyper_pred.output_scale.item()
+
+        # Clean up: diagnostics modified model's context cache
+        model.clear_context()
+
+        return results
