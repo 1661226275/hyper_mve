@@ -1,0 +1,13 @@
+"""Difficulty presets (Ch3.9): easy / medium / hard.
+
+Each module exposes a single ``build_<name>_config()`` factory returning a
+fully populated ``V4Config``. Importers should normally use
+``V4Config.from_preset(name)`` instead of touching these factories directly.
+"""
+from __future__ import annotations
+
+from .easy import build_easy_config
+from .hard import build_hard_config
+from .medium import build_medium_config
+
+__all__ = ["build_easy_config", "build_medium_config", "build_hard_config"]
