@@ -36,6 +36,19 @@ NU_RANGE: tuple[float, float] = (0.8, 1.0)
 ZETA_RANGE: tuple[float, float] = (10.0, 30.0)
 
 # ---------------------------------------------------------------------------
+# Capability normalization endpoints (v4 Pkg-03 cap_mlp input scaling)
+# ---------------------------------------------------------------------------
+# Defined as tuples to keep CapabilityVector.normalize() vectorizable.
+# Endpoints match ETA_RANGE / PHI_FOV_RANGE / NU_RANGE / ZETA_RANGE so that any
+# future revision of Ch3.6 sampling ranges propagates here automatically.
+CAP_NORM_LO: tuple[float, float, float, float] = (
+    ETA_RANGE[0], PHI_FOV_RANGE[0], NU_RANGE[0], ZETA_RANGE[0],
+)
+CAP_NORM_HI: tuple[float, float, float, float] = (
+    ETA_RANGE[1], PHI_FOV_RANGE[1], NU_RANGE[1], ZETA_RANGE[1],
+)
+
+# ---------------------------------------------------------------------------
 # v4 architecture dimensions (Ch4.2.2 + 4.2.3 + 4.2.4 hard constraints)
 # ---------------------------------------------------------------------------
 # role = Concat[id, type, cap] exactly fills d_role with no padding.

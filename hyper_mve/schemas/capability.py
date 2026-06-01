@@ -14,7 +14,14 @@ from typing import Sequence
 import numpy as np
 import torch
 
-from ._constants import ETA_RANGE, NU_RANGE, PHI_FOV_RANGE, ZETA_RANGE
+from ._constants import (
+    CAP_NORM_HI,
+    CAP_NORM_LO,
+    ETA_RANGE,
+    NU_RANGE,
+    PHI_FOV_RANGE,
+    ZETA_RANGE,
+)
 
 
 @dataclass(frozen=True)
@@ -73,6 +80,33 @@ class CapabilityVector:
     def fov_int(self) -> int:
         """Integer Chebyshev radius used by the env's FOV filter."""
         return int(round(self.phi_fov))
+
+    def normalize(self, dtype=np.float32) -> np.ndarray:
+        """Return (η, φ_fov, ν, ζ) normalized to [0, 1]^4 as a (4,) array.
+
+        **用途 (v4 修订, Pkg-03 集成需要)**:
+        供 Pkg-03 role_encoder cap_mlp 输入归一化用. cap 4 维原始量级悬殊
+        (η ∈ [0.5, 1.5], ν ∈ [0.8, 1.0], ζ ∈ [10, 30]; ζ 与 η 量级差 ~30 倍),
+        直接喂 Linear 会让第一层权重梯度被 ζ 列主导, 早期 loss landscape 偏斜,
+        η/ν 信号在 warmup 期被淹没.
+
+        本方法是**只读 utility**: env / buffer / info 仍存原始 CapabilityVector
+        (保持物理可解释性 — render / log / debug 看到的是 η=1.2 而非 0.7).
+        仅 cap_emb MLP 消费时调用 normalize() 归一.
+
+        归一化范围使用模块级常量 CAP_NORM_LO / CAP_NORM_HI (Ch3.6 硬约束):
+            CAP_NORM_LO = (0.5, 2.0, 0.8, 10.0)
+            CAP_NORM_HI = (1.5, 4.0, 1.0, 30.0)
+
+        Returns:
+            (4,) array ∈ [0, 1]^4, 字段顺序固定 (eta, phi_fov, nu, zeta).
+        """
+        raw = np.array(
+            [self.eta, self.phi_fov, self.nu, self.zeta], dtype=dtype
+        )
+        lo = np.array(CAP_NORM_LO, dtype=dtype)
+        hi = np.array(CAP_NORM_HI, dtype=dtype)
+        return (raw - lo) / (hi - lo)
 
 
 def sample_default(rng: np.random.Generator) -> CapabilityVector:

@@ -69,6 +69,41 @@ class CapabilityVector:
         """env FOV 过滤用整数视野半径 (Chebyshev distance)。"""
         return int(round(self.phi_fov))
 
+    def normalize(self, dtype: np.dtype = np.float32) -> np.ndarray:
+        """返回 (η, φ_fov, ν, ζ) 各维标准化到 [0, 1] 的 (4,) 数组.
+
+        **用途 (v4 修订, Pkg-03 集成需要)**:
+        供 Pkg-03 role_encoder cap_mlp 输入归一化用. cap 4 维原始量级悬殊
+        (η ∈ [0.5, 1.5], ν ∈ [0.8, 1.0], ζ ∈ [10, 30]; ζ 与 η 量级差 ~30 倍),
+        直接喂 Linear 会让第一层权重梯度被 ζ 列主导, 早期 loss landscape 偏斜,
+        η/ν 信号在 warmup 期被淹没.
+
+        本方法是**只读 utility**: env / buffer / info 仍存原始 CapabilityVector
+        (保持物理可解释性 — render / log / debug 看到的是 η=1.2 而非 0.7).
+        仅 cap_emb MLP 消费时调用 normalize() 归一.
+
+        归一化范围使用模块级常量 CAP_NORM_LO / CAP_NORM_HI (Ch3.6 硬约束):
+            CAP_NORM_LO = (0.5, 2.0, 0.8, 10.0)
+            CAP_NORM_HI = (1.5, 4.0, 1.0, 30.0)
+
+        Returns:
+            (4,) array ∈ [0, 1]^4, 字段顺序固定 (eta, phi_fov, nu, zeta).
+        """
+        raw = np.array([self.eta, self.phi_fov, self.nu, self.zeta], dtype=dtype)
+        lo = np.array(CAP_NORM_LO, dtype=dtype)
+        hi = np.array(CAP_NORM_HI, dtype=dtype)
+        return (raw - lo) / (hi - lo)
+
+
+# ====== 模块级常量 (v4 修订, Pkg-03 normalize 用) ======
+
+CAP_NORM_LO: tuple[float, float, float, float] = (0.5, 2.0, 0.8, 10.0)
+"""cap 归一化下界 (η, φ_fov, ν, ζ), 与 Ch3.6 采样范围一致."""
+
+CAP_NORM_HI: tuple[float, float, float, float] = (1.5, 4.0, 1.0, 30.0)
+"""cap 归一化上界 (η, φ_fov, ν, ζ), 与 Ch3.6 采样范围一致."""
+
+
 # 模块级工具
 
 def sample_default(rng: np.random.Generator) -> CapabilityVector:
@@ -107,12 +142,18 @@ caps = sample_n(n=4, rng=rng)
 # 2. 观测块中包含自身 cap (Pkg-02 ObservationLayout)
 own_cap_obs = caps[i].to_array()  # shape (4,)
 
-# 3. model 中 cap_emb 计算 (Pkg-04 role_encoder)
-cap_tensor = to_batch_tensor(caps, device='cuda')  # (N, 4)
-cap_embs = cap_mlp(cap_tensor)  # (N, d_cap_emb=16)
+# 3. model 中 cap_emb 计算 (Pkg-03 role_encoder, v4 修订)
+#    cap_mlp 接收 normalize 后的 [0,1] 范围输入, 避免 ζ (10-30) 量级主导
+cap_normed = np.stack([cap.normalize() for cap in caps])  # (N, 4) ∈ [0,1]
+cap_tensor = torch.from_numpy(cap_normed).to('cuda')      # (N, 4)
+cap_embs = cap_mlp(cap_tensor)                            # (N, d_cap_emb=16)
 
-# 4. env FOV 过滤 (Pkg-02)
-visible_radius = caps[i].fov_int  # int ∈ {2, 3, 4}
+# 4. env FOV 过滤 (Pkg-02) - 用 raw cap (整数视野半径)
+visible_radius = caps[i].fov_int  # int ∈ {2, 3, 4}, 不归一
+
+# 5. buffer 与 info 中仍存 raw CapabilityVector (保持物理可解释)
+info["caps"]  # tuple[CapabilityVector, ...] - 不归一
+record.cap   # (N, 4) raw values - 不归一
 ```
 
 ---
@@ -135,6 +176,23 @@ frozen dataclass 不能直接缓存 fov_int（property 重计算每次开销 ~�
 
 四维范围全部来自 Ch3.6 表格。**禁止**在本 spec 之外重新定义这些范围。如果需要新范围（如 Ablation 5 sensitivity scan），通过 Pkg-02 env 的 `sample_default` override 参数提供 custom rng，而不是修改 schema。
 
+### 3.5 `normalize()` 的不变量（v4 修订）
+
+**职责分离**：
+- env / buffer / info / TimeStepRecord.cap 仍存 **raw** CapabilityVector（保持 Ch3.6 物理可解释性）
+- 仅 cap_emb MLP 输入路径调用 `normalize()` 做归一化
+- `CAP_NORM_LO/HI` 与 Ch3.6 采样范围（U(0.5,1.5) 等）一一对应，未来若 Ch3.6 范围调整，本常量必须同步
+
+**为什么不在采样时归一化**：
+- render / log / debug 时仍需看到 η=1.2 / ζ=20.0 等物理值
+- buffer 序列化的字段语义稳定，不依赖归一化范围
+- 归一化仅是 cap_emb 训练稳定性的工程优化，不应污染 env/buffer 语义
+
+**为什么不靠 MLP 自学量级**：
+- cap_mlp 第一层 `Linear(4, 16)` 仅 64 个权重，ζ 列梯度量级是 η 列 ~30 倍
+- Adam 自适应缩放能部分缓解，但早期 warmup 期 η/ν 信号被淹没（cap_emb 直接喂 hyper_rew/hyper_pred 生成 θ）
+- 零成本归一化（Ch3.6 范围确定性）换早期收敛速度，性价比高
+
 ---
 
 ## 4. Edge Cases
@@ -150,6 +208,10 @@ frozen dataclass 不能直接缓存 fov_int（property 重计算每次开销 ~�
 | `from_array(np.array([0.6, 3.0, 0.9, 20.0, 0.0]))` | AssertionError（shape != (4,)） |
 | pickle 序列化 | dataclass 原生支持 |
 | `__hash__` | frozen dataclass 默认按字段 tuple 哈希 |
+| `cap.normalize()` 边界值 (η=0.5) | 输出第一维 = 0.0 |
+| `cap.normalize()` 边界值 (η=1.5) | 输出第一维 = 1.0 |
+| `cap.normalize()` 中点 (η=1.0) | 输出第一维 = 0.5 |
+| 1000 次随机采样 cap → normalize | 每维 ∈ [0, 1]，均值 ~0.5 |
 
 ---
 
@@ -249,6 +311,94 @@ def test_pickle_roundtrip():
     import pickle
     cap = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=20.0)
     assert pickle.loads(pickle.dumps(cap)) == cap
+
+
+# ====== v4 修订: normalize() utility 单测 ======
+
+def test_capability_normalize_shape_and_dtype():
+    """normalize 输出 (4,) float32."""
+    cap = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=20.0)
+    out = cap.normalize()
+    assert out.shape == (4,)
+    assert out.dtype == np.float32
+
+
+def test_capability_normalize_lower_boundary():
+    """每维下界 → 输出 = 0.0."""
+    cap = CapabilityVector(eta=0.5, phi_fov=2.0, nu=0.8, zeta=10.0)
+    out = cap.normalize()
+    assert np.allclose(out, [0.0, 0.0, 0.0, 0.0])
+
+
+def test_capability_normalize_upper_boundary():
+    """每维上界 → 输出 = 1.0."""
+    cap = CapabilityVector(eta=1.5, phi_fov=4.0, nu=1.0, zeta=30.0)
+    out = cap.normalize()
+    assert np.allclose(out, [1.0, 1.0, 1.0, 1.0])
+
+
+def test_capability_normalize_midpoint():
+    """每维中点 → 输出 = 0.5."""
+    cap = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=20.0)
+    out = cap.normalize()
+    assert np.allclose(out, [0.5, 0.5, 0.5, 0.5])
+
+
+def test_capability_normalize_eta_only():
+    """单维度归一化正确性: eta 在范围内任意值."""
+    # eta = 0.5 + 0.3*(1.5-0.5) = 0.8 → normalized = 0.3
+    cap = CapabilityVector(eta=0.8, phi_fov=3.0, nu=0.9, zeta=20.0)
+    out = cap.normalize()
+    assert np.isclose(out[0], 0.3, atol=1e-5)
+
+
+def test_capability_normalize_zeta_scale_handling():
+    """zeta (10-30) 归一化解决量级问题."""
+    cap_small = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=10.0)
+    cap_large = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=30.0)
+    # raw 量级差 3x; normalize 后差 1.0 (与其他维度同量级)
+    assert np.isclose(cap_small.normalize()[3], 0.0)
+    assert np.isclose(cap_large.normalize()[3], 1.0)
+
+
+def test_capability_normalize_1000_samples_in_unit_range():
+    """1000 次采样 cap, normalize 后每维 ∈ [0, 1]; 均值约 0.5."""
+    rng = np.random.default_rng(seed=42)
+    samples = np.stack([sample_default(rng).normalize() for _ in range(1000)])
+    
+    assert samples.shape == (1000, 4)
+    assert (samples >= 0.0).all()
+    assert (samples <= 1.0).all()
+    
+    means = samples.mean(axis=0)
+    # uniform 分布均值 = 0.5, 1000 samples 容差 ~ 0.05
+    assert np.allclose(means, [0.5, 0.5, 0.5, 0.5], atol=0.05)
+
+
+def test_capability_normalize_does_not_modify_raw_fields():
+    """normalize 是只读 utility, 不改 frozen 字段."""
+    cap = CapabilityVector(eta=1.2, phi_fov=2.5, nu=0.85, zeta=15.0)
+    _ = cap.normalize()
+    # 原字段仍是 raw values
+    assert cap.eta == 1.2
+    assert cap.phi_fov == 2.5
+    assert cap.nu == 0.85
+    assert cap.zeta == 15.0
+
+
+def test_cap_norm_constants_match_ch36():
+    """CAP_NORM_LO/HI 必须与 Ch3.6 采样范围一致 (env/sample_default 同源)."""
+    from hyper_mve.schemas.capability import CAP_NORM_LO, CAP_NORM_HI
+    assert CAP_NORM_LO == (0.5, 2.0, 0.8, 10.0)
+    assert CAP_NORM_HI == (1.5, 4.0, 1.0, 30.0)
+
+
+def test_capability_normalize_custom_dtype():
+    """normalize 接受 dtype 参数."""
+    cap = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=20.0)
+    out_f64 = cap.normalize(dtype=np.float64)
+    assert out_f64.dtype == np.float64
+    assert np.allclose(out_f64, [0.5, 0.5, 0.5, 0.5])
 ```
 
 ### 5.2 集成测试
@@ -272,3 +422,4 @@ def test_pickle_roundtrip():
 - `01-agent-type-schema.md`（同为 schema 模块）
 - `03-observation-layout.md`（cap 进入观测块）
 - Pkg-02 spec 02-resource-dynamics.md（cap 在 env 中的使用）
+- Pkg-03 spec 03-role-encoder.md（cap_mlp 调用 normalize() 输入）
