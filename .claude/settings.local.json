@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(find:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(ls \"C:\\\\Users\\\\zhengwenbo01\\\\.claude\\\\plans\" 2>/dev/null || echo \"Plans dir may not exist\")",
+      "Bash(mkdir -p \"/c/Users/zhengwenbo01/.claude/plans\" && ls \"/c/Users/zhengwenbo01/.claude/plans\")",
+      "Bash(ls \"D:\\\\RL\\\\docs\\\\\" | grep -i \"Chapter4\")"
     ]
   }
 }

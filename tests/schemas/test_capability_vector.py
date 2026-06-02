@@ -123,3 +123,91 @@ def test_field_order_matches_ch_3_6():
     from dataclasses import fields
     names = [f.name for f in fields(CapabilityVector)]
     assert names == ["eta", "phi_fov", "nu", "zeta"]
+
+
+# ====== v4 修订: normalize() utility 单测 (A1, Pkg-01 spec 02 §5.1) ======
+
+def test_capability_normalize_shape_and_dtype():
+    """normalize 输出 (4,) float32."""
+    cap = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=20.0)
+    out = cap.normalize()
+    assert out.shape == (4,)
+    assert out.dtype == np.float32
+
+
+def test_capability_normalize_lower_boundary():
+    """每维下界 → 输出 = 0.0."""
+    cap = CapabilityVector(eta=0.5, phi_fov=2.0, nu=0.8, zeta=10.0)
+    out = cap.normalize()
+    assert np.allclose(out, [0.0, 0.0, 0.0, 0.0])
+
+
+def test_capability_normalize_upper_boundary():
+    """每维上界 → 输出 = 1.0."""
+    cap = CapabilityVector(eta=1.5, phi_fov=4.0, nu=1.0, zeta=30.0)
+    out = cap.normalize()
+    assert np.allclose(out, [1.0, 1.0, 1.0, 1.0])
+
+
+def test_capability_normalize_midpoint():
+    """每维中点 → 输出 = 0.5."""
+    cap = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=20.0)
+    out = cap.normalize()
+    assert np.allclose(out, [0.5, 0.5, 0.5, 0.5])
+
+
+def test_capability_normalize_eta_only():
+    """单维度归一化正确性: eta 在范围内任意值."""
+    # eta = 0.5 + 0.3*(1.5-0.5) = 0.8 → normalized = 0.3
+    cap = CapabilityVector(eta=0.8, phi_fov=3.0, nu=0.9, zeta=20.0)
+    out = cap.normalize()
+    assert np.isclose(out[0], 0.3, atol=1e-5)
+
+
+def test_capability_normalize_zeta_scale_handling():
+    """zeta (10-30) 归一化解决量级问题."""
+    cap_small = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=10.0)
+    cap_large = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=30.0)
+    # raw 量级差 3x; normalize 后差 1.0 (与其他维度同量级)
+    assert np.isclose(cap_small.normalize()[3], 0.0)
+    assert np.isclose(cap_large.normalize()[3], 1.0)
+
+
+def test_capability_normalize_1000_samples_in_unit_range():
+    """1000 次采样 cap, normalize 后每维 ∈ [0, 1]; 均值约 0.5."""
+    rng = np.random.default_rng(seed=42)
+    samples = np.stack([sample_default(rng).normalize() for _ in range(1000)])
+
+    assert samples.shape == (1000, 4)
+    assert (samples >= 0.0).all()
+    assert (samples <= 1.0).all()
+
+    means = samples.mean(axis=0)
+    # uniform 分布均值 = 0.5, 1000 samples 容差 ~ 0.05
+    assert np.allclose(means, [0.5, 0.5, 0.5, 0.5], atol=0.05)
+
+
+def test_capability_normalize_does_not_modify_raw_fields():
+    """normalize 是只读 utility, 不改 frozen 字段."""
+    cap = CapabilityVector(eta=1.2, phi_fov=2.5, nu=0.85, zeta=15.0)
+    _ = cap.normalize()
+    # 原字段仍是 raw values
+    assert cap.eta == 1.2
+    assert cap.phi_fov == 2.5
+    assert cap.nu == 0.85
+    assert cap.zeta == 15.0
+
+
+def test_cap_norm_constants_match_ch36():
+    """CAP_NORM_LO/HI 必须与 Ch3.6 采样范围一致 (env/sample_default 同源)."""
+    from hyper_mve.schemas.capability import CAP_NORM_LO, CAP_NORM_HI
+    assert CAP_NORM_LO == (0.5, 2.0, 0.8, 10.0)
+    assert CAP_NORM_HI == (1.5, 4.0, 1.0, 30.0)
+
+
+def test_capability_normalize_custom_dtype():
+    """normalize 接受 dtype 参数."""
+    cap = CapabilityVector(eta=1.0, phi_fov=3.0, nu=0.9, zeta=20.0)
+    out_f64 = cap.normalize(dtype=np.float64)
+    assert out_f64.dtype == np.float64
+    assert np.allclose(out_f64, [0.5, 0.5, 0.5, 0.5])
