@@ -117,37 +117,35 @@ class Worker:
 
             if use_planner:
                 # MVE Planner -> search policy: (1, N, A)
-                if is_infer:
-                    # Set context once to get rule_emb, then pass to planner
-                    if infer_history is not None:
-                        h_obs, h_act, h_rew = infer_history
-                        id_0 = torch.zeros(1, dtype=torch.long, device=self.device)
-                        model.set_context_from_history(h_obs, h_act, h_rew, id_0)
-                    else:
-                        id_0 = torch.zeros(1, dtype=torch.long, device=self.device)
-                        model.set_context_default(id_0, batch_size=1)
-                    rule_emb_for_plan = model.get_current_rule_emb()  # (1, rule_emb_dim)
-                    pi_mve = sample_mve_plan(model, s, cfg, rule=rule_emb_for_plan)
+                if is_hyper or is_infer:
+                    # v4 migration deferred to Pkg-05 (Q2 折中); see Pkg-04 spec 08 §3.3.
+                    # v4.7 sites: set_context_from_history [orig L125] /
+                    #             set_context_default [orig L128] /
+                    #             sample_mve_plan(..., rule=...) [orig L130/L132].
+                    # v4 worker: BeliefNet.step online -> set_context_objective +
+                    # set_context_subjective; planner called as
+                    # sample_mve_plan(model, s, cfg, c_t=, cap=, belief=).
+                    raise NotImplementedError(
+                        "v4 hyper/infer worker collection deferred to Pkg-05 (spec 08 §3.3)."
+                    )
                 else:
-                    pi_mve = sample_mve_plan(model, s, cfg, rule=rule_t)
+                    # Baseline: planner needs no per-agent context.
+                    pi_mve = sample_mve_plan(model, s, cfg)
                 pi_mve_np = pi_mve.squeeze(0).cpu().numpy()  # (N, A)
             else:
                 # Use raw model policy for each agent
                 pi_mve_np = np.zeros((N, A), dtype=np.float32)
                 for i in range(N):
                     id_i = torch.tensor([i], dtype=torch.long, device=self.device)
-                    if is_infer:
-                        # Infer model: set context from history or default
-                        if infer_history is not None:
-                            h_obs, h_act, h_rew = infer_history
-                            model.set_context_from_history(h_obs, h_act, h_rew, id_i)
-                        else:
-                            model.set_context_default(id_i, batch_size=1)
-                        logits_i, _ = model.predict(s)
-                    elif is_hyper:
-                        # Oracle model: set context from rule scalar
-                        model.set_context(rule_t, id_i)
-                        logits_i, _ = model.predict(s)
+                    if is_hyper or is_infer:
+                        # v4 migration deferred to Pkg-05 (Q2 折中); see Pkg-04 spec 08 §3.3.
+                        # v4.7 sites: set_context_from_history [orig L143] /
+                        #             set_context_default [orig L145] /
+                        #             set_context(rule_t, id_i) [orig L149].
+                        # v4: set_context_objective + set_context_subjective per agent.
+                        raise NotImplementedError(
+                            "v4 hyper/infer worker raw-policy deferred to Pkg-05 (spec 08 §3.3)."
+                        )
                     else:
                         # Baseline model: pass id_emb explicitly
                         id_emb_i = model.get_id_emb(id_i)

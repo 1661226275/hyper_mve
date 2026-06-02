@@ -22,8 +22,16 @@ v4.6 key fix — Common Random Numbers (CRN):
         Before (v4.5): candidate outer, sample inner → (B, A, spa)
         After  (v4.6): scenario outer, candidate inner → (B, spa, A)
 
-Supports BaselineModel, OracleHyperMuZeroModel, InferHyperMuZeroModel via duck-typing.
-For HyperMuZero: set_context() is called before each agent's perspective.
+Supports BaselineModel and v4 HyperMuZeroModel via duck-typing.
+For v4 HyperMuZeroModel (Pkg-04 spec 08 §3.1 migration):
+    - set_context_objective(c_t) is called once per batch-size context (objective theta_state)
+    - set_context_subjective(agent_id, cap_i, belief_i) is called before each agent's
+      perspective (subjective theta_rew/theta_pred).
+
+Caller-supplied per-agent context (v4, supplied by Pkg-05 worker/trainer):
+    c_t:    (B,) shared context scalar
+    cap:    (B, N, 4) raw CapabilityVector per agent
+    belief: tuple (c_hat (B, N), z_hat (B, N, N-1, 2)) from BeliefNet
 """
 import math
 import torch
@@ -39,20 +47,41 @@ _DEBUG_INTERVAL = 8000    # print once per 200 calls
 
 
 def _is_hyper_model(model):
-    """Check if model is a HyperMuZero model (has set_context method)."""
-    return hasattr(model, 'set_context')
+    """Check if model is a v4 HyperMuZero model (has set_context_objective method)."""
+    return hasattr(model, 'set_context_objective')
 
 
-def _expand_rule(rule, repeats):
-    """Expand rule tensor for parallel sampling, handling both scalar and embedding forms."""
-    if rule is None:
+def _expand_dim0(t, repeats):
+    """Expand a tensor (or None) along dim 0 for parallel sampling (CRN layout)."""
+    if t is None:
         return None
-    # Works for both (B,) scalar and (B, rule_emb_dim) embedding
-    return rule.repeat_interleave(repeats, dim=0)
+    return t.repeat_interleave(repeats, dim=0)
 
 
-def _sample_policy_action(model, curr_s, agent_idx, batch_size, device, is_hyper, rule_exp):
+def _expand_belief(belief, repeats):
+    """Expand a belief tuple (c_hat, z_hat) along dim 0, or return None."""
+    if belief is None:
+        return None
+    c_hat, z_hat = belief
+    return (_expand_dim0(c_hat, repeats), _expand_dim0(z_hat, repeats))
+
+
+def _set_subjective(model, agent_idx, cap_b, belief_b):
+    """v4: set per-agent subjective context (assumes objective already set)."""
+    c_hat_b, z_hat_b = belief_b
+    model.set_context_subjective(
+        agent_idx,
+        cap_b[:, agent_idx],                       # (batch, 4)
+        (c_hat_b[:, agent_idx], z_hat_b[:, agent_idx]),  # (batch,), (batch, N-1, 2)
+    )
+
+
+def _sample_policy_action(model, curr_s, agent_idx, batch_size, device, is_hyper,
+                          cap_b=None, belief_b=None):
     """Sample action for agent_idx from model policy.
+
+    For v4 HyperMuZeroModel the objective context (theta_state) must already be set
+    for this batch size; this function only sets the per-agent subjective context.
 
     Args:
         model:      model instance
@@ -60,24 +89,25 @@ def _sample_policy_action(model, curr_s, agent_idx, batch_size, device, is_hyper
         agent_idx:  int, which agent
         batch_size: int, leading dimension of curr_s
         device:     torch device
-        is_hyper:   bool, whether model uses set_context
-        rule_exp:   expanded rule tensor (batch_size, ...) or None
+        is_hyper:   bool, whether model uses v4 set_context_* API
+        cap_b:      (batch_size, N, 4) raw caps, or None (Baseline)
+        belief_b:   tuple (c_hat (batch_size, N), z_hat (batch_size, N, N-1, 2)), or None
 
     Returns:
         a_i: (batch_size,) sampled actions
     """
-    id_i = torch.full((batch_size,), agent_idx, dtype=torch.long, device=device)
     if is_hyper:
-        model.set_context(rule_exp, id_i)
+        _set_subjective(model, agent_idx, cap_b, belief_b)
         logits_i, _ = model.predict(curr_s)
     else:
+        id_i = torch.full((batch_size,), agent_idx, dtype=torch.long, device=device)
         id_emb_i = model.get_id_emb(id_i)
         logits_i, _ = model.predict(curr_s, id_emb_i)
     return Categorical(logits=logits_i).sample()
 
 
 @torch.no_grad()
-def sample_mve_plan(model, root_s, cfg, rule=None):
+def sample_mve_plan(model, root_s, cfg, c_t=None, cap=None, belief=None):
     """
     Per-agent coordinate descent MVE planning with Common Random Numbers (CRN).
 
@@ -88,10 +118,12 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
         Phase 4: Aggregate: (B, spa, A) → mean over spa → softmax
 
     Args:
-        model:   BaselineModel or OracleHyperMuZeroModel or InferHyperMuZeroModel
+        model:   BaselineModel or v4 HyperMuZeroModel
         root_s:  (B, latent_dim) - current latent state
         cfg:     config with mve_samples, mve_depth, num_agents, num_actions, gamma
-        rule:    (B,) float or (B, rule_emb_dim) — required for HyperMuZero, ignored for Baseline
+        c_t:     (B,) shared context scalar — required for HyperMuZero, ignored for Baseline
+        cap:     (B, N, 4) raw CapabilityVector per agent — required for HyperMuZero
+        belief:  tuple (c_hat (B, N), z_hat (B, N, N-1, 2)) — required for HyperMuZero
 
     Returns:
         pi_mve: (B, num_agents, num_actions) - search policy distribution per agent
@@ -130,8 +162,15 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
         # All scenarios start from the same root_s (per batch element),
         # so policy distributions are identical — pre-sampling is valid.
         s_scenarios = root_s.repeat_interleave(spa, dim=0)  # (B*spa, latent)
-        rule_scenarios = _expand_rule(rule, spa) if is_hyper else None
         B_spa = B * spa
+        if is_hyper:
+            c_t_scenarios = _expand_dim0(c_t, spa)          # (B*spa,)
+            cap_scenarios = _expand_dim0(cap, spa)          # (B*spa, N, 4)
+            belief_scenarios = _expand_belief(belief, spa)  # (c_hat, z_hat) at B*spa
+            # Objective theta_state (shared across agents) for the B_spa batch.
+            model.set_context_objective(c_t_scenarios)
+        else:
+            c_t_scenarios = cap_scenarios = belief_scenarios = None
 
         step0_actions_per_scenario = {}  # agent_i -> (B*spa,) actions
         for i in range(N):
@@ -144,7 +183,8 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
             else:
                 # Not-yet-optimised: sample from policy network, once per scenario
                 step0_actions_per_scenario[i] = _sample_policy_action(
-                    model, s_scenarios, i, B_spa, device, is_hyper, rule_scenarios
+                    model, s_scenarios, i, B_spa, device, is_hyper,
+                    cap_scenarios, belief_scenarios,
                 )
 
         # ── Phase 2: Expand to (B*M,) = (B*spa*A,) ────────────────────
@@ -155,8 +195,15 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
         #          b1_sc0_a0, ...]
         # scenario outer, candidate inner
         s_exp = s_scenarios.repeat_interleave(A, dim=0)  # (B*M, latent)
-        rule_exp = _expand_rule(rule_scenarios, A) if is_hyper else None
         BM = B * M
+        if is_hyper:
+            c_t_exp = _expand_dim0(c_t_scenarios, A)        # (B*M,)
+            cap_exp = _expand_dim0(cap_scenarios, A)        # (B*M, N, 4)
+            belief_exp = _expand_belief(belief_scenarios, A)  # (c_hat, z_hat) at B*M
+            # Objective theta_state for the B*M rollout batch (reused across K steps & agents).
+            model.set_context_objective(c_t_exp)
+        else:
+            c_t_exp = cap_exp = belief_exp = None
 
         cum_return_j = torch.zeros(BM, device=device)
         discount = 1.0
@@ -198,7 +245,7 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
                 else:
                     # Step > 0: independent sampling (states have diverged)
                     a_i = _sample_policy_action(
-                        model, curr_s, i, BM, device, is_hyper, rule_exp
+                        model, curr_s, i, BM, device, is_hyper, cap_exp, belief_exp
                     )
                 all_actions.append(a_i)
 
@@ -206,19 +253,15 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
             joint_actions = torch.stack(all_actions, dim=-1)        # (B*M, N)
             action_onehot = actions_to_one_hot(joint_actions, A)    # (B*M, N*A)
 
-            # ── Objective state transition ──────────────────────────
-            if is_hyper:
-                # θ_state depends only on rule (objective), any agent_id works
-                id_0 = torch.zeros(BM, dtype=torch.long, device=device)
-                model.set_context(rule_exp, id_0)
+            # ── Objective state transition (theta_state set once at Phase 2) ──
             s_next = model.transition(curr_s, action_onehot)
 
             # ── Subjective reward for agent j only ──────────────────
-            id_j = torch.full((BM,), j, dtype=torch.long, device=device)
             if is_hyper:
-                model.set_context(rule_exp, id_j)
+                _set_subjective(model, j, cap_exp, belief_exp)
                 r_j_scaled = model.predict_reward(curr_s, action_onehot)
             else:
+                id_j = torch.full((BM,), j, dtype=torch.long, device=device)
                 id_emb_j = model.get_id_emb(id_j)
                 r_j_scaled = model.predict_reward(curr_s, action_onehot, id_emb_j)
 
@@ -253,11 +296,11 @@ def sample_mve_plan(model, root_s, cfg, rule=None):
             discount *= gamma
 
         # ── Phase 3b: Terminal value for agent j ───────────────────
-        id_j = torch.full((BM,), j, dtype=torch.long, device=device)
         if is_hyper:
-            model.set_context(rule_exp, id_j)
+            _set_subjective(model, j, cap_exp, belief_exp)
             _, v_j_scaled = model.predict(curr_s)
         else:
+            id_j = torch.full((BM,), j, dtype=torch.long, device=device)
             id_emb_j = model.get_id_emb(id_j)
             _, v_j_scaled = model.predict(curr_s, id_emb_j)
 

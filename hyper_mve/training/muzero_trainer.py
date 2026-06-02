@@ -236,10 +236,14 @@ class MuZeroTrainer:
         # For HyperMuZero: set context once (Rule + sampled agent_id)
         # This generates θ_state, θ_reward, θ_pred for the entire unroll
         if is_hyper:
-            model.set_context(rules, agent_ids)
-            # [v4.4] Set target model context for bootstrap
-            with torch.no_grad():
-                self.target_model.set_context(rules, agent_ids)
+            # v4 migration deferred to Pkg-05 (Q2 折中); see Pkg-04 spec 08 §3.2.
+            # v4.7 sites: model.set_context(rules, agent_ids) [orig L239] +
+            #             self.target_model.set_context(rules, agent_ids) [orig L242].
+            # v4 replaces with set_context_objective(c_t) once + per-agent
+            # set_context_subjective(k, cap, belief); same for target_model.
+            raise NotImplementedError(
+                "v4 trainer set_context migration deferred to Pkg-05 (spec 08 §3.2)."
+            )
 
         # Extract per-agent rewards for the sampled perspective
         # rewards_seq: (B, K, N) -> rewards_i: (B, K)
@@ -471,17 +475,14 @@ class MuZeroTrainer:
 
         # 3. Infer rule_emb from history via GRU, then set context
         # This call is differentiable — gradients flow back through GRU
-        model.set_context_from_history(
-            hist_obs, hist_actions, hist_rewards, agent_ids, hist_mask
+        # v4 migration deferred to Pkg-05 (Q2 折中); see Pkg-04 spec 08 §3.2.
+        # v4.7 sites: model.set_context_from_history(...) [orig L474] +
+        #             self.target_model.set_context(inferred_rule_emb, agent_ids) [orig L484].
+        # v4 deprecates Infer-mode GRU: BeliefNet (Pkg-03) supplies belief; trainer uses
+        # set_context_objective + per-agent set_context_subjective (online belief).
+        raise NotImplementedError(
+            "v4 Infer-mode trainer migration deferred to Pkg-05 (spec 08 §3.2)."
         )
-
-        # Get the inferred rule_emb for regularization
-        inferred_rule_emb = model.get_current_rule_emb()  # (B, rule_emb_dim)
-
-        # [v4.4] Set target model context: online GRU's rule_emb + target hypernetwork
-        # GRU inference should update fast (online), but V prediction should be stable (target)
-        with torch.no_grad():
-            self.target_model.set_context(inferred_rule_emb.detach(), agent_ids)
 
         # Extract per-agent rewards
         rewards_i = rewards_seq[torch.arange(B, device=self.device).unsqueeze(1),
@@ -673,14 +674,15 @@ class MuZeroTrainer:
             for aid in range(num_agents):
                 id_t = torch.tensor([aid], dtype=torch.long, device=device)
                 with torch.no_grad():
-                    if is_oracle:
-                        rule_t = torch.tensor([rule_val], dtype=torch.float32, device=device)
-                        model.set_context(rule_t, id_t)
-                    else:
-                        model.set_context_default(id_t, batch_size=1)
-
-                    thetas_pred[aid] = model._theta_pred.detach().clone()
-                    thetas_rew[aid] = model._theta_reward.detach().clone()
+                    # v4 migration deferred to Pkg-05 (Q2 折中); see Pkg-04 spec 08 §3.2.
+                    # v4.7 sites: model.set_context(rule_t, id_t) [orig L678] +
+                    #             model.set_context_default(id_t, batch_size=1) [orig L680].
+                    # v4 theta diagnostics: set_context_objective + set_context_subjective,
+                    # read model._theta_rew (renamed from _theta_reward) / _theta_pred.
+                    raise NotImplementedError(
+                        "v4 theta-diagnostic set_context migration deferred to Pkg-05 "
+                        "(spec 08 §3.2)."
+                    )
 
             rule_tag = f'r{rule_val:.1f}' if is_oracle else 'default'
             for i in range(num_agents):

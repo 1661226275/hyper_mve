@@ -58,6 +58,11 @@ class TrainConfig:
     # Belief gradient gating (Ch4.6 defence line)
     belief_grad_gating_steps: int = 5000
 
+    # hyper_pred context detach (Pkg-04 spec 01 §3.4, D5): when True, the value
+    # path (hyper_pred) receives ctx_aug.detach() so value loss cannot distort
+    # the context encoders; reward loss (hyper_rew) still trains them.
+    detach_pred_context: bool = True
+
     # EMA target net (v4.4)
     ema_tau: float = 0.99
 

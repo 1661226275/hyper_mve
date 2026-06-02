@@ -1,46 +1,61 @@
-"""
-Representation Network
+"""Representation Network (Pkg-04, v4 cfg-driven).
 
-Encodes joint observations (concatenation of all agents' obs) into a latent state.
-Used as the first stage in all three experiments.
+Encodes the joint observation (all agents' obs) into an objective latent state.
+RepNet is objective: shared across all agents, independent of any set_context.
 
-Input:  o_joint (batch_size, joint_obs_dim)  — concatenation of all agents' obs
-Output: s       (batch_size, latent_dim)     — objective latent state
+v4 change (relative to v4.7):
+    v4.7: RepresentationNet(joint_obs_dim, hidden_dim=256, latent_dim=64)
+    v4:   RepresentationNet(cfg) -- derives obs_dim from ObservationLayout.total_dim
+          and accepts obs of shape (B, N, obs_dim), flattening to (B, N*obs_dim).
+
+Input:  obs (B, N, obs_dim)  OR  (B, N*obs_dim)
+Output: s   (B, latent_dim)
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils.utils import orthogonal_init
+from hyper_mve.schemas import ObservationLayout
+from hyper_mve.utils.utils import orthogonal_init
 
 
 class RepresentationNet(nn.Module):
-    """
-    Encode joint observation into latent state.
+    """Encode joint observation into objective latent state (Ch4.4).
 
-    Input:  o_joint (batch_size, joint_obs_dim)
-    Output: s       (batch_size, latent_dim)
+    obs_dim is derived from ``ObservationLayout.total_dim(N, K)`` (Pkg-02); the
+    joint input dim is ``N * obs_dim`` (all agents concatenated).
     """
 
-    def __init__(self, joint_obs_dim, hidden_dim=256, latent_dim=64):
-        super(RepresentationNet, self).__init__()
-        self.fc1 = nn.Linear(joint_obs_dim, hidden_dim)
+    def __init__(self, cfg, hidden_dim: int = 256):
+        super().__init__()
+        self.cfg = cfg
+        self.N = cfg.env.N
+        # Per-agent observation dim (Pkg-02 ObservationLayout).
+        self.obs_dim = ObservationLayout.total_dim(cfg.env.N, cfg.env.K)
+        self.joint_obs_dim = self.N * self.obs_dim
+        self.latent_dim = cfg.model.latent_dim
+        self.hidden_dim = hidden_dim
+
+        self.fc1 = nn.Linear(self.joint_obs_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, latent_dim)
-        self.ln = nn.LayerNorm(latent_dim)
+        self.fc3 = nn.Linear(hidden_dim, self.latent_dim)
+        self.ln = nn.LayerNorm(self.latent_dim)
 
         orthogonal_init(self.fc1)
         orthogonal_init(self.fc2)
         orthogonal_init(self.fc3)
 
-    def forward(self, joint_obs):
+    def forward(self, obs):
         """
         Args:
-            joint_obs: (batch_size, joint_obs_dim)
+            obs: (B, N, obs_dim) per-agent stacked, or (B, N*obs_dim) pre-flattened.
         Returns:
-            latent_state: (batch_size, latent_dim)
+            latent_state: (B, latent_dim)
         """
-        x = F.relu(self.fc1(joint_obs))
+        if obs.dim() == 3:
+            # (B, N, obs_dim) -> (B, N*obs_dim)
+            obs = obs.reshape(obs.shape[0], -1)
+        x = F.relu(self.fc1(obs))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         x = self.ln(x)
@@ -48,20 +63,16 @@ class RepresentationNet(nn.Module):
 
 
 class Projector(nn.Module):
-    """
-    Non-linear projection head for Consistency Loss (v4.0).
+    """Non-linear projection head for BYOL consistency loss (v4.0 / Ch5.8.2).
 
-    Maps latent states to a projection space where Cosine Similarity
-    is used instead of MSE. Shared by both predicted (s_pred) and
-    target (s_target) sides (target side is detached).
+    Maps latent states to a projection space where cosine similarity is used
+    instead of MSE. Shared by predicted and (detached) target sides.
 
-    Used by all three experiments (Exp1/2/3) for fair comparison.
-
-    Architecture: 2-layer MLP (latent_dim -> proj_dim -> proj_dim)
+    Architecture: 2-layer MLP (latent_dim -> proj_dim -> proj_dim).
     """
 
     def __init__(self, latent_dim, proj_dim=64):
-        super(Projector, self).__init__()
+        super().__init__()
         self.fc1 = nn.Linear(latent_dim, proj_dim)
         self.fc2 = nn.Linear(proj_dim, proj_dim)
 
@@ -71,28 +82,24 @@ class Projector(nn.Module):
     def forward(self, x):
         """
         Args:
-            x: (batch_size, latent_dim)
+            x: (B, latent_dim)
         Returns:
-            proj: (batch_size, proj_dim)
+            proj: (B, proj_dim)
         """
         x = F.relu(self.fc1(x))
         return self.fc2(x)
 
 
 def cosine_similarity_loss(p, z):
-    """
-    Cosine similarity loss for consistency (v4.0).
+    """Cosine similarity loss for consistency (v4.0).
 
-    Uses (1 - cos) formulation:
-      - Range [0, 2]. Perfect alignment = 0, orthogonal = 1, opposite = 2.
-      - Always non-negative, visually consistent with other losses.
-      - Mathematically equivalent gradient to -cos (differs only by constant).
+    Uses (1 - cos) formulation, range [0, 2]; lower = more similar.
 
     Args:
         p: (B, proj_dim) predicted projection (receives gradient)
         z: (B, proj_dim) target projection (should be detached)
     Returns:
-        loss: scalar, in range [0, 2]. Lower = more similar.
+        loss: scalar in [0, 2].
     """
     p = F.normalize(p, p=2, dim=-1)
     z = F.normalize(z, p=2, dim=-1)

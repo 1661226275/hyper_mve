@@ -26,6 +26,22 @@ from hyper_mve.models.belief_losses import (
 from hyper_mve.models.belief_encoder import BeliefEncoder
 from hyper_mve.models.tri_context_encoder import TriContextEncoder
 
+# Pkg-04: DualHyperNetwork v2 + HyperMuZeroModel + functional nets + RepNet + grad gating
+from hyper_mve.models.hyper_network import DualHyperNetwork, HyperNetMLP, reward_diversity_loss
+from hyper_mve.models.functional_nets import (
+    FunctionalStateTransNet,
+    FunctionalRewardHead,
+    FunctionalPredictionNet,
+)
+from hyper_mve.models.representation_net import (
+    RepresentationNet,
+    Projector,
+    cosine_similarity_loss,
+    negative_cosine_similarity,
+)
+from hyper_mve.models.grad_gating import BeliefGradGating
+from hyper_mve.models.hyper_muzero_model import HyperMuZeroModel
+
 __all__ = [
     # sub-encoders
     "CEncoder",
@@ -47,4 +63,20 @@ __all__ = [
     "l_div",
     "belief_loss",
     "build_oracle_z_seq",
+    # Pkg-04: hypernet v2
+    "DualHyperNetwork",
+    "HyperNetMLP",
+    "reward_diversity_loss",
+    # Pkg-04: functional nets
+    "FunctionalStateTransNet",
+    "FunctionalRewardHead",
+    "FunctionalPredictionNet",
+    # Pkg-04: representation net
+    "RepresentationNet",
+    "Projector",
+    "cosine_similarity_loss",
+    "negative_cosine_similarity",
+    # Pkg-04: grad gating + model
+    "BeliefGradGating",
+    "HyperMuZeroModel",
 ]

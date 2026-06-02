@@ -1,31 +1,39 @@
-"""
-DualHyperNetwork for Hyper-MuZero.
+"""DualHyperNetwork v2 for Hyper-MuZero (Pkg-04 spec 01, Ch4.3).
 
-Three-way hypernetwork that generates weights for:
-    1. hyper_trans(rule_emb)           -> θ_state   (objective, Rule only)
-    2. hyper_rew(rule_emb ⊕ id_emb)   -> θ_reward  (subjective, Rule + ID)
-    3. hyper_pred(rule_emb ⊕ id_emb)  -> θ_pred    (subjective, Rule + ID)
+v4 关键改动 (相对 v4.7 双路 (rule_emb, id_emb) + 单 forward):
+    v4.7: __init__(rule_emb_dim, id_emb_dim, ...) + forward(rule_emb, id_emb)
+    v4:   __init__(c_ctx_dim=16, ctx_aug_dim=80, ...) +
+          forward_trans(c_ctx) -> theta_state       (客观通路, C1 物理转移上下文不变)
+          forward_subjective(ctx_aug) -> (theta_rew, theta_pred)  (主观通路 per-agent)
 
-Key engineering details:
-    - Output layer uses small_init (std=0.01) to prevent initial weight explosion
-    - LayerNorm between hidden layers for stability
-    - Gradient clipping handled by the trainer
+保留 HyperNetMLP 结构不变 (L2 norm + learnable output_scale + small_init 稳定性技巧).
+
+三个 HyperNetMLP 内部独立 (不共用 trunk):
+    - hyper_trans: c_ctx (16) -> theta_state          <- 客观通路 (C1)
+    - hyper_rew:   ctx_aug (80) -> theta_rew^i        <- 主观通路 per-agent (3 层加深)
+    - hyper_pred:  ctx_aug (80) -> theta_pred^i       <- 主观通路 per-agent (可选 detach context, D5)
+
+output_scale 三初值 (v4.7 经验保留, C8):
+    - trans_output_scale_init = 0.01
+    - rew_output_scale_init   = 0.1   <- v4.7 关键 (避免 init trap)
+    - pred_output_scale_init  = 0.01
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils.utils import orthogonal_init, small_init
+from hyper_mve.utils.utils import orthogonal_init, small_init
 
 
 class HyperNetMLP(nn.Module):
-    """
-    MLP that generates flat parameter vectors from context embeddings.
+    """从 context embedding 生成 flat parameter vector (v4.7 保留, 结构不变).
 
     Architecture: context -> FC1 -> LN -> ReLU -> FC2 -> LN -> ReLU -> FC_out -> flat_params
 
-    Uses LayerNorm between layers and small initialization on the output layer
-    to prevent the generated weights from being too large initially.
+    稳定性技巧 (spec 03 详述):
+        - small_init(std=0.01) 在 output_layer 防初期权重爆炸
+        - 可选 L2 normalize + learnable output_scale (norm_output=True): 固定方向分布,
+          幅值 = output_scale, 解耦方向与幅值.
     """
 
     def __init__(self, input_dim, output_dim, hidden_dims=None, norm_output=True,
@@ -34,14 +42,14 @@ class HyperNetMLP(nn.Module):
         Args:
             input_dim:         dimension of input context
             output_dim:        total number of parameters to generate
-            hidden_dims:       list of hidden layer dimensions (default: [256, 256])
+            hidden_dims:       list/tuple of hidden layer dimensions (default: (256, 256))
             norm_output:       whether to apply L2 normalization to output (v4.0 stability trick)
             output_scale_init: [v4.7] initial value for learnable output_scale
                                (default 0.01; hyper_rew uses 0.1 to avoid initialization trap)
         """
         super().__init__()
         if hidden_dims is None:
-            hidden_dims = [256, 256]
+            hidden_dims = (256, 256)
 
         layers = []
         prev_dim = input_dim
@@ -67,9 +75,9 @@ class HyperNetMLP(nn.Module):
     def forward(self, context):
         """
         Args:
-            context: (B, input_dim) — context embedding
+            context: (B, input_dim) -- context embedding
         Returns:
-            flat_params: (B, output_dim) — generated parameters
+            flat_params: (B, output_dim) -- generated parameters
         """
         h = self.trunk(context)
         raw = self.output_layer(h)
@@ -78,129 +86,155 @@ class HyperNetMLP(nn.Module):
         if self.norm_output:
             norms = torch.linalg.norm(raw, dim=-1, keepdim=True)
             raw = raw / (norms + 1e-8)
-        
+
         return raw * self.output_scale
 
 
 class DualHyperNetwork(nn.Module):
-    """
-    Three-way hypernetwork for Hyper-MuZero.
+    """v4 三路输入版 DualHyperNetwork (Ch4.3).
 
-    Generates weights for three functional networks:
-        - θ_state  = hyper_trans(rule_emb)           — objective physics
-        - θ_reward = hyper_rew(rule_emb ⊕ id_emb)   — subjective reward
-        - θ_pred   = hyper_pred(rule_emb ⊕ id_emb)  — subjective policy+value
-
-    Design principle: "Perspective as Context"
-        - Rule determines objective physics → hyper_trans only sees rule_emb
-        - Rule + Agent ID determines subjective evaluation → hyper_rew/pred see both
+    v4 关键改动 (相对 v4.7):
+        v4.7: __init__(rule_emb_dim, id_emb_dim, ...) + forward(rule_emb, id_emb)
+        v4:   __init__(c_ctx_dim=16, ctx_aug_dim=80, ...) +
+              forward_trans(c_ctx) -> theta_state +
+              forward_subjective(ctx_aug) -> (theta_rew, theta_pred)
     """
 
-    def __init__(self, rule_emb_dim, id_emb_dim, trans_param_count, rew_param_count,
-                 pred_param_count, hidden_dims=None, rew_hidden_dims=None, norm_output=True,
-                 rew_output_scale_init=0.01):
+    def __init__(
+        self,
+        c_ctx_dim,
+        ctx_aug_dim,
+        trans_param_count,
+        rew_param_count,
+        pred_param_count,
+        hidden_dims=(256, 256),
+        rew_hidden_dims=(256, 256, 256),
+        norm_output=True,
+        trans_output_scale_init=0.01,
+        rew_output_scale_init=0.1,        # v4.7 关键
+        pred_output_scale_init=0.01,
+        detach_pred_context=True,         # D5: hyper_pred 输入 detach
+    ):
         """
         Args:
-            rule_emb_dim:          dimension of rule embedding
-            id_emb_dim:            dimension of agent id embedding
-            trans_param_count:     total params for FunctionalStateTransNet
-            rew_param_count:       total params for FunctionalRewardHead
-            pred_param_count:      total params for FunctionalPredictionNet
-            hidden_dims:           hidden layer dims for HyperNet MLPs (default for all branches)
-            rew_hidden_dims:       [v4.7] optional separate hidden dims for hyper_rew (deeper for better differentiation)
-            norm_output:           enable L2 norm + scale (default: True)
-            rew_output_scale_init: [v4.7] initial output_scale for hyper_rew (default 0.01;
-                                   0.1 recommended to avoid initialization trap where tiny
-                                   AdaLN modulation prevents reward differentiation)
+            c_ctx_dim:                 c_ctx 维度 (hyper_trans 输入, 默认 16)
+            ctx_aug_dim:               ctx_aug 维度 (hyper_rew/pred 输入, 默认 80)
+            trans_param_count:         FunctionalStateTransNet 参数总数
+            rew_param_count:           FunctionalRewardHead 参数总数
+            pred_param_count:          FunctionalPredictionNet 参数总数
+            hidden_dims:               hyper_trans / hyper_pred 隐层
+            rew_hidden_dims:           hyper_rew 隐层 (更深 3 层 for type 分化); None 退化为 hidden_dims
+            norm_output:               L2 norm + scale (默认 True)
+            trans/rew/pred_output_scale_init: output_scale 三初值 (C8)
+            detach_pred_context:       D5; True 时 hyper_pred 接收 ctx_aug.detach()
         """
         super().__init__()
 
-        aug_dim = rule_emb_dim + id_emb_dim
+        self.c_ctx_dim = c_ctx_dim
+        self.ctx_aug_dim = ctx_aug_dim
+        self.detach_pred_context = detach_pred_context
+
         rew_hdims = rew_hidden_dims if rew_hidden_dims is not None else hidden_dims
 
-        # Objective: Rule only
-        self.hyper_trans = HyperNetMLP(rule_emb_dim, trans_param_count, hidden_dims, norm_output=norm_output)
-        # Subjective: Rule + Agent ID
-        self.hyper_rew = HyperNetMLP(aug_dim, rew_param_count, rew_hdims, norm_output=norm_output,
-                                     output_scale_init=rew_output_scale_init)
-        self.hyper_pred = HyperNetMLP(aug_dim, pred_param_count, hidden_dims, norm_output=norm_output)
+        # C1: hyper_trans 仅接 c_ctx_dim (16)
+        self.hyper_trans = HyperNetMLP(
+            input_dim=c_ctx_dim,
+            output_dim=trans_param_count,
+            hidden_dims=hidden_dims,
+            norm_output=norm_output,
+            output_scale_init=trans_output_scale_init,
+        )
+
+        # C2: hyper_rew 接完整 ctx_aug_dim (80), 更深 3 层
+        self.hyper_rew = HyperNetMLP(
+            input_dim=ctx_aug_dim,
+            output_dim=rew_param_count,
+            hidden_dims=rew_hdims,
+            norm_output=norm_output,
+            output_scale_init=rew_output_scale_init,   # 0.1 关键
+        )
+
+        # C2: hyper_pred 同接 ctx_aug_dim (80)
+        self.hyper_pred = HyperNetMLP(
+            input_dim=ctx_aug_dim,
+            output_dim=pred_param_count,
+            hidden_dims=hidden_dims,
+            norm_output=norm_output,
+            output_scale_init=pred_output_scale_init,
+        )
 
         self.trans_param_count = trans_param_count
         self.rew_param_count = rew_param_count
         self.pred_param_count = pred_param_count
 
-    def forward(self, rule_emb, id_emb):
-        """
-        Generate all three sets of parameters.
+    def forward_trans(self, c_ctx):
+        """C1: 仅接 c_ctx (B, 16) 生成 theta_state.
+
+        改变 role / belief 输入时, 本方法输出不变 (物理转移上下文不变性).
 
         Args:
-            rule_emb: (B, rule_emb_dim)
-            id_emb:   (B, id_emb_dim)
+            c_ctx: (B, c_ctx_dim=16) float32
         Returns:
-            θ_state:  (B, trans_param_count)
-            θ_reward: (B, rew_param_count)
-            θ_pred:   (B, pred_param_count)
+            theta_state: (B, trans_param_count) float32
         """
-        aug_context = torch.cat([rule_emb, id_emb], dim=-1)
+        assert c_ctx.shape[-1] == self.c_ctx_dim, (
+            f"c_ctx last dim {c_ctx.shape[-1]} != c_ctx_dim {self.c_ctx_dim}"
+        )
+        return self.hyper_trans(c_ctx)
 
-        theta_state = self.hyper_trans(rule_emb)
-        theta_reward = self.hyper_rew(aug_context)
-        theta_pred = self.hyper_pred(aug_context)
+    def forward_subjective(self, ctx_aug):
+        """C2: 接完整 80 维 ctx_aug 生成 (theta_rew, theta_pred).
 
-        return theta_state, theta_reward, theta_pred
+        若 detach_pred_context=True (D5), hyper_pred 接收的 ctx_aug 被 .detach():
+            - 防止 value loss 反向时扭曲 context_encoder 学习
+            - reward loss 反向仍能驱动 context_encoder (经 hyper_rew 路径)
 
-    def generate_trans_params(self, rule_emb):
-        """Generate state transition params only (objective, no agent_id)."""
-        return self.hyper_trans(rule_emb)
+        Args:
+            ctx_aug: (B, ctx_aug_dim=80) float32
+        Returns:
+            theta_rew:  (B, rew_param_count) float32
+            theta_pred: (B, pred_param_count) float32
+        """
+        assert ctx_aug.shape[-1] == self.ctx_aug_dim, (
+            f"ctx_aug last dim {ctx_aug.shape[-1]} != ctx_aug_dim {self.ctx_aug_dim}"
+        )
 
-    def generate_subjective_params(self, rule_emb, id_emb):
-        """Generate reward + prediction params (subjective, needs agent_id)."""
-        aug_context = torch.cat([rule_emb, id_emb], dim=-1)
-        theta_reward = self.hyper_rew(aug_context)
-        theta_pred = self.hyper_pred(aug_context)
-        return theta_reward, theta_pred
+        theta_rew = self.hyper_rew(ctx_aug)
+
+        # D5: hyper_pred 输入是否 detach (仅在传入 hyper_pred 那一行 detach, 不改原 ctx_aug)
+        if self.detach_pred_context:
+            theta_pred = self.hyper_pred(ctx_aug.detach())
+        else:
+            theta_pred = self.hyper_pred(ctx_aug)
+
+        return theta_rew, theta_pred
 
 
-def reward_diversity_loss(hyper_rew, rule_emb, id_embedding, num_agents,
-                          target_cos=0.3, skip_pairs=None):
-    """
-    [v4.7] Diversity regularization for hyper_rew outputs.
+def reward_diversity_loss(hyper_rew, ctx_aug_per_agent, target_cos=0.3, skip_pairs=None):
+    """[v4.7 保留] theta_reward 多样性正则 (辅助, 默认禁用).
 
-    Penalizes high cosine similarity between θ_reward vectors generated
-    for different agent identities under the same rule context. This prevents
-    the hypernetwork from collapsing to a single "average" parameter set
-    when reward MSE gradients are too weak to drive natural differentiation.
+    按 D2: v4 type-aware 已通过 type_emb -> hyper_rew -> theta_rew^i 隐含实现.
+    本 loss 作为辅助正则 (cfg.legacy.w_rew_diversity 控制权重, 默认 0.0),
+    仅 Pkg-08 Ablation 启用做对照.
 
-    Uses hinge loss: only penalizes when cos_sim > target_cos, so the loss
-    naturally goes to zero once sufficient separation is achieved.
+    Uses hinge loss: 仅当 cos_sim > target_cos 时惩罚, 充分分化后 loss 自然归零.
 
     Args:
-        hyper_rew:    HyperNetMLP that generates θ_reward
-        rule_emb:     (B, rule_emb_dim) — current batch's rule embeddings
-        id_embedding: nn.Embedding for agent IDs
-        num_agents:   int — total number of agents
-        target_cos:   float — max allowed cosine similarity (hinge threshold)
-        skip_pairs:   list of (i, j) tuples — agent pairs to skip (e.g., same-role agents)
-
+        hyper_rew:         HyperNetMLP 实例
+        ctx_aug_per_agent: (N, B, ctx_aug_dim) 每个 agent 的 ctx_aug 张量
+        target_cos:        hinge 阈值
+        skip_pairs:        跳过的 (i, j) 对 (如同 type agent 不需分化)
     Returns:
-        loss: scalar tensor — hinge diversity penalty (≥ 0)
+        loss: 标量 tensor (>= 0)
     """
-    B = rule_emb.shape[0]
-    device = rule_emb.device
+    N, B, _ = ctx_aug_per_agent.shape
+    thetas = [hyper_rew(ctx_aug_per_agent[i]) for i in range(N)]
 
-    # Generate θ_reward for each agent
-    thetas = {}
-    for aid in range(num_agents):
-        id_t = torch.full((B,), aid, dtype=torch.long, device=device)
-        id_emb = id_embedding(id_t)
-        aug_ctx = torch.cat([rule_emb, id_emb], dim=-1)
-        thetas[aid] = hyper_rew(aug_ctx)  # (B, rew_param_count)
-
-    loss = torch.tensor(0.0, device=device)
+    loss = torch.tensor(0.0, device=ctx_aug_per_agent.device)
     count = 0
     skip_set = set(skip_pairs) if skip_pairs else set()
-    for i in range(num_agents):
-        for j in range(i + 1, num_agents):
+    for i in range(N):
+        for j in range(i + 1, N):
             if (i, j) in skip_set or (j, i) in skip_set:
                 continue
             cos_sim = F.cosine_similarity(thetas[i], thetas[j], dim=-1)  # (B,)
