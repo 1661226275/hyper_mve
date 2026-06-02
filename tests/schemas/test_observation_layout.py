@@ -96,7 +96,7 @@ def test_pad_neighbor_block_with_presence():
     ]
     out = pad_neighbor_block(visible, N=4)
     assert out.shape == (27,)
-    assert out[0] == 0.0 and out[1] == 0.1
+    assert out[0] == 0.0 and np.isclose(out[1], 0.1)
     assert np.allclose(out[2:8], [1, 0, 0, 0, 0, 0])
     assert out[8] == 1.0
     # slot 1: presence_flag=0

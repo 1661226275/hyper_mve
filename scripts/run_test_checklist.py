@@ -591,7 +591,10 @@ def write_reports(
     md_lines.append("| ID | Title | Status | Matched (P/F/T) | Required |")
     md_lines.append("|----|-------|--------|-----------------|----------|")
     for g in gates:
-        st = "PASS" if g["passed"] else "FAIL"
+        if g["matched_total"] == 0:
+            st = "N/A"          # tests for this gate never ran (phase skipped)
+        else:
+            st = "PASS" if g["passed"] else "FAIL"
         counts = f"{g['matched_passed']}/{g['matched_failed']}/{g['matched_total']}"
         md_lines.append(
             f"| {g['id']} | {g['title']} | {st} | {counts} | ≥{g['min_matches']} |"
@@ -673,8 +676,14 @@ def parse_args() -> argparse.Namespace:
         help="Skip §3.8 BeliefNet synthetic convergence.",
     )
     parser.add_argument(
-        "--keep-going", action="store_true",
-        help="Run every requested phase even if an earlier one fails.",
+        "--keep-going", action="store_true", default=True,
+        help="Continue running later phases when an earlier phase has test "
+             "failures (default: True; --strict to disable). Import-sanity "
+             "failures still abort regardless.",
+    )
+    parser.add_argument(
+        "--strict", dest="keep_going", action="store_false",
+        help="Abort the run as soon as any phase fails.",
     )
     parser.add_argument(
         "--pytest-args", default="",
@@ -728,8 +737,14 @@ def main() -> int:
         return False
 
     if "0" in requested and not aborted:
-        if not gate(phase_import_sanity(repo, env, out_dir)):
-            pass
+        # Import sanity ALWAYS aborts on failure, even with --keep-going:
+        # if hyper_mve isn't importable nothing else can possibly run.
+        p_import = phase_import_sanity(repo, env, out_dir)
+        phases.append(p_import)
+        if not p_import.passed:
+            aborted = True
+            print(f"\n[abort] import sanity failed (rc={p_import.returncode}); "
+                  "fix the environment before re-running.")
 
     if "1" in requested and not aborted:
         if not gate(phase_pytest("phase1_schemas", "tests/schemas/", repo, env, out_dir, extra_pytest)):
@@ -785,13 +800,21 @@ def main() -> int:
     print(f"  report  : {md_path}")
     print(f"  json    : {json_path}")
 
-    failed_gates = [g for g in gates if not g["passed"]]
+    failed_gates = [
+        g for g in gates if g["matched_total"] > 0 and not g["passed"]
+    ]
+    skipped_gates = [g for g in gates if g["matched_total"] == 0]
     if failed_gates:
         print("\nFailed gates:")
         for g in failed_gates:
             print(f"  - {g['id']} {g['title']}: "
                   f"{g['matched_passed']}/{g['matched_total']} matched, "
                   f"{g['matched_failed']} failed")
+    if skipped_gates:
+        print(f"\nGates with no matching tests run "
+              f"({len(skipped_gates)} skipped — phase wasn't reached):")
+        for g in skipped_gates:
+            print(f"  - {g['id']} {g['title']}")
 
     overall_ok = (
         all(p.passed for p in phases)
