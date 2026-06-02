@@ -1,222 +1,186 @@
+"""EpisodeReplayBuffer — v4 TimeStepRecord container (Pkg-05 spec 03, Ch5.6).
+
+Rewrite of the v4.7 ``EpisodeData`` buffer (6 fields) into a container for the
+v4 ``TimeStepRecord`` (12 fields, Pkg-01 spec 04). Episodes are stored on CPU as
+``dict[str, np.ndarray]`` stacked over the time axis; ``sample_batch`` slices
+``(B, K+1, ...)`` windows and ``torch.from_numpy``s them.
+
+review 修订 4: ``store_episode`` takes an explicit parallel ``c_t_seq`` (T,) so the
+buffer can return a ``c_t`` field without modifying the TimeStepRecord schema (NG7).
+
+Sampling (D9, inlined): uniform or type-stratified (Ch5.6.5). Stratified keeps at
+least ``stratified_min_per_type_frac`` of the batch from each of the alpha-heavy /
+beta-heavy episode buckets so the reward head sees both types every step.
 """
-Episode Replay Buffer for MuZero-style training.
+from __future__ import annotations
 
-Stores complete episodes and supports sampling contiguous sequences
-of length K+1 for unrolled training.
+from collections import deque
+from typing import Optional
 
-Storage per episode:
-    - obs:              (T+1, joint_obs_dim)   joint observations (includes final obs)
-    - actions:          (T, num_agents)        discrete actions (int)
-    - rewards:          (T, num_agents)        per-agent rewards (float)
-    - search_policies:  (T, num_agents, num_actions)  MVE planner output
-    - rule:             scalar                 episode Rule value
-    - dones:            (T,)                   done flags
-    - length:           int (= T)              actual episode length (number of actions)
-
-v4.4: Removed PER (Priority Experience Replay), switched to uniform sampling.
-    Reason: reward-magnitude PER causes stale high-reward episodes to be over-sampled,
-    conflicting with buffer_size reduction (5000) for data freshness.
-"""
 import numpy as np
 import torch
-from collections import deque
+
+from hyper_mve.configs import V4Config
+from hyper_mve.schemas import AgentType, TimeStepRecord
 
 
-class EpisodeData:
-    """Container for a single episode's data."""
-
-    def __init__(self, obs, actions, rewards, search_policies, rule, dones, length):
-        """
-        Args:
-            obs:              np.ndarray (T, joint_obs_dim)
-            actions:          np.ndarray (T, num_agents) int
-            rewards:          np.ndarray (T, num_agents) float
-            search_policies:  np.ndarray (T, num_agents, num_actions) float
-            rule:             float
-            dones:            np.ndarray (T,) bool
-            length:           int
-        """
-        self.obs = obs
-        self.actions = actions
-        self.rewards = rewards
-        self.search_policies = search_policies
-        self.rule = rule
-        self.dones = dones
-        self.length = length
+# Fields stacked over the time axis (Pkg-01 spec 04 TimeStepRecord 10 data fields).
+_DATA_FIELDS = ("o", "a", "r", "delta", "pi_mve", "v", "tau", "cap", "c_hat", "z_hat")
 
 
 class EpisodeReplayBuffer:
-    """
-    Episode-based replay buffer for MuZero unrolled training.
+    """FIFO replay buffer of whole episodes (v4 TimeStepRecord container)."""
 
-    Stores complete episodes and samples contiguous sequences of length unroll_K + 1.
-    Uses uniform sampling (v4.4) to maximize data freshness with small buffer.
-    """
+    def __init__(self, cfg: V4Config):
+        self.cfg = cfg
+        self.max_episodes: int = cfg.train.buffer_size
+        self.unroll_K: int = cfg.train.unroll_K
+        self.n_step: int = cfg.train.n_step
+        self.min_buffer_size: int = cfg.train.min_buffer_size
 
-    def __init__(self, cfg, device):
-        """
-        Args:
-            cfg: config with buffer_size, batch_size, unroll_K, num_agents, num_actions, joint_obs_dim
-            device: torch device
-        """
-        self.buffer_size = cfg.buffer_size  # max number of episodes
-        self.batch_size = cfg.batch_size
-        self.unroll_K = cfg.unroll_K
-        self.num_agents = cfg.num_agents
-        self.num_actions = cfg.num_actions
-        self.joint_obs_dim = cfg.joint_obs_dim
-        self.device = device
+        self._episodes: "deque[dict[str, np.ndarray]]" = deque(maxlen=self.max_episodes)
+        self._c_t_seqs: "deque[np.ndarray]" = deque(maxlen=self.max_episodes)
 
-        self.buffer = deque(maxlen=self.buffer_size)
+        self.stratified: bool = cfg.train.stratified_sampling
+        self.stratified_min_frac: float = cfg.train.stratified_min_per_type_frac
 
-    def store_episode(self, episode_data):
-        """
-        Store a complete episode. Episodes shorter than unroll_K are rejected.
+    # ------------------------------------------------------------- store
+
+    def store_episode(self, records: list[TimeStepRecord], c_t_seq: torch.Tensor) -> None:
+        """Store one episode.
 
         Args:
-            episode_data: EpisodeData instance
+            records: T ``TimeStepRecord`` (Pkg-01 spec 04).
+            c_t_seq: (T,) float32 — parallel c_t scalar series (worker collects it
+                from ``env.info['c_true']`` per step).
         """
-        if episode_data.length > self.unroll_K:
-            self.buffer.append(episode_data)
+        T = len(records)
+        assert T == len(c_t_seq), (
+            f"records len {T} != c_t_seq len {len(c_t_seq)}"
+        )
+        assert T > self.unroll_K + self.n_step, (
+            f"episode too short: T={T} <= unroll_K+n_step={self.unroll_K + self.n_step}"
+        )
 
-    def sample_batch(self):
-        """
-        Sample a batch with uniform random sampling.
-
-        Each sample: a random episode, random start position t,
-        yielding sequence [t, t+K] (K+1 observations, K actions/rewards/policies).
-
-        Returns:
-            dict with keys:
-                'obs':      (B, K+1, joint_obs_dim)  float32
-                'actions':  (B, K, num_agents)        int64
-                'rewards':  (B, K, num_agents)        float32
-                'policies': (B, K, num_agents, num_actions) float32
-                'rules':    (B,)                      float32
-                'dones':    (B, K)                    float32
-        """
-        B = self.batch_size
-        K = self.unroll_K
-
-        obs_batch = np.zeros((B, K + 1, self.joint_obs_dim), dtype=np.float32)
-        actions_batch = np.zeros((B, K, self.num_agents), dtype=np.int64)
-        rewards_batch = np.zeros((B, K, self.num_agents), dtype=np.float32)
-        policies_batch = np.zeros((B, K, self.num_agents, self.num_actions), dtype=np.float32)
-        rules_batch = np.zeros(B, dtype=np.float32)
-        dones_batch = np.zeros((B, K), dtype=np.float32)
-
-        ep_indices = np.random.choice(len(self.buffer), size=B)
-
-        for i, ep_idx in enumerate(ep_indices):
-            ep = self.buffer[ep_idx]
-            # Random start position ensuring t + K <= length - 1
-            # We need K+1 obs: [t, t+1, ..., t+K]
-            # and K actions/rewards: [t, t+1, ..., t+K-1]
-            max_start = ep.length - K
-            t = np.random.randint(0, max_start)
-
-            obs_batch[i] = ep.obs[t:t + K + 1]
-            actions_batch[i] = ep.actions[t:t + K]
-            rewards_batch[i] = ep.rewards[t:t + K]
-            policies_batch[i] = ep.search_policies[t:t + K]
-            rules_batch[i] = ep.rule
-            dones_batch[i] = ep.dones[t:t + K].astype(np.float32)
-
-        return {
-            'obs': torch.tensor(obs_batch, dtype=torch.float32).to(self.device),
-            'actions': torch.tensor(actions_batch, dtype=torch.long).to(self.device),
-            'rewards': torch.tensor(rewards_batch, dtype=torch.float32).to(self.device),
-            'policies': torch.tensor(policies_batch, dtype=torch.float32).to(self.device),
-            'rules': torch.tensor(rules_batch, dtype=torch.float32).to(self.device),
-            'dones': torch.tensor(dones_batch, dtype=torch.float32).to(self.device),
+        episode = {
+            "o":      np.stack([r.o for r in records], axis=0),       # (T, N, obs_dim)
+            "a":      np.stack([r.a for r in records], axis=0),       # (T, N)
+            "r":      np.stack([r.r for r in records], axis=0),       # (T, N)
+            "delta":  np.stack([r.delta for r in records], axis=0),   # (T, N)
+            "pi_mve": np.stack([r.pi_mve for r in records], axis=0),  # (T, N, A)
+            "v":      np.stack([r.v for r in records], axis=0),       # (T, N)
+            "tau":    np.stack([r.tau for r in records], axis=0),     # (T, N) int8
+            "cap":    np.stack([r.cap for r in records], axis=0),     # (T, N, 4)
+            "c_hat":  np.stack([r.c_hat for r in records], axis=0),   # (T, N)
+            "z_hat":  np.stack([r.z_hat for r in records], axis=0),   # (T, N, N-1, 2)
+            "t":      np.array([r.t for r in records], dtype=np.int32),     # (T,)
+            "done":   np.array([r.done for r in records], dtype=np.bool_),  # (T,)
         }
+        self._episodes.append(episode)
+        self._c_t_seqs.append(np.asarray(c_t_seq.detach().cpu().numpy(), dtype=np.float32))
 
-    def sample_batch_with_history(self, trajectory_window=10):
+    # ------------------------------------------------------------ sample
+
+    def sample_batch(self, batch_size: int, unroll_K: Optional[int] = None) -> dict[str, torch.Tensor]:
+        """Sample a (B, K+1, ...) batch dict (see module / spec 03 §2.2)."""
+        K = self.unroll_K if unroll_K is None else unroll_K
+        assert len(self._episodes) > 0, "Buffer is empty; collect episodes first."
+
+        if self.stratified:
+            ep_indices, start_indices = self._stratified_sample(batch_size, K)
+        else:
+            ep_indices, start_indices = self._uniform_sample(batch_size, K)
+
+        return self._slice_batch(ep_indices, start_indices, K)
+
+    def __len__(self) -> int:
+        return len(self._episodes)
+
+    # ----------------------------------------------------------- helpers
+
+    def _max_start(self, ep_idx: int, K: int) -> int:
+        """Largest valid window start so that ``[start, start+K+1)`` fits."""
+        T_ep = len(self._episodes[ep_idx]["t"])
+        return max(0, T_ep - (K + 1))
+
+    def _uniform_sample(self, B: int, K: int) -> tuple[list[int], list[int]]:
+        ep_indices: list[int] = []
+        start_indices: list[int] = []
+        n_ep = len(self._episodes)
+        for _ in range(B):
+            ep_idx = int(np.random.randint(n_ep))
+            start = int(np.random.randint(0, self._max_start(ep_idx, K) + 1))
+            ep_indices.append(ep_idx)
+            start_indices.append(start)
+        return ep_indices, start_indices
+
+    def _stratified_sample(self, B: int, K: int) -> tuple[list[int], list[int]]:
+        """Type-stratified sampling (D9, C5-B2).
+
+        Bucket episodes by the first-step type assignment (fixed within an episode,
+        Pkg-02 spec 03): alpha-heavy (>=50% ALPHA) vs beta-heavy. Draw at least
+        ``B * stratified_min_per_type_frac`` from each non-empty bucket, fill the
+        rest uniformly, then shuffle to avoid intra-batch ordering bias.
         """
-        Sample batch with additional history window for GRU context inference.
+        alpha_heavy: list[int] = []
+        beta_heavy: list[int] = []
+        for i, ep in enumerate(self._episodes):
+            taus = ep["tau"][0]  # (N,) first-step types
+            alpha_frac = (taus == int(AgentType.ALPHA)).sum() / len(taus)
+            (alpha_heavy if alpha_frac >= 0.5 else beta_heavy).append(i)
 
-        Returns everything from sample_batch() plus:
-            'history_obs':            (B, W, joint_obs_dim)
-            'history_actions_onehot': (B, W, joint_action_dim)
-            'history_rewards':        (B, W, 1)  — mean reward across agents
-            'history_mask':           (B, W)      — True for valid, False for padding
+        ep_indices: list[int] = []
+        start_indices: list[int] = []
+        min_per_type = int(B * self.stratified_min_frac)
 
-        The history window covers [t-W, t-1] (steps before the unroll start).
-        If t < W, the history is left-padded with zeros and mask marks invalid steps.
+        def _draw_from(bucket: list[int]) -> None:
+            ep_idx = int(np.random.choice(bucket))
+            start = int(np.random.randint(0, self._max_start(ep_idx, K) + 1))
+            ep_indices.append(ep_idx)
+            start_indices.append(start)
 
-        Args:
-            trajectory_window: W, number of history steps
-        Returns:
-            dict with all keys from sample_batch() plus history keys
-        """
-        B = self.batch_size
-        K = self.unroll_K
-        W = trajectory_window
-        joint_action_dim = self.num_agents * self.num_actions
+        for _ in range(min_per_type):
+            if alpha_heavy:
+                _draw_from(alpha_heavy)
+            if beta_heavy:
+                _draw_from(beta_heavy)
 
-        obs_batch = np.zeros((B, K + 1, self.joint_obs_dim), dtype=np.float32)
-        actions_batch = np.zeros((B, K, self.num_agents), dtype=np.int64)
-        rewards_batch = np.zeros((B, K, self.num_agents), dtype=np.float32)
-        policies_batch = np.zeros((B, K, self.num_agents, self.num_actions), dtype=np.float32)
-        rules_batch = np.zeros(B, dtype=np.float32)
-        dones_batch = np.zeros((B, K), dtype=np.float32)
+        remaining = B - len(ep_indices)
+        if remaining > 0:
+            ep_u, start_u = self._uniform_sample(remaining, K)
+            ep_indices.extend(ep_u)
+            start_indices.extend(start_u)
+        elif remaining < 0:
+            # Both buckets present and 2*min_per_type > B: trim to B.
+            ep_indices = ep_indices[:B]
+            start_indices = start_indices[:B]
 
-        # History arrays
-        hist_obs = np.zeros((B, W, self.joint_obs_dim), dtype=np.float32)
-        hist_actions = np.zeros((B, W, joint_action_dim), dtype=np.float32)
-        hist_rewards = np.zeros((B, W, 1), dtype=np.float32)
-        hist_mask = np.zeros((B, W), dtype=bool)
+        perm = np.random.permutation(len(ep_indices))
+        ep_indices = [ep_indices[i] for i in perm]
+        start_indices = [start_indices[i] for i in perm]
+        return ep_indices, start_indices
 
-        ep_indices = np.random.choice(len(self.buffer), size=B)
+    def _slice_batch(self, ep_indices: list[int], start_indices: list[int], K: int) -> dict[str, torch.Tensor]:
+        out: dict[str, torch.Tensor] = {}
 
-        for i, ep_idx in enumerate(ep_indices):
-            ep = self.buffer[ep_idx]
-            max_start = ep.length - K
-            t = np.random.randint(0, max_start)
+        for key in (*_DATA_FIELDS, "done"):
+            slices = [
+                self._episodes[ep_idx][key][start:start + K + 1]
+                for ep_idx, start in zip(ep_indices, start_indices)
+            ]
+            out[key] = torch.from_numpy(np.stack(slices, axis=0))  # (B, K+1, ...)
 
-            # Standard batch data
-            obs_batch[i] = ep.obs[t:t + K + 1]
-            actions_batch[i] = ep.actions[t:t + K]
-            rewards_batch[i] = ep.rewards[t:t + K]
-            policies_batch[i] = ep.search_policies[t:t + K]
-            rules_batch[i] = ep.rule
-            dones_batch[i] = ep.dones[t:t + K].astype(np.float32)
+        # Rename to the trainer's expected keys.
+        out["obs"] = out.pop("o")
+        out["actions"] = out.pop("a")
+        out["rewards"] = out.pop("r")
+        out["dones"] = out.pop("done")
 
-            # History window: [t-W, t-1]
-            hist_start = max(0, t - W)
-            hist_len = t - hist_start  # actual number of valid history steps
+        # c_t: parallel slice from _c_t_seqs (review 修订 4).
+        c_t_slices = [
+            self._c_t_seqs[ep_idx][start:start + K + 1]
+            for ep_idx, start in zip(ep_indices, start_indices)
+        ]
+        out["c_t"] = torch.from_numpy(np.stack(c_t_slices, axis=0))  # (B, K+1)
 
-            if hist_len > 0:
-                # Fill from the right (most recent history at the end)
-                pad_len = W - hist_len
-                hist_obs[i, pad_len:] = ep.obs[hist_start:t]
-                # One-hot encode actions for history
-                for j in range(hist_len):
-                    act_j = ep.actions[hist_start + j]  # (N,)
-                    for a_idx in range(self.num_agents):
-                        hist_actions[i, pad_len + j,
-                                     a_idx * self.num_actions + act_j[a_idx]] = 1.0
-                # Mean reward across agents
-                hist_rewards[i, pad_len:, 0] = ep.rewards[hist_start:t].mean(axis=1)
-                hist_mask[i, pad_len:] = True
-
-        result = {
-            'obs': torch.tensor(obs_batch, dtype=torch.float32).to(self.device),
-            'actions': torch.tensor(actions_batch, dtype=torch.long).to(self.device),
-            'rewards': torch.tensor(rewards_batch, dtype=torch.float32).to(self.device),
-            'policies': torch.tensor(policies_batch, dtype=torch.float32).to(self.device),
-            'rules': torch.tensor(rules_batch, dtype=torch.float32).to(self.device),
-            'dones': torch.tensor(dones_batch, dtype=torch.float32).to(self.device),
-            'history_obs': torch.tensor(hist_obs, dtype=torch.float32).to(self.device),
-            'history_actions_onehot': torch.tensor(hist_actions, dtype=torch.float32).to(self.device),
-            'history_rewards': torch.tensor(hist_rewards, dtype=torch.float32).to(self.device),
-            'history_mask': torch.tensor(hist_mask, dtype=torch.bool).to(self.device),
-        }
-        return result
-
-    def ready(self):
-        """Check if buffer has enough episodes for a batch."""
-        return len(self.buffer) >= self.batch_size
-
-    def __len__(self):
-        return len(self.buffer)
+        return out

@@ -1,220 +1,144 @@
-"""
-Data collection worker for Hyper-MuZero.
+"""Worker — v4 episode collection (Pkg-05 spec 02, Ch5.6).
 
-Runs episodes in the environment using:
-    1. Model's learned policy (PredictionNet) for each agent
-    2. Epsilon-greedy exploration
-    3. MVE Planner for search policy targets
+Rewrite of the v4.7 worker for the v4 stack:
+    - BeliefNet.step online inference (C5-W2) replaces v4.7 set_context_from_history.
+    - 7-API per-agent context (set_context_objective once + set_context_subjective
+      per agent), no model.update_step (C5-W1: worker is always no_grad inference).
+    - emits v4 TimeStepRecord (12 fields) + a parallel c_t scalar sequence.
+    - holds a single MVEPlanner instance so the CRN seed persists across episodes
+      (review 修订 5).
 
-Produces EpisodeData for the replay buffer.
+Self-Info strictness (C11): set_context_subjective only ever gets the RAW (B, 4)
+capability vector — never oracle types. Own type is resolved inside the model from
+cfg.env.type_assignment, not passed here.
 """
-import copy
+from __future__ import annotations
+
+from typing import Optional
+
 import numpy as np
 import torch
 
-from training.episode_buffer import EpisodeData
-from planning.mve_planner import sample_mve_plan, _is_hyper_model
-from utils.utils import actions_to_one_hot
-
-
-def _is_infer_model(model):
-    """Check if model is an Infer-HyperMuZero model (has set_context_from_history)."""
-    return hasattr(model, 'set_context_from_history')
+from hyper_mve.configs import V4Config
+from hyper_mve.models import HyperMuZeroModel
+from hyper_mve.planning.mve_planner import MVEPlanner
+from hyper_mve.schemas import TimeStepRecord
+from hyper_mve.utils.utils import inverse_scalar_transform
 
 
 class Worker:
-    """
-    Collects episodes using the current model.
+    """Collects one episode at a time into v4 TimeStepRecords."""
 
-    Each step:
-        1. Encode joint obs -> latent state
-        2. Run MVE planner -> search policy (pi_mve)
-        3. Select action via epsilon-greedy over pi_mve
-        4. Step environment
-        5. Store transition data
-    """
-
-    def __init__(self, env, model, cfg, device):
-        """
-        Args:
-            env:    NonStationaryMultiAgentEnv (discrete)
-            model:  BaselineModel (or HyperMuZeroModel)
-            cfg:    config
-            device: torch device
-        """
-        self.env = env
-        self.model = model
+    def __init__(
+        self,
+        cfg: V4Config,
+        model: HyperMuZeroModel,
+        env,
+        planner: Optional[MVEPlanner] = None,
+    ):
         self.cfg = cfg
-        self.device = device
+        self.model = model
+        self.env = env
+        # review 修订 5: hold one planner so CRN rng persists across episodes.
+        self.planner = planner if planner is not None else MVEPlanner(cfg)
+        self.model.eval()
 
     @torch.no_grad()
-    def collect_episode(self, epsilon=0.1, use_planner=True):
-        """
-        Run one full episode and return EpisodeData.
-
-        Args:
-            epsilon:      exploration rate for epsilon-greedy
-            use_planner:  if True, use MVE planner for search policy;
-                          if False, use raw model policy (faster, for early warmup)
+    def collect_episode(
+        self,
+        epsilon: float = 0.1,
+        use_planner: bool = True,
+    ) -> tuple[list[TimeStepRecord], torch.Tensor]:
+        """Collect a full episode.
 
         Returns:
-            EpisodeData with all fields populated
+            (records, c_t_seq): T TimeStepRecords and the parallel (T,) c_t series
+            (the second arg to ``EpisodeReplayBuffer.store_episode``).
         """
-        env = self.env
-        model = self.model
-        cfg = self.cfg
+        N = self.cfg.env.N
+        A = self.cfg.env.A
+        device = next(self.model.parameters()).device
 
-        obs_n, rule = env.reset()
+        obs, info = self.env.reset()                       # obs (N, obs_dim)
+        prev_hidden = self.model.belief_net.init_hidden(1, N, device=device)
 
-        # Pre-allocate storage
-        T = cfg.episode_limit
-        N = cfg.num_agents
-        A = cfg.num_actions
+        records: list[TimeStepRecord] = []
+        c_t_list: list[float] = []
 
-        obs_list = []       # list of joint_obs arrays
-        action_list = []    # list of (N,) int arrays
-        reward_list = []    # list of (N,) float arrays
-        policy_list = []    # list of (N, A) float arrays
-        done_list = []      # list of bool
+        for t in range(self.cfg.env.T_max):
+            obs_t = torch.from_numpy(np.asarray(obs, dtype=np.float32)).unsqueeze(0).to(device)
 
-        # Determine model type once (invariant within episode)
-        is_hyper = _is_hyper_model(model)
-        is_infer = _is_infer_model(model)
+            # --- BeliefNet online inference (C5-W2) ---
+            prev_hidden, c_hat, z_hat = self.model.belief_net.step(obs_t, prev_hidden)
+            # c_hat (1, N), z_hat (1, N, N-1, 2)
 
-        for t in range(T):
-            # Build joint observation
-            joint_obs = np.concatenate(obs_n)  # (joint_obs_dim,)
-            obs_list.append(joint_obs)
+            s = self.model.encode(obs_t)                   # (1, latent_dim)
+            c_t_scalar = float(info["c_true"])
+            c_t_tensor = torch.tensor([c_t_scalar], dtype=torch.float32, device=device)
+            self.model.set_context_objective(c_t_tensor)
 
-            # Encode to latent state
-            joint_obs_t = torch.tensor(joint_obs, dtype=torch.float32).unsqueeze(0).to(self.device)
-            s = model.encode(joint_obs_t)  # (1, latent_dim)
+            pi_mve = np.zeros((N, A), dtype=np.float32)
+            value_estimates = np.zeros(N, dtype=np.float32)
+            cap_dict: dict[int, torch.Tensor] = {}
+            belief_dict: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
 
-            # For Infer model: build history context from past steps
-            if is_infer and t > 0:
-                W = min(t, cfg.trajectory_window)
-                h_obs = torch.tensor(
-                    np.array(obs_list[-W:]), dtype=torch.float32
-                ).unsqueeze(0).to(self.device)  # (1, W, obs_dim)
-                # One-hot encode past actions
-                h_act_np = np.zeros((W, N * A), dtype=np.float32)
-                for j in range(W):
-                    act_j = action_list[t - W + j]
-                    for a_idx in range(N):
-                        h_act_np[j, a_idx * A + act_j[a_idx]] = 1.0
-                h_act = torch.tensor(h_act_np, dtype=torch.float32).unsqueeze(0).to(self.device)
-                h_rew_np = np.array([r.mean() for r in reward_list[-W:]], dtype=np.float32)
-                h_rew = torch.tensor(h_rew_np, dtype=torch.float32).unsqueeze(0).unsqueeze(-1).to(self.device)
-                infer_history = (h_obs, h_act, h_rew)
-            else:
-                infer_history = None
+            for k in range(N):
+                cap_k = torch.from_numpy(
+                    np.asarray(info["caps"][k].to_array(), dtype=np.float32)
+                ).unsqueeze(0).to(device)                  # (1, 4) RAW cap (no type leak)
+                cap_dict[k] = cap_k
+                belief_dict[k] = (c_hat[0, k:k + 1], z_hat[0, k:k + 1])
 
-            # Prepare rule tensor for Oracle HyperMuZero
-            if is_hyper and not is_infer:
-                rule_t = torch.tensor([rule], dtype=torch.float32, device=self.device)
-            else:
-                rule_t = None
+                self.model.set_context_subjective(k, cap_k, belief_dict[k])
+                logits_k, v_k = self.model.predict(s)
+                value_estimates[k] = float(inverse_scalar_transform(v_k).item())
+                if not use_planner:
+                    pi_mve[k] = torch.softmax(logits_k, dim=-1)[0].cpu().numpy()
 
             if use_planner:
-                # MVE Planner -> search policy: (1, N, A)
-                if is_hyper or is_infer:
-                    # v4 migration deferred to Pkg-05 (Q2 折中); see Pkg-04 spec 08 §3.3.
-                    # v4.7 sites: set_context_from_history [orig L125] /
-                    #             set_context_default [orig L128] /
-                    #             sample_mve_plan(..., rule=...) [orig L130/L132].
-                    # v4 worker: BeliefNet.step online -> set_context_objective +
-                    # set_context_subjective; planner called as
-                    # sample_mve_plan(model, s, cfg, c_t=, cap=, belief=).
-                    raise NotImplementedError(
-                        "v4 hyper/infer worker collection deferred to Pkg-05 (spec 08 §3.3)."
-                    )
+                pi_all = self.planner.sample_mve_plan(
+                    self.model, s, cap_dict, belief_dict, c_t_tensor,
+                )                                          # (1, N, A)
+                pi_mve = pi_all[0].cpu().numpy().astype(np.float32)
+
+            # --- epsilon-greedy action selection (per agent) ---
+            joint_action = np.zeros(N, dtype=np.int64)
+            for k in range(N):
+                if np.random.rand() < epsilon:
+                    joint_action[k] = np.random.randint(A)
                 else:
-                    # Baseline: planner needs no per-agent context.
-                    pi_mve = sample_mve_plan(model, s, cfg)
-                pi_mve_np = pi_mve.squeeze(0).cpu().numpy()  # (N, A)
-            else:
-                # Use raw model policy for each agent
-                pi_mve_np = np.zeros((N, A), dtype=np.float32)
-                for i in range(N):
-                    id_i = torch.tensor([i], dtype=torch.long, device=self.device)
-                    if is_hyper or is_infer:
-                        # v4 migration deferred to Pkg-05 (Q2 折中); see Pkg-04 spec 08 §3.3.
-                        # v4.7 sites: set_context_from_history [orig L143] /
-                        #             set_context_default [orig L145] /
-                        #             set_context(rule_t, id_i) [orig L149].
-                        # v4: set_context_objective + set_context_subjective per agent.
-                        raise NotImplementedError(
-                            "v4 hyper/infer worker raw-policy deferred to Pkg-05 (spec 08 §3.3)."
-                        )
-                    else:
-                        # Baseline model: pass id_emb explicitly
-                        id_emb_i = model.get_id_emb(id_i)
-                        logits_i, _ = model.predict(s, id_emb_i)  # (1, A)
-                    probs_i = torch.softmax(logits_i, dim=-1).squeeze(0).cpu().numpy()
-                    pi_mve_np[i] = probs_i
+                    p = pi_mve[k].astype(np.float64)
+                    p = p / p.sum()
+                    joint_action[k] = int(np.random.choice(A, p=p))
 
-            policy_list.append(pi_mve_np)
-            
-            # Epsilon-greedy action selection per agent
-            actions = np.zeros(N, dtype=np.int64)
-            for i in range(N):
-                if np.random.random() < epsilon:
-                    actions[i] = np.random.randint(0, A)
-                else:
-                    # Greedy from search policy
-                    actions[i] = np.argmax(pi_mve_np[i])
+            next_obs, reward, done, _truncated, next_info = self.env.step(joint_action)
 
-            action_list.append(actions)
+            # --- write TimeStepRecord (C5-W3; Pkg-01 spec 04 12 fields) ---
+            cap_record = np.stack(
+                [np.asarray(info["caps"][k].to_array(), dtype=np.float32) for k in range(N)],
+                axis=0,
+            )                                              # (N, 4)
+            record = TimeStepRecord(
+                o=np.asarray(obs, dtype=np.float32),
+                a=joint_action,
+                r=np.asarray(reward, dtype=np.float32),
+                delta=np.asarray(next_info["deltas"], dtype=np.float32),
+                pi_mve=pi_mve.astype(np.float32),
+                v=value_estimates,
+                tau=np.asarray(info["types"], dtype=np.int8),
+                cap=cap_record,
+                c_hat=c_hat[0].cpu().numpy().astype(np.float32),
+                z_hat=z_hat[0].cpu().numpy().astype(np.float32),
+                t=t,
+                done=bool(done),
+            )
+            records.append(record)
+            c_t_list.append(c_t_scalar)
 
-            # Step environment (MUST deepcopy to avoid MPE modifying actions)
-            obs_next_n, reward_n, done_n, info_n = env.step(copy.deepcopy(actions.tolist()))
-
-            reward_list.append(np.array(reward_n, dtype=np.float32))
-            done_list.append(any(done_n))
-
-            obs_n = obs_next_n
-
-            if any(done_n):
+            if done:
                 break
+            obs = next_obs
+            info = next_info
 
-        # Append final observation for consistency loss target
-        final_obs = np.concatenate(obs_n)
-        obs_list.append(final_obs)
-
-        # Convert to arrays
-        actual_length = len(action_list)
-        obs_arr = np.array(obs_list, dtype=np.float32)          # (T+1, joint_obs_dim)
-        actions_arr = np.array(action_list, dtype=np.int64)      # (T, N)
-        rewards_arr = np.array(reward_list, dtype=np.float32)    # (T, N)
-        policies_arr = np.array(policy_list, dtype=np.float32)   # (T, N, A)
-        dones_arr = np.array(done_list, dtype=bool)              # (T,)
-
-        episode = EpisodeData(
-            obs=obs_arr,
-            actions=actions_arr,
-            rewards=rewards_arr,
-            search_policies=policies_arr,
-            rule=rule,
-            dones=dones_arr,
-            length=actual_length,
-        )
-
-        return episode
-
-    def collect_episodes(self, num_episodes, epsilon=0.1, use_planner=True):
-        """
-        Collect multiple episodes.
-
-        Args:
-            num_episodes: number of episodes to collect
-            epsilon:      exploration rate
-            use_planner:  whether to use MVE planner
-
-        Returns:
-            list of EpisodeData
-        """
-        episodes = []
-        for _ in range(num_episodes):
-            ep = self.collect_episode(epsilon=epsilon, use_planner=use_planner)
-            episodes.append(ep)
-        return episodes
+        c_t_seq = torch.tensor(c_t_list, dtype=torch.float32)
+        return records, c_t_seq
