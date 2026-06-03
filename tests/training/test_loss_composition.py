@@ -99,39 +99,41 @@ def test_lambda_b_zero_disables_belief_weight(trainer, cfg_medium, model, monkey
 # ====== C5-L2: belief gradient gating (double path) ======
 
 def test_belief_gradient_isolation_pre_5k(trainer, cfg_medium, model, monkeypatch):
+    # mixing=0 isolates the GATING threshold (5000) from the curriculum stage, so
+    # the main-path belief is the *predicted* z (would carry grad if not gated).
     monkeypatch.setattr(trainer.scheduler, "oracle_z_mixing_weight", lambda step: 0.0)
-    step = 1000  # < belief_grad_gating_steps (5000): main path detached from BeliefNet
+    step = 1000  # < belief_grad_gating_steps (5000)
     trainer.model.update_step(step)
     losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, step, cfg_medium)
 
+    # L_belief always trains BeliefNet.
     _zero_belief_grads(model)
     losses["belief"].backward(retain_graph=True)
-    belief_only = _belief_grad_norm(model)
-    assert belief_only > 0.0, "L_belief must train BeliefNet"
+    assert _belief_grad_norm(model) > 0.0, "L_belief must train BeliefNet"
 
+    # The main path, in isolation, must NOT reach BeliefNet pre-5k (double detach).
     _zero_belief_grads(model)
-    losses["total"].backward()
-    total = _belief_grad_norm(model)
-
-    # gating ON -> main path contributes no BeliefNet grad -> total ~= belief-only
-    assert abs(total - belief_only) / max(belief_only, 1e-8) < 0.05
+    losses["main"].backward()
+    main_only = _belief_grad_norm(model)
+    assert main_only == 0.0, (
+        f"pre-5k: gating must detach the main path from BeliefNet, got {main_only}"
+    )
 
 
 def test_belief_gradient_both_sources_post_5k(trainer, cfg_medium, model, monkeypatch):
     monkeypatch.setattr(trainer.scheduler, "oracle_z_mixing_weight", lambda step: 0.0)
-    step = 10_000  # >= 5000: gating off, main path also trains BeliefNet
+    step = 10_000  # >= 5000: gating off
     trainer.model.update_step(step)
     losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, step, cfg_medium)
 
+    # Once gating is off, the main path also backprops into BeliefNet — but ONLY
+    # through the reward head -> hyper_rew -> ctx_aug belief segment, because
+    # detach_pred_context=True severs the policy/value (hyper_pred) path. So it is
+    # small but strictly nonzero. Measure the main path in isolation (robust:
+    # avoids the fragile L1-norm-of-sum cancellation between the two gradient paths).
     _zero_belief_grads(model)
-    losses["belief"].backward(retain_graph=True)
-    belief_only = _belief_grad_norm(model)
-
-    _zero_belief_grads(model)
-    losses["total"].backward()
-    total = _belief_grad_norm(model)
-
-    assert total > belief_only * 1.05, (
-        f"post-5k BeliefNet grad should include main+belief: total={total:.6f} "
-        f"belief_only={belief_only:.6f}"
+    losses["main"].backward()
+    main_only = _belief_grad_norm(model)
+    assert main_only > 0.0, (
+        "post-5k: main loss should backprop into BeliefNet via reward/hyper_rew"
     )
