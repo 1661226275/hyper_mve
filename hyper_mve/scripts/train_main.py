@@ -16,7 +16,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from dataclasses import replace
+
+# Allow `from hyper_mve...` when launched as `python hyper_mve/scripts/train_main.py`
+# from the repo root (the package is not pip-installed; mirrors hyper_mve/scripts/*).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import numpy as np
 import torch
