@@ -13,7 +13,7 @@ from .mup_config import MupConfig
 from .train_config import TrainConfig
 
 
-_PRESET_NAMES: tuple[str, ...] = ("easy", "medium", "hard")
+_PRESET_NAMES: tuple[str, ...] = ("easy", "medium", "hard", "duo")
 
 
 @dataclass(frozen=True)
@@ -46,6 +46,9 @@ class V4Config:
         if name == "hard":
             from .presets.hard import build_hard_config
             return build_hard_config()
+        if name == "duo":
+            from .presets.duo import build_duo_config
+            return build_duo_config()
         raise ValueError(
             f"Unknown preset: {name!r}. Valid: {_PRESET_NAMES}"
         )

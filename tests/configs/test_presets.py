@@ -63,10 +63,29 @@ def test_hard_preset_ch_3_9_table():
     assert cfg.train.max_train_steps == 2_000_000
 
 
+def test_duo_preset_two_agent_drift():
+    cfg = V4Config.from_preset("duo")
+    # 2-agent (1α+1β) drifting context
+    assert cfg.env.N == 2
+    assert cfg.env.type_assignment == (AgentType.ALPHA, AgentType.BETA)
+    assert cfg.env.c_mode == "random_walk"
+    assert cfg.preset_name == "duo"
+
+    # Medium-scale retained: only N + context differ from medium (Step 2 rationale).
+    medium = V4Config.from_preset("medium")
+    assert cfg.env.L == medium.env.L
+    assert cfg.env.K == medium.env.K
+    assert cfg.env.M == medium.env.M
+    assert cfg.env.T_max == medium.env.T_max
+    assert cfg.model == medium.model
+    assert cfg.train == medium.train
+
+
 def test_preset_name_field():
     assert V4Config.from_preset("easy").preset_name == "easy"
     assert V4Config.from_preset("medium").preset_name == "medium"
     assert V4Config.from_preset("hard").preset_name == "hard"
+    assert V4Config.from_preset("duo").preset_name == "duo"
 
 
 def test_easy_inherits_from_medium():
@@ -94,12 +113,12 @@ def test_hard_inherits_from_medium_except_env():
 
 
 def test_all_presets_construct_without_error():
-    for name in ("easy", "medium", "hard"):
+    for name in ("easy", "medium", "hard", "duo"):
         V4Config.from_preset(name)
 
 
 def test_preset_to_dict_serialisable():
-    for name in ("easy", "medium", "hard"):
+    for name in ("easy", "medium", "hard", "duo"):
         cfg = V4Config.from_preset(name)
         s = json.dumps(cfg.to_dict())
         assert len(s) > 500

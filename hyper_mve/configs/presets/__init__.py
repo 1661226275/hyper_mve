@@ -6,8 +6,14 @@ fully populated ``V4Config``. Importers should normally use
 """
 from __future__ import annotations
 
+from .duo import build_duo_config
 from .easy import build_easy_config
 from .hard import build_hard_config
 from .medium import build_medium_config
 
-__all__ = ["build_easy_config", "build_medium_config", "build_hard_config"]
+__all__ = [
+    "build_easy_config",
+    "build_medium_config",
+    "build_hard_config",
+    "build_duo_config",
+]

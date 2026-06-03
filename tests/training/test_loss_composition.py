@@ -6,6 +6,8 @@ mechanism under test — the belief gradient GATING threshold (cfg.train.belief_
 default 5000) — from the (separate) curriculum stage boundary. This is the
 real-API reconciliation noted in the plan (R2): BeliefNet.forward has no mixing arg.
 """
+import math
+
 import pytest
 import torch
 
@@ -70,6 +72,12 @@ def test_loss_composition_returns_full_dict(trainer, cfg_medium, model):
         "total", "main", "belief", "lambda_b",
         "policy", "value", "reward", "consist",
         "belief_c", "belief_opp", "belief_div",
+        # raw (unweighted) loss magnitudes
+        "L_policy_raw", "L_value_raw", "L_reward_raw", "L_consist_raw",
+        # action-distribution + hypernet role-discrimination diagnostics
+        "diag_pi_mve_entropy", "diag_pi_pred_entropy",
+        "diag_cos_pred_cross", "diag_cos_pred_same",
+        "diag_cos_rew_cross", "diag_cos_rew_same",
     }
 
 
@@ -78,6 +86,39 @@ def test_loss_composition_no_nan(trainer, cfg_medium, model):
     for k, v in losses.items():
         if torch.is_tensor(v):
             assert not torch.isnan(v).any(), f"NaN in loss['{k}']"
+    # medium is 2α+2β → all role-cosine categories have pairs (none NaN)
+
+
+# ====== diagnostics: entropy ranges + hypernet role-cosine ======
+
+def test_diagnostics_entropy_and_cosine_ranges(trainer, cfg_medium, model):
+    losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, 100, cfg_medium)
+    ln_A = math.log(cfg_medium.env.A)
+    for key in ("diag_pi_mve_entropy", "diag_pi_pred_entropy"):
+        v = losses[key].item()
+        assert 0.0 <= v <= ln_A + 1e-4, f"{key}={v} out of [0, ln A={ln_A:.3f}]"
+    # medium (2α+2β): both cross-type and same-type pairs exist → all defined in [-1, 1]
+    for key in ("diag_cos_pred_cross", "diag_cos_pred_same",
+                "diag_cos_rew_cross", "diag_cos_rew_same"):
+        v = losses[key].item()
+        assert not math.isnan(v), f"{key} should be defined for medium (2α+2β)"
+        assert -1.0 - 1e-4 <= v <= 1.0 + 1e-4, f"{key}={v} out of [-1, 1]"
+
+
+def test_diagnostics_duo_two_agent_cosine():
+    """Duo (N=2, 1α+1β): cross-type cosine defined, same-type undefined (NaN).
+
+    Also exercises the N=2 compose path end-to-end (z_hat opponent dim N-1=1).
+    """
+    cfg = V4Config.from_preset("duo")
+    model = HyperMuZeroModel(cfg)
+    trainer = MuZeroTrainer(cfg, model)
+    losses = compose_total_loss(model, _make_batch(cfg), trainer, 100, cfg)
+
+    assert not math.isnan(losses["diag_cos_pred_cross"].item())
+    assert not math.isnan(losses["diag_cos_rew_cross"].item())
+    assert math.isnan(losses["diag_cos_pred_same"].item()), "no same-type pair in duo"
+    assert math.isnan(losses["diag_cos_rew_same"].item()), "no same-type pair in duo"
 
 
 # ====== C5-L1: lambda_b at loss level ======

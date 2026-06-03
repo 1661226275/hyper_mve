@@ -43,6 +43,32 @@ if TYPE_CHECKING:  # avoid import cycle (trainer imports this module)
     from hyper_mve.training.muzero_trainer import MuZeroTrainer
 
 
+def _role_cosine(thetas, type_assignment):
+    """Mean pairwise cosine of per-agent hypernet-generated params, by role pairing.
+
+    Diagnostic for "can the hypernet distinguish roles?": low cross-type cosine ⇒
+    α/β get well-separated parameters; cross ≈ same ≈ 1 ⇒ role collapse.
+
+    Args:
+        thetas: list of N tensors (B, P) — generated params per agent (detached).
+        type_assignment: length-N sequence of AgentType/int; agents with equal value
+            form 'same-type' pairs, others 'cross-type'.
+    Returns:
+        (cross, same): scalar tensors (mean cosine over pairs then over batch). NaN
+        when a category has no pairs (e.g. duo N=2 has no same-type pair).
+    """
+    N = len(thetas)
+    nan = torch.tensor(float("nan"), device=thetas[0].device)
+    cross, same = [], []
+    for i in range(N):
+        for j in range(i + 1, N):
+            cs = F.cosine_similarity(thetas[i], thetas[j], dim=-1).mean()
+            (same if type_assignment[i] == type_assignment[j] else cross).append(cs)
+    cross_v = torch.stack(cross).mean() if cross else nan
+    same_v = torch.stack(same).mean() if same else nan
+    return cross_v, same_v
+
+
 def compose_total_loss(
     model: HyperMuZeroModel,
     batch: dict[str, torch.Tensor],
@@ -148,6 +174,11 @@ def compose_total_loss(
     L_reward = torch.zeros((), device=device)
     L_consist = torch.zeros((), device=device)
 
+    # --- diagnostics (detached; logging only, no effect on the backward graph) ---
+    H_pi_pred = torch.zeros((), device=device)            # predict-net policy entropy
+    theta_pred_per_agent: list[torch.Tensor] = []         # k=0 per-agent generated params
+    theta_rew_per_agent: list[torch.Tensor] = []
+
     for k in range(K):
         action_onehot = actions_to_one_hot(actions[:, k], A)     # (B, N*A)
         s_next = model.transition(s_pred, action_onehot)         # objective (theta_state)
@@ -178,6 +209,14 @@ def compose_total_loss(
             target_z = scalar_transform(z_return[:, k, agent].unsqueeze(-1)).squeeze(-1)
             L_value = L_value + F.mse_loss(v_k.squeeze(-1), target_z)
 
+            # --- diagnostics (detached): predict-net entropy + k=0 generated params ---
+            probs_pred = F.softmax(p_k.detach(), dim=-1)
+            H_pi_pred = H_pi_pred + -(probs_pred * torch.log(probs_pred + 1e-9)).sum(-1).mean()
+            if k == 0:
+                th_rew, th_pred = model.current_subjective_thetas()
+                theta_rew_per_agent.append(th_rew.detach())
+                theta_pred_per_agent.append(th_pred.detach())
+
         # gradient half-life: dampen K-step gradient growth (v4.6)
         s_pred = 0.5 * s_next + 0.5 * s_next.detach()
 
@@ -186,6 +225,16 @@ def compose_total_loss(
     L_value = L_value / KN
     L_reward = L_reward / KN
     L_consist = L_consist / float(K) if projector is not None else L_consist
+
+    # --- finalize diagnostics (all detached) ---
+    H_pi_pred = (H_pi_pred / KN).detach()
+    # planner (pi_mve) entropy over the unrolled window (data target; no grad).
+    # ≈ ln(A) ⇒ planner not differentiating; lower ⇒ it favours specific actions.
+    pim = pi_mve[:, :K].clamp_min(1e-9)                          # (B, K, N, A)
+    H_pi_mve = -(pim * pim.log()).sum(-1).mean().detach()
+    # hypernet role discrimination (k=0 generated params): cross-type vs same-type cosine.
+    cos_pred_cross, cos_pred_same = _role_cosine(theta_pred_per_agent, cfg.env.type_assignment)
+    cos_rew_cross, cos_rew_same = _role_cosine(theta_rew_per_agent, cfg.env.type_assignment)
 
     L_main = (
         cfg.train.w_policy * L_policy
@@ -212,4 +261,17 @@ def compose_total_loss(
         "belief_c": belief_breakdown["l_c"],
         "belief_opp": belief_breakdown["l_opp"],
         "belief_div": belief_breakdown["l_div"],
+        # --- raw (unweighted) loss magnitudes (the above are pre-multiplied by w_*) ---
+        "L_policy_raw": L_policy.detach(),
+        "L_value_raw": L_value.detach(),
+        "L_reward_raw": L_reward.detach(),
+        "L_consist_raw": L_consist.detach(),
+        # --- action-distribution diagnostics ---
+        "diag_pi_mve_entropy": H_pi_mve,        # planner differentiation (target ≈ ln A ⇒ uniform)
+        "diag_pi_pred_entropy": H_pi_pred,      # predict-net sharpness
+        # --- hypernet role-discrimination cosine (lower cross ⇒ roles separated) ---
+        "diag_cos_pred_cross": cos_pred_cross,
+        "diag_cos_pred_same": cos_pred_same,
+        "diag_cos_rew_cross": cos_rew_cross,
+        "diag_cos_rew_same": cos_rew_same,
     }

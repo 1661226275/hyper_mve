@@ -51,7 +51,7 @@ _DEFERRED_VARIANTS = {
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Hyper-MuZero v4 unified trainer")
-    p.add_argument("--preset", default="medium", choices=("easy", "medium", "hard"))
+    p.add_argument("--preset", default="medium", choices=("easy", "medium", "hard", "duo"))
     p.add_argument("--variant", default="hyper")
     p.add_argument("--max_steps", type=int, default=None, help="override train.max_train_steps")
     p.add_argument("--override", action="append", default=[], help='"section.field=value" (repeatable)')
@@ -59,6 +59,12 @@ def parse_args(argv=None):
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--log_dir", default=None)
     p.add_argument("--ckpt_dir", default="checkpoints/v4")
+    p.add_argument(
+        "--no_collect_planner", action="store_true",
+        help="disable the MVE planner during training collection (debug only; default ON). "
+             "With the planner OFF, pi_mve = the model's own prior → policy target = itself → "
+             "uniform is a zero-gradient fixed point and the policy never improves.",
+    )
     return p.parse_args(argv)
 
 
@@ -156,12 +162,18 @@ def main(argv=None) -> None:
         if len(buffer) % log_every == 0:
             print(f"[warmup] buffer {len(buffer)}/{cfg.train.min_buffer_size}", flush=True)
 
-    print("[train_main] warmup done; starting training loop.", flush=True)
+    # Training collection MUST carry the planning signal: with use_planner=False the
+    # buffer's pi_mve = the model's own prior, so the policy target is itself and the
+    # uniform distribution is a zero-gradient fixed point (policy never learns). The
+    # MVE plan is an *improved* target the prediction net can learn toward.
+    collect_planner = not args.no_collect_planner
+    print(f"[train_main] warmup done; starting training loop "
+          f"(collection planner={'ON' if collect_planner else 'OFF'}).", flush=True)
 
     while global_step < max_steps:
         eps = _epsilon(cfg, global_step)
         for _ in range(cfg.train.episodes_per_iter):
-            records, c_t_seq = worker.collect_episode(epsilon=eps, use_planner=False)
+            records, c_t_seq = worker.collect_episode(epsilon=eps, use_planner=collect_planner)
             buffer.store_episode(records, c_t_seq)
 
         for _ in range(cfg.train.train_steps_per_iter):
@@ -170,13 +182,27 @@ def main(argv=None) -> None:
             global_step += 1
 
             if global_step % 100 == 0:
-                msg = (f"step {global_step}  total={losses['total']:.4f} "
-                       f"main={losses['main']:.4f} belief={losses['belief']:.4f} "
-                       f"lr={losses['lr']:.2e}")
+                msg = (
+                    f"step {global_step}  total={losses['total']:.4f} "
+                    f"main={losses['main']:.4f} | "
+                    f"pi={losses['policy']:.4f} v={losses['value']:.4f} "
+                    f"r={losses['reward']:.4f} cons={losses['consist']:.4f} "
+                    f"belief={losses['belief']:.4f} | "
+                    f"H_pi_mve={losses['diag_pi_mve_entropy']:.3f} "
+                    f"cos_pred_cross={losses['diag_cos_pred_cross']:.3f} "
+                    f"lr={losses['lr']:.2e}"
+                )
                 print(msg, flush=True)
                 if writer is not None:
                     for k, v in losses.items():
-                        writer.add_scalar(f"loss/{k}", v, global_step)
+                        # route: diag_* -> diag/, *_raw -> loss_raw/, else loss/
+                        if k.startswith("diag_"):
+                            tag = f"diag/{k[len('diag_'):]}"
+                        elif k.endswith("_raw"):
+                            tag = f"loss_raw/{k[:-len('_raw')]}"
+                        else:
+                            tag = f"loss/{k}"
+                        writer.add_scalar(tag, v, global_step)
             if global_step % 10_000 == 0:
                 trainer.save_checkpoint(os.path.join(args.ckpt_dir, f"step_{global_step}.pt"))
             if global_step >= max_steps:

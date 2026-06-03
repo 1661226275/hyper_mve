@@ -268,3 +268,18 @@ class HyperMuZeroModel(nn.Module):
             "predict() called before set_context_subjective()."
         )
         return self.prediction_net(s, self._theta_pred)
+
+    # ====================================================================
+    # 诊断辅助 (非 7-API; 只读已缓存的 per-agent 生成参数, 用于角色 cos 相似性)
+    # ====================================================================
+
+    def current_subjective_thetas(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """返回最近一次 set_context_subjective 缓存的 (theta_rew, theta_pred).
+
+        供 loss_composition 的超网络角色诊断读取 (避免外部直接碰 _private 字段).
+        每个张量 shape (B, param_count); 对应最后一次 set_context_subjective 的 agent.
+        """
+        assert self._theta_rew is not None and self._theta_pred is not None, (
+            "current_subjective_thetas() called before set_context_subjective()."
+        )
+        return self._theta_rew, self._theta_pred
