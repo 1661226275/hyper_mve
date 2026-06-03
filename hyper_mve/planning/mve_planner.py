@@ -97,7 +97,8 @@ class MVEPlanner:
         return _multinomial_sample(F.softmax(logits_i, dim=-1), generator)
 
     @torch.no_grad()
-    def sample_mve_plan(self, model, root_s, cap: dict, belief: dict, c_t):
+    def sample_mve_plan(self, model, root_s, cap: dict, belief: dict, c_t,
+                        return_diagnostics: bool = False):
         """Per-agent coordinate-descent MVE planning with CRN.
 
         Args:
@@ -106,9 +107,15 @@ class MVEPlanner:
             cap:    {agent_id: (B, 4)} raw CapabilityVector per agent (D7).
             belief: {agent_id: (c_hat (B,), z_hat (B, N-1, 2))} per agent (D7).
             c_t:    (B,) shared context scalar.
+            return_diagnostics: if True, also return the per-agent per-action
+                expected returns and their normalised scores (offline probe only;
+                default False keeps the (B, N, A) return for the worker/tests).
 
         Returns:
             pi_mve: (B, N, A) per-agent search policy.
+            If ``return_diagnostics``: ``(pi_mve, {"returns_per_action": (B, N, A),
+            "q_normalized": (B, N, A)})`` — the raw expected return per candidate
+            first-action (original reward scale) and its z-scored value.
         """
         B = root_s.shape[0]
         N, A = self.N, self.A
@@ -150,6 +157,8 @@ class MVEPlanner:
             agent_order = list(range(N))
 
         pi_mve = torch.zeros(B, N, A, device=device)
+        diag_returns = torch.zeros(B, N, A, device=device)   # probe: expected return per action
+        diag_qnorm = torch.zeros(B, N, A, device=device)     # probe: z-scored return per action
         optimised = set()
 
         for j in agent_order:
@@ -255,7 +264,11 @@ class MVEPlanner:
             q_std = returns_per_action.std(dim=-1, keepdim=True) + 1e-8
             q_normalized = (returns_per_action - q_mean) / q_std
             pi_mve[:, j] = F.softmax(q_normalized / temperature, dim=-1)
+            diag_returns[:, j] = returns_per_action
+            diag_qnorm[:, j] = q_normalized
 
             optimised.add(j)
 
+        if return_diagnostics:
+            return pi_mve, {"returns_per_action": diag_returns, "q_normalized": diag_qnorm}
         return pi_mve  # (B, N, A)
