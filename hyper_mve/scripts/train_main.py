@@ -23,6 +23,12 @@ from dataclasses import replace
 # from the repo root (the package is not pip-installed; mirrors hyper_mve/scripts/*).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+# Quiet TensorFlow's CUDA-plugin re-registration noise: when --log_dir is set,
+# tensorboard pulls TensorFlow into the env, and TF/PyTorch sharing the same CUDA
+# libs print harmless "cuFFT/cuDNN/cuBLAS factory already registered" / oneDNN lines.
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+
 import numpy as np
 import torch
 
@@ -137,10 +143,20 @@ def main(argv=None) -> None:
     max_steps = cfg.train.max_train_steps
     global_step = start_step
 
+    print(f"[train_main] preset={args.preset} variant={args.variant} device={device} "
+          f"max_steps={max_steps} | warming up buffer to "
+          f"min_buffer_size={cfg.train.min_buffer_size} episodes "
+          f"(T_max={cfg.env.T_max}; silent collection, can take a while)...", flush=True)
+
     # Warm up the buffer (fast collection without the planner).
+    log_every = max(1, cfg.train.min_buffer_size // 20)
     while len(buffer) < cfg.train.min_buffer_size:
         records, c_t_seq = worker.collect_episode(epsilon=1.0, use_planner=False)
         buffer.store_episode(records, c_t_seq)
+        if len(buffer) % log_every == 0:
+            print(f"[warmup] buffer {len(buffer)}/{cfg.train.min_buffer_size}", flush=True)
+
+    print("[train_main] warmup done; starting training loop.", flush=True)
 
     while global_step < max_steps:
         eps = _epsilon(cfg, global_step)
@@ -157,7 +173,7 @@ def main(argv=None) -> None:
                 msg = (f"step {global_step}  total={losses['total']:.4f} "
                        f"main={losses['main']:.4f} belief={losses['belief']:.4f} "
                        f"lr={losses['lr']:.2e}")
-                print(msg)
+                print(msg, flush=True)
                 if writer is not None:
                     for k, v in losses.items():
                         writer.add_scalar(f"loss/{k}", v, global_step)
