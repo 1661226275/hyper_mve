@@ -17,6 +17,19 @@ from hyper_mve.schemas import TimeStepRecord
 from hyper_mve.training import Worker
 
 
+def _spy(monkeypatch, obj, name):
+    """Lightweight mocker.spy replacement: record calls, delegate to original."""
+    calls = []
+    orig = getattr(obj, name)
+
+    def wrapper(*args, **kwargs):
+        calls.append((args, kwargs))
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(obj, name, wrapper)
+    return calls
+
+
 @pytest.fixture
 def cfg_fast():
     cfg = V4Config.from_preset("medium")
@@ -40,18 +53,18 @@ def worker(cfg_fast, model, env):
 
 # ====== C5-W1: worker never calls update_step ======
 
-def test_worker_no_update_step(worker, mocker):
-    spy = mocker.spy(worker.model, "update_step")
+def test_worker_no_update_step(worker, monkeypatch):
+    calls = _spy(monkeypatch, worker.model, "update_step")
     worker.collect_episode(epsilon=0.1, use_planner=False)
-    assert spy.call_count == 0
+    assert len(calls) == 0
 
 
 # ====== C5-W2: online BeliefNet.step ======
 
-def test_worker_uses_belief_net_step(worker, mocker):
-    spy = mocker.spy(worker.model.belief_net, "step")
+def test_worker_uses_belief_net_step(worker, monkeypatch):
+    calls = _spy(monkeypatch, worker.model.belief_net, "step")
     records, _ = worker.collect_episode(epsilon=0.1, use_planner=False)
-    assert spy.call_count == len(records)
+    assert len(calls) == len(records)
 
 
 # ====== C5-W3: z_hat shape / record field validity ======
@@ -99,11 +112,10 @@ def test_worker_planner_custom_injection(cfg_fast, model, env):
 
 # ====== Self-Info strictness: no type leak into set_context_subjective ======
 
-def test_worker_no_oracle_types_leak(worker, mocker):
-    spy = mocker.spy(worker.model, "set_context_subjective")
+def test_worker_no_oracle_types_leak(worker, monkeypatch):
+    calls = _spy(monkeypatch, worker.model, "set_context_subjective")
     worker.collect_episode(epsilon=0.1, use_planner=False)
-    for call in spy.call_args_list:
-        args, kwargs = call
+    for args, kwargs in calls:
         cap_i = kwargs.get("cap_i", args[1] if len(args) > 1 else None)
         assert cap_i is not None and cap_i.shape[-1] == 4
 

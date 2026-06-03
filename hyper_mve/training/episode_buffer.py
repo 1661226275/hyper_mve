@@ -163,7 +163,7 @@ class EpisodeReplayBuffer:
     def _slice_batch(self, ep_indices: list[int], start_indices: list[int], K: int) -> dict[str, torch.Tensor]:
         out: dict[str, torch.Tensor] = {}
 
-        for key in (*_DATA_FIELDS, "done"):
+        for key in (*_DATA_FIELDS, "t", "done"):
             slices = [
                 self._episodes[ep_idx][key][start:start + K + 1]
                 for ep_idx, start in zip(ep_indices, start_indices)

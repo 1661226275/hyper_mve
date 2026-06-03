@@ -74,7 +74,10 @@ def compose_total_loss(
     K = cfg.train.unroll_K
     N = cfg.env.N
     A = cfg.env.A
-    device = batch["obs"].device
+    # Make compose device-robust for any caller (train_step already moves the
+    # batch; direct callers / tests may pass a CPU batch against a CUDA model).
+    device = next(model.parameters()).device
+    batch = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in batch.items()}
 
     obs = batch["obs"]                       # (B, K+1, N, obs_dim)
     actions = batch["actions"]               # (B, K+1, N) int64
