@@ -121,6 +121,34 @@ def test_diagnostics_duo_two_agent_cosine():
     assert math.isnan(losses["diag_cos_rew_same"].item()), "no same-type pair in duo"
 
 
+# ====== film_head partial-generation: compose path intact ======
+
+def test_loss_composition_film_head_full_dict_and_no_nan():
+    """film_head model (shared trunk + generated FiLM/head) keeps the full loss/diag
+    dict and stays NaN-free. Medium (N=4=2a+2b) so all cosine categories are defined."""
+    from dataclasses import replace
+    cfg = V4Config.from_preset("medium")
+    cfg = replace(cfg, model=replace(
+        cfg.model, hyper_gen_scope="film_head",
+        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
+    ))
+    model = HyperMuZeroModel(cfg)
+    trainer = MuZeroTrainer(cfg, model)
+    losses = compose_total_loss(model, _make_batch(cfg), trainer, 100, cfg)
+    assert set(losses) == {
+        "total", "main", "belief", "lambda_b",
+        "policy", "value", "reward", "consist",
+        "belief_c", "belief_opp", "belief_div",
+        "L_policy_raw", "L_value_raw", "L_reward_raw", "L_consist_raw",
+        "diag_pi_mve_entropy", "diag_pi_pred_entropy",
+        "diag_cos_pred_cross", "diag_cos_pred_same",
+        "diag_cos_rew_cross", "diag_cos_rew_same",
+    }
+    for k, v in losses.items():
+        if torch.is_tensor(v):
+            assert not torch.isnan(v).any(), f"NaN in loss['{k}'] (film_head)"
+
+
 # ====== C5-L1: lambda_b at loss level ======
 
 def test_lambda_b_curve_matches_cfg(trainer, cfg_medium, model):

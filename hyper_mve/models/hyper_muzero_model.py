@@ -45,6 +45,7 @@ REQUIRED_MODEL_FIELDS = [
     "latent_dim", "hidden_dim",
     "hyper_hidden_dims", "hyper_rew_hidden_dims",
     "trans_output_scale_init", "rew_output_scale_init", "pred_output_scale_init",
+    "hyper_gen_scope",
     "use_adaln", "adaln_residual_one_plus", "state_trans_residual",
     "belief_gru_hidden", "belief_pool", "proj_dim",
 ]
@@ -86,23 +87,29 @@ class HyperMuZeroModel(nn.Module):
         latent_dim = cfg.model.latent_dim
         joint_action_dim = cfg.env.N * cfg.env.A
         hidden_dim = cfg.model.hidden_dim
-        self.state_trans_net = FunctionalStateTransNet(latent_dim, joint_action_dim, hidden_dim)
-        self.reward_head = FunctionalRewardHead(latent_dim, joint_action_dim, hidden_dim)
-        self.prediction_net = FunctionalPredictionNet(latent_dim, cfg.env.A, hidden_dim)
+        gen_scope = cfg.model.hyper_gen_scope
+        self.state_trans_net = FunctionalStateTransNet(latent_dim, joint_action_dim, hidden_dim, gen_scope)
+        self.reward_head = FunctionalRewardHead(latent_dim, joint_action_dim, hidden_dim, gen_scope)
+        self.prediction_net = FunctionalPredictionNet(latent_dim, cfg.env.A, hidden_dim, gen_scope)
 
-        # DualHyperNetwork v2 (spec 01)
+        # DualHyperNetwork v2 (spec 01). 按 generated_param_count 定尺寸 (FULL 时 ==
+        # total_params; film_head 时只生成 FiLM γ/β + 头), 并把分组边界传给各 HyperNetMLP
+        # (FULL 时 gen_groups=None -> 维持整段 L2 norm, 行为不变).
         self.hyper_net = DualHyperNetwork(
             c_ctx_dim=cfg.model.d_c,
             ctx_aug_dim=cfg.model.d_ctx_aug,
-            trans_param_count=self.state_trans_net.total_params,
-            rew_param_count=self.reward_head.total_params,
-            pred_param_count=self.prediction_net.total_params,
+            trans_param_count=self.state_trans_net.generated_param_count,
+            rew_param_count=self.reward_head.generated_param_count,
+            pred_param_count=self.prediction_net.generated_param_count,
             hidden_dims=cfg.model.hyper_hidden_dims,
             rew_hidden_dims=cfg.model.hyper_rew_hidden_dims,
             trans_output_scale_init=cfg.model.trans_output_scale_init,
             rew_output_scale_init=cfg.model.rew_output_scale_init,
             pred_output_scale_init=cfg.model.pred_output_scale_init,
             detach_pred_context=cfg.train.detach_pred_context,
+            trans_output_groups=self.state_trans_net.gen_groups,
+            rew_output_groups=self.reward_head.gen_groups,
+            pred_output_groups=self.prediction_net.gen_groups,
         )
 
         # Belief gradient gating helper (spec 04)

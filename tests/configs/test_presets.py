@@ -71,14 +71,25 @@ def test_duo_preset_two_agent_drift():
     assert cfg.env.c_mode == "random_walk"
     assert cfg.preset_name == "duo"
 
-    # Medium-scale retained: only N + context differ from medium (Step 2 rationale).
+    # Medium-scale env retained: only N + context differ from medium (Step 2 rationale).
     medium = V4Config.from_preset("medium")
     assert cfg.env.L == medium.env.L
     assert cfg.env.K == medium.env.K
     assert cfg.env.M == medium.env.M
     assert cfg.env.T_max == medium.env.T_max
-    assert cfg.model == medium.model
-    assert cfg.train == medium.train
+
+    # film_head partial-generation + companion knobs (refactor Step 5).
+    assert cfg.model.hyper_gen_scope == "film_head"
+    assert cfg.model.trans_output_scale_init == 0.1
+    assert cfg.model.pred_output_scale_init == 0.1
+    assert cfg.model.rew_output_scale_init == 0.1  # medium default, unchanged
+    assert cfg.train.detach_pred_context is False
+    # ONLY those fields differ from medium — verify nothing else drifted.
+    assert cfg.model == replace(
+        medium.model, hyper_gen_scope="film_head",
+        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
+    )
+    assert cfg.train == replace(medium.train, detach_pred_context=False)
 
 
 def test_preset_name_field():

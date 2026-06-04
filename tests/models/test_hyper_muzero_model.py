@@ -221,6 +221,68 @@ def test_end_to_end_forward_no_nan(model, cfg_medium):
     assert not torch.isnan(v).any()
 
 
+# ====== film_head partial-generation (gen_scope) ======
+
+def _film_head_cfg():
+    from dataclasses import replace
+    base = V4Config.from_preset("medium")
+    return replace(base, model=replace(
+        base.model, hyper_gen_scope="film_head",
+        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
+    ))
+
+
+def test_film_head_sizes_hypernet_by_generated_count():
+    m = HyperMuZeroModel(_film_head_cfg())
+    # film_head generated counts are N-independent (the N*A part feeds the shared SGD fc1).
+    assert m.state_trans_net.generated_param_count == 8768
+    assert m.reward_head.generated_param_count == 641
+    assert m.prediction_net.generated_param_count == 1415
+    # DualHyperNetwork sized by generated_param_count + groups threaded through.
+    assert m.hyper_net.trans_param_count == 8768
+    assert m.hyper_net.rew_param_count == 641
+    assert m.hyper_net.pred_param_count == 1415
+    assert m.hyper_net.hyper_trans.output_groups == [512, 8256]
+    assert m.hyper_net.hyper_rew.output_groups == [512, 129]
+    assert m.hyper_net.hyper_pred.output_groups == [512, 903]
+
+
+def test_film_head_end_to_end_no_nan():
+    cfg = _film_head_cfg()
+    m = HyperMuZeroModel(cfg)
+    B, N = 2, cfg.env.N
+    obs = torch.randn(B, N, m.rep_net.obs_dim)
+    s = m.encode(obs)
+    m.update_step(0)
+    m.set_context_objective(torch.full((B,), 0.5))
+    action = torch.zeros(B, N * cfg.env.A)
+    action[:, 0] = 1.0
+    s_next = m.transition(s, action)
+    m.set_context_subjective(
+        0, torch.rand(B, 4),
+        (torch.rand(B), torch.softmax(torch.randn(B, N - 1, 2), dim=-1)),
+    )
+    r = m.predict_reward(s, action)
+    pi, v = m.predict(s)
+    for t in (s_next, r, pi, v):
+        assert not torch.isnan(t).any()
+
+
+def test_film_head_per_agent_prediction_differentiates():
+    """The whole point of film_head: theta_pred still differs per agent (view=perspective)."""
+    cfg = _film_head_cfg()
+    m = HyperMuZeroModel(cfg)
+    B, N = 2, cfg.env.N
+    m.set_context_objective(torch.full((B,), 0.5))
+    cap = torch.rand(B, 4)
+    belief = (torch.rand(B), torch.softmax(torch.randn(B, N - 1, 2), dim=-1))
+    m.set_context_subjective(0, cap, belief)
+    theta0 = m.current_subjective_thetas()[1].clone()
+    m.set_context_subjective(2, cap, belief)  # different type (BETA in medium 2a+2b)
+    theta2 = m.current_subjective_thetas()[1].clone()
+    assert not torch.allclose(theta0, theta2)
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

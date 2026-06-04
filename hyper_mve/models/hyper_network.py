@@ -37,19 +37,30 @@ class HyperNetMLP(nn.Module):
     """
 
     def __init__(self, input_dim, output_dim, hidden_dims=None, norm_output=True,
-                 output_scale_init=0.01):
+                 output_scale_init=0.01, output_groups=None):
         """
         Args:
             input_dim:         dimension of input context
             output_dim:        total number of parameters to generate
             hidden_dims:       list/tuple of hidden layer dimensions (default: (256, 256))
-            norm_output:       whether to apply L2 normalization to output (v4.0 stability trick)
+            norm_output:       whether to normalize the output (v4.0 stability trick)
             output_scale_init: [v4.7] initial value for learnable output_scale
                                (default 0.01; hyper_rew uses 0.1 to avoid initialization trap)
+            output_groups:     [film_head] optional list[int] of contiguous segment sizes
+                               (must sum to output_dim). When set, each segment is
+                               RMS-normalized independently (per-element magnitude ≈
+                               output_scale, dimension-independent) instead of the whole
+                               vector being L2-normalized to unit norm. None (default) =
+                               legacy whole-vector L2 norm (FULL gen_scope), unchanged.
         """
         super().__init__()
         if hidden_dims is None:
             hidden_dims = (256, 256)
+        if output_groups is not None:
+            assert sum(output_groups) == output_dim, (
+                f"output_groups {output_groups} sum {sum(output_groups)} != "
+                f"output_dim {output_dim}"
+            )
 
         layers = []
         prev_dim = input_dim
@@ -70,6 +81,7 @@ class HyperNetMLP(nn.Module):
 
         # [v4.0] L2 Norm + Scale stability trick
         self.norm_output = norm_output
+        self.output_groups = output_groups
         self.output_scale = nn.Parameter(torch.tensor(float(output_scale_init)))
 
     def forward(self, context):
@@ -82,12 +94,28 @@ class HyperNetMLP(nn.Module):
         h = self.trunk(context)
         raw = self.output_layer(h)
 
-        # [v4.0] L2 normalization: fix direction distribution, magnitude = 1.0
-        if self.norm_output:
+        if not self.norm_output:
+            return raw * self.output_scale
+
+        if self.output_groups is None:
+            # [v4.0] whole-vector L2 normalization (FULL gen_scope): ||raw|| = 1
             norms = torch.linalg.norm(raw, dim=-1, keepdim=True)
             raw = raw / (norms + 1e-8)
+            return raw * self.output_scale
 
-        return raw * self.output_scale
+        # [film_head] per-group RMS normalization so each element's magnitude ≈
+        # output_scale regardless of group dim. Whole-vector L2 would pin a FiLM
+        # gamma element at ~output_scale/√dim (e.g. 0.1/√512 ≈ 4e-3 -> (1+γ)≈1 ->
+        # no modulation); RMS-normalizing the film segment separately keeps |γ| ≈
+        # output_scale, and the head segment starts near fan-in standard init.
+        segs = []
+        offset = 0
+        for g in self.output_groups:
+            seg = raw[:, offset:offset + g]
+            rms = torch.sqrt(seg.pow(2).mean(dim=-1, keepdim=True) + 1e-8)
+            segs.append(seg / rms)
+            offset += g
+        return torch.cat(segs, dim=-1) * self.output_scale
 
 
 class DualHyperNetwork(nn.Module):
@@ -114,6 +142,9 @@ class DualHyperNetwork(nn.Module):
         rew_output_scale_init=0.1,        # v4.7 关键
         pred_output_scale_init=0.01,
         detach_pred_context=True,         # D5: hyper_pred 输入 detach
+        trans_output_groups=None,         # film_head: 分组 RMS 归一化的连续段大小
+        rew_output_groups=None,
+        pred_output_groups=None,
     ):
         """
         Args:
@@ -143,6 +174,7 @@ class DualHyperNetwork(nn.Module):
             hidden_dims=hidden_dims,
             norm_output=norm_output,
             output_scale_init=trans_output_scale_init,
+            output_groups=trans_output_groups,
         )
 
         # C2: hyper_rew 接完整 ctx_aug_dim (80), 更深 3 层
@@ -152,6 +184,7 @@ class DualHyperNetwork(nn.Module):
             hidden_dims=rew_hdims,
             norm_output=norm_output,
             output_scale_init=rew_output_scale_init,   # 0.1 关键
+            output_groups=rew_output_groups,
         )
 
         # C2: hyper_pred 同接 ctx_aug_dim (80)
@@ -161,6 +194,7 @@ class DualHyperNetwork(nn.Module):
             hidden_dims=hidden_dims,
             norm_output=norm_output,
             output_scale_init=pred_output_scale_init,
+            output_groups=pred_output_groups,
         )
 
         self.trans_param_count = trans_param_count

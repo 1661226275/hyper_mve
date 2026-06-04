@@ -77,6 +77,31 @@ def adaln_forward(x, weight, bias, gamma, beta):
     return F.relu(h)
 
 
+def adaln_modulate(h, gamma, beta):
+    """FiLM-style modulation for the ``film_head`` gen_scope.
+
+    Same math as ``adaln_forward``'s tail (instance LayerNorm -> (1+gamma)*h + beta
+    -> ReLU), but the linear that produced ``h`` is a SHARED SGD ``nn.Linear`` rather
+    than a HyperNet-generated weight. Only gamma/beta are generated here.
+
+    The normalization is the inline, PARAMETER-FREE instance LayerNorm (mean/var over
+    the feature dim) — NOT a parametric nn.LayerNorm — to match the FULL-mode math and
+    avoid stacking a second affine on top of (1 + gamma) + beta.
+
+    Args:
+        h:     (B, out_features) — output of a shared nn.Linear (pre-norm)
+        gamma: (B, out_features) — AdaLN scale (from HyperNet)
+        beta:  (B, out_features) — AdaLN shift (from HyperNet)
+    Returns:
+        (B, out_features) — activated, modulated output
+    """
+    mean = h.mean(dim=-1, keepdim=True)
+    var = h.var(dim=-1, keepdim=True, unbiased=False)
+    h = (h - mean) / torch.sqrt(var + 1e-5)
+    h = h * (1 + gamma) + beta
+    return F.relu(h)
+
+
 def count_params_adaln(layer_specs):
     """
     Count total parameters for layers with AdaLN support.
@@ -159,6 +184,79 @@ def layer_specs_to_param_shapes(layer_specs):
 
 
 # ============================================================
+# film_head partial-generation helpers (gen_scope="film_head")
+# ============================================================
+
+def count_generated_film_head(layer_specs):
+    """Count HyperNet-generated params for ``film_head`` mode, with norm groups.
+
+    In film_head the hidden-layer WEIGHTS are shared SGD ``nn.Linear`` (not generated);
+    the HyperNet generates ONLY:
+        - AdaLN hidden layer  -> gamma + beta   (size 2*out)
+        - plain (head) layer  -> weight + bias  (size out*in + out)
+
+    Returns ``(total, gen_spec, groups)``:
+        gen_spec: ordered chunk descriptors matching ``layer_specs`` order, consumed by
+            ``split_generated_film_head``:
+                ("film", out)      -> a (gamma, beta) pair
+                ("head", in, out)  -> a (weight, bias) pair
+        groups:   contiguous segment sizes ``[film_total, head_total]`` (zeros dropped)
+            for per-group normalization in HyperNetMLP. Requires all AdaLN (film) layers
+            to precede plain (head) layers so the generated vector is ``[film… | head…]``
+            (true for all three v4 functional nets); asserted below.
+    """
+    gen_spec = []
+    film_total = 0
+    head_total = 0
+    seen_head = False
+    for in_dim, out_dim, use_adaln in layer_specs:
+        if use_adaln:
+            assert not seen_head, (
+                "count_generated_film_head: AdaLN (film) layers must precede plain "
+                "(head) layers so the generated vector is [film... | head...]."
+            )
+            gen_spec.append(("film", out_dim))
+            film_total += 2 * out_dim
+        else:
+            seen_head = True
+            gen_spec.append(("head", in_dim, out_dim))
+            head_total += out_dim * in_dim + out_dim
+    total = film_total + head_total
+    groups = [g for g in (film_total, head_total) if g > 0]
+    return total, gen_spec, groups
+
+
+def split_generated_film_head(flat_params, gen_spec):
+    """Split a film_head flat vector into per-chunk tuples, in ``gen_spec`` order.
+
+    ("film", out)     -> (gamma (B, out), beta (B, out))
+    ("head", in, out) -> (weight (B, out, in), bias (B, out))
+
+    The caller unpacks positionally (chunk order == layer_specs order).
+    """
+    B = flat_params.shape[0]
+    out = []
+    offset = 0
+    for chunk in gen_spec:
+        if chunk[0] == "film":
+            out_dim = chunk[1]
+            gamma = flat_params[:, offset:offset + out_dim]
+            offset += out_dim
+            beta = flat_params[:, offset:offset + out_dim]
+            offset += out_dim
+            out.append((gamma, beta))
+        else:  # "head"
+            _, in_dim, out_dim = chunk
+            w_size = out_dim * in_dim
+            weight = flat_params[:, offset:offset + w_size].view(B, out_dim, in_dim)
+            offset += w_size
+            bias = flat_params[:, offset:offset + out_dim]
+            offset += out_dim
+            out.append((weight, bias))
+    return out
+
+
+# ============================================================
 # Legacy helpers (for Baseline models that don't use AdaLN)
 # ============================================================
 
@@ -225,9 +323,10 @@ class FunctionalStateTransNet(nn.Module):
     Output: s' (B, latent_dim)
     """
 
-    def __init__(self, latent_dim, joint_action_dim, hidden_dim=128):
+    def __init__(self, latent_dim, joint_action_dim, hidden_dim=128, gen_scope="full"):
         super().__init__()
         self.latent_dim = latent_dim
+        self.gen_scope = gen_scope
         input_dim = latent_dim + joint_action_dim
 
         # (in_dim, out_dim, use_adaln)
@@ -242,15 +341,35 @@ class FunctionalStateTransNet(nn.Module):
         # Fixed LayerNorm for output normalization (not generated)
         self.ln = nn.LayerNorm(latent_dim)
 
+        if gen_scope == "film_head":
+            # Shared SGD trunk; HyperNet generates only FiLM gamma/beta + output head.
+            self.fc1 = nn.Linear(input_dim, hidden_dim)
+            self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+            self.generated_param_count, self.gen_spec, self.gen_groups = \
+                count_generated_film_head(self.layer_specs)
+        else:  # "full": HyperNet generates every layer's weights (legacy default)
+            self.generated_param_count = self.total_params
+            self.gen_spec = None
+            self.gen_groups = None
+
     def forward(self, state, action_onehot, flat_params):
         """
         Args:
             state:         (B, latent_dim)
             action_onehot: (B, joint_action_dim)
-            flat_params:   (B, total_params)
+            flat_params:   (B, generated_param_count)
         Returns:
             next_state: (B, latent_dim)
         """
+        if self.gen_scope == "film_head":
+            (g1, bt1), (g2, bt2), (w3, b3) = split_generated_film_head(flat_params, self.gen_spec)
+            x = torch.cat([state, action_onehot], dim=-1)
+            x = adaln_modulate(self.fc1(x), g1, bt1)   # fc1 shared SGD; gamma/beta generated
+            x = adaln_modulate(self.fc2(x), g2, bt2)   # fc2 shared SGD; gamma/beta generated
+            delta_s = functional_linear(x, w3, b3)     # generated head
+            delta_s = self.ln(delta_s)                 # fixed output LayerNorm
+            return state + delta_s                     # s' = s + Δs
+
         params = split_params_adaln(flat_params, self.layer_specs)
         x = torch.cat([state, action_onehot], dim=-1)
 
@@ -288,8 +407,9 @@ class FunctionalRewardHead(nn.Module):
     Output: r_i (B, 1)
     """
 
-    def __init__(self, latent_dim, joint_action_dim, hidden_dim=128):
+    def __init__(self, latent_dim, joint_action_dim, hidden_dim=128, gen_scope="full"):
         super().__init__()
+        self.gen_scope = gen_scope
         input_dim = latent_dim + joint_action_dim
 
         # (in_dim, out_dim, use_adaln)
@@ -301,15 +421,32 @@ class FunctionalRewardHead(nn.Module):
         self.total_params, self.param_counts = count_params_adaln(self.layer_specs)
         self.param_shapes = layer_specs_to_param_shapes(self.layer_specs)
 
+        if gen_scope == "film_head":
+            self.fc1 = nn.Linear(input_dim, hidden_dim)
+            self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+            self.generated_param_count, self.gen_spec, self.gen_groups = \
+                count_generated_film_head(self.layer_specs)
+        else:
+            self.generated_param_count = self.total_params
+            self.gen_spec = None
+            self.gen_groups = None
+
     def forward(self, state, action_onehot, flat_params):
         """
         Args:
             state:         (B, latent_dim)
             action_onehot: (B, joint_action_dim)
-            flat_params:   (B, total_params)
+            flat_params:   (B, generated_param_count)
         Returns:
             reward: (B, 1) in scaled space
         """
+        if self.gen_scope == "film_head":
+            (g1, bt1), (g2, bt2), (w3, b3) = split_generated_film_head(flat_params, self.gen_spec)
+            x = torch.cat([state, action_onehot], dim=-1)
+            x = adaln_modulate(self.fc1(x), g1, bt1)
+            x = adaln_modulate(self.fc2(x), g2, bt2)
+            return functional_linear(x, w3, b3)
+
         params = split_params_adaln(flat_params, self.layer_specs)
         x = torch.cat([state, action_onehot], dim=-1)
 
@@ -344,9 +481,10 @@ class FunctionalPredictionNet(nn.Module):
     Output: policy_logits (B, num_actions), value (B, 1)
     """
 
-    def __init__(self, latent_dim, num_actions=5, hidden_dim=128):
+    def __init__(self, latent_dim, num_actions=5, hidden_dim=128, gen_scope="full"):
         super().__init__()
         self.num_actions = num_actions
+        self.gen_scope = gen_scope
 
         # (in_dim, out_dim, use_adaln)
         self.layer_specs = [
@@ -358,15 +496,34 @@ class FunctionalPredictionNet(nn.Module):
         self.total_params, self.param_counts = count_params_adaln(self.layer_specs)
         self.param_shapes = layer_specs_to_param_shapes(self.layer_specs)
 
+        if gen_scope == "film_head":
+            self.fc1 = nn.Linear(latent_dim, hidden_dim)
+            self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+            self.generated_param_count, self.gen_spec, self.gen_groups = \
+                count_generated_film_head(self.layer_specs)
+        else:
+            self.generated_param_count = self.total_params
+            self.gen_spec = None
+            self.gen_groups = None
+
     def forward(self, state, flat_params):
         """
         Args:
             state:       (B, latent_dim)
-            flat_params: (B, total_params)
+            flat_params: (B, generated_param_count)
         Returns:
             policy_logits: (B, num_actions)
             value:         (B, 1) in scaled space
         """
+        if self.gen_scope == "film_head":
+            gen = split_generated_film_head(flat_params, self.gen_spec)
+            (g1, bt1), (g2, bt2), (w_p, b_p), (w_v, b_v) = gen
+            x = adaln_modulate(self.fc1(state), g1, bt1)   # shared trunk fc1
+            x = adaln_modulate(self.fc2(x), g2, bt2)       # shared trunk fc2
+            policy_logits = functional_linear(x, w_p, b_p)  # generated head
+            value = functional_linear(x, w_v, b_v)          # generated head
+            return policy_logits, value
+
         params = split_params_adaln(flat_params, self.layer_specs)
 
         # Shared trunk: FC1 + AdaLN + ReLU

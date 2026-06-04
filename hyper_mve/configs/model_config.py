@@ -15,6 +15,7 @@ from hyper_mve.schemas._constants import (
 
 
 _VALID_BELIEF_POOL: tuple[str, ...] = ("mean", "max", "attention")
+_VALID_GEN_SCOPE: tuple[str, ...] = ("full", "film_head")
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,11 @@ class ModelConfig:
     rew_output_scale_init: float = 0.1     # v4.7-tuned; bigger than trans/pred
     pred_output_scale_init: float = 0.01
 
+    # HyperNet generation scope: "full" = generate every functional-net weight (legacy
+    # default); "film_head" = shared SGD fc1/fc2 trunk + generate only FiLM gamma/beta +
+    # output head (partial generation, grouped-RMS-normed). See duo preset.
+    hyper_gen_scope: str = "full"
+
     # AdaLN (Ch4.6 defence line 2)
     use_adaln: bool = True
     adaln_residual_one_plus: bool = True   # h × (1 + γ) + β
@@ -84,6 +90,11 @@ class ModelConfig:
         if self.belief_pool not in _VALID_BELIEF_POOL:
             raise ValueError(
                 f"Unknown belief_pool: {self.belief_pool!r} (valid: {_VALID_BELIEF_POOL})"
+            )
+        if self.hyper_gen_scope not in _VALID_GEN_SCOPE:
+            raise ValueError(
+                f"Unknown hyper_gen_scope: {self.hyper_gen_scope!r} "
+                f"(valid: {_VALID_GEN_SCOPE})"
             )
 
     @property

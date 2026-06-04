@@ -21,7 +21,17 @@ from .medium import build_medium_config
 
 
 def build_duo_config() -> V4Config:
-    """Construct the 2-agent drift V4Config (Medium-scale, N=2, random_walk)."""
+    """Construct the 2-agent drift V4Config (Medium-scale, N=2, random_walk).
+
+    Uses the ``film_head`` partial-generation hypernet (shared SGD fc1/fc2 trunk +
+    generated FiLM gamma/beta + output head, grouped-RMS-normed) plus the companion
+    knobs that unstarve per-agent prediction differentiation: ``detach_pred_context=
+    False`` (let policy/value gradient reach role/belief encoders, now that the trunk
+    is a stable shared SGD net) and all three ``*_output_scale_init=0.1`` (symmetric;
+    with grouped RMS norm each generated element starts at ~0.1, so FiLM gamma actually
+    modulates and the generated head starts near fan-in standard init). These target
+    the cos_pred_cross->0.998 collapse seen in the FULL-generation run.
+    """
     base = build_medium_config()
 
     # N and type_assignment must change together: ``replace`` applies all kwargs
@@ -33,4 +43,13 @@ def build_duo_config() -> V4Config:
         c_mode="random_walk",
     )
 
-    return replace(base, env=env, preset_name="duo")
+    model = replace(
+        base.model,
+        hyper_gen_scope="film_head",
+        trans_output_scale_init=0.1,   # symmetric with rew (already 0.1) under grouped RMS norm
+        pred_output_scale_init=0.1,
+    )
+
+    train = replace(base.train, detach_pred_context=False)
+
+    return replace(base, env=env, model=model, train=train, preset_name="duo")
