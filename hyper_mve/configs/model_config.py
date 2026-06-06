@@ -15,7 +15,7 @@ from hyper_mve.schemas._constants import (
 
 
 _VALID_BELIEF_POOL: tuple[str, ...] = ("mean", "max", "attention")
-_VALID_GEN_SCOPE: tuple[str, ...] = ("full", "film_head")
+_VALID_GEN_SCOPE: tuple[str, ...] = ("full", "film_head", "base_gen")
 
 
 @dataclass(frozen=True)
@@ -56,8 +56,17 @@ class ModelConfig:
 
     # HyperNet generation scope: "full" = generate every functional-net weight (legacy
     # default); "film_head" = shared SGD fc1/fc2 trunk + generate only FiLM gamma/beta +
-    # output head (partial generation, grouped-RMS-normed). See duo preset.
+    # output head (partial generation, grouped-RMS-normed); "base_gen" = plain SGD fc1
+    # base (Linear+LN+ReLU, no FiLM) + fully generate fc2 (weight + FiLM gamma/beta) +
+    # output head (CCWM fc_dynamics_1/fc_dynamics_2 style; more capacity than film_head,
+    # more stable than full). See duo / duo_basegen presets.
     hyper_gen_scope: str = "full"
+
+    # Share the subjective hypernet trunk: when True, hyper_rew + hyper_pred collapse to
+    # one shared trunk over ctx_aug (depth = hyper_rew_hidden_dims) with two output heads
+    # (theta_rew, theta_pred), each keeping its own output_scale + RMS groups. hyper_trans
+    # (objective) stays separate. False (default) = two independent MLPs (legacy).
+    share_subjective_trunk: bool = False
 
     # AdaLN (Ch4.6 defence line 2)
     use_adaln: bool = True

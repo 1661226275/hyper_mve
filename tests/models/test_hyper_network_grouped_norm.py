@@ -66,6 +66,26 @@ def test_output_groups_must_sum_to_output_dim():
         HyperNetMLP(input_dim=80, output_dim=OUT, output_groups=[FILM_TOTAL, HEAD_TOTAL + 1])
 
 
+def test_base_gen_grouped_rms_film_and_weight():
+    # base_gen trans-shaped output: film 256 (fc2 gamma/beta) + weight 24768 (fc2 w+b +
+    # head). The weight group is far larger than the film group, so per-group RMS (not
+    # whole-vector L2) is what keeps the small film group's gamma meaningful.
+    film_total, weight_total = 256, 24768
+    out_dim = film_total + weight_total
+    torch.manual_seed(0)
+    mlp = HyperNetMLP(
+        input_dim=80, output_dim=out_dim, hidden_dims=(64, 64),
+        norm_output=True, output_scale_init=SCALE,
+        output_groups=[film_total, weight_total],
+    )
+    out = mlp(torch.randn(16, 80))
+    # fc2 gamma occupies the first 128 of the 256-wide film segment.
+    assert out[:, 0:128].abs().mean().item() >= 1e-2
+    # weight segment RMS ~ output_scale (starts near fan-in standard init).
+    weight_rms = out[:, film_total:].pow(2).mean(dim=-1).sqrt().mean().item()
+    assert abs(weight_rms - SCALE) < 0.03
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

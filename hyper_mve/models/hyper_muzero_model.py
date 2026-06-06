@@ -45,7 +45,7 @@ REQUIRED_MODEL_FIELDS = [
     "latent_dim", "hidden_dim",
     "hyper_hidden_dims", "hyper_rew_hidden_dims",
     "trans_output_scale_init", "rew_output_scale_init", "pred_output_scale_init",
-    "hyper_gen_scope",
+    "hyper_gen_scope", "share_subjective_trunk",
     "use_adaln", "adaln_residual_one_plus", "state_trans_residual",
     "belief_gru_hidden", "belief_pool", "proj_dim",
 ]
@@ -110,6 +110,7 @@ class HyperMuZeroModel(nn.Module):
             trans_output_groups=self.state_trans_net.gen_groups,
             rew_output_groups=self.reward_head.gen_groups,
             pred_output_groups=self.prediction_net.gen_groups,
+            share_subjective_trunk=cfg.model.share_subjective_trunk,
         )
 
         # Belief gradient gating helper (spec 04)

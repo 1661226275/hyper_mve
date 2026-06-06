@@ -92,11 +92,38 @@ def test_duo_preset_two_agent_drift():
     assert cfg.train == replace(medium.train, detach_pred_context=False)
 
 
+def test_duo_basegen_preset():
+    cfg = V4Config.from_preset("duo_basegen")
+    # same duo env (2-agent 1α+1β drift)
+    assert cfg.env.N == 2
+    assert cfg.env.type_assignment == (AgentType.ALPHA, AgentType.BETA)
+    assert cfg.env.c_mode == "random_walk"
+    assert cfg.preset_name == "duo_basegen"
+    assert cfg.model.d_ctx_aug == 80
+
+    # base_gen + shared subjective trunk + companion knobs (Idea 1 + Idea 2).
+    assert cfg.model.hyper_gen_scope == "base_gen"
+    assert cfg.model.share_subjective_trunk is True
+    assert cfg.model.trans_output_scale_init == 0.1
+    assert cfg.model.rew_output_scale_init == 0.1
+    assert cfg.model.pred_output_scale_init == 0.1
+    assert cfg.train.detach_pred_context is False
+
+    # ONLY those fields differ from medium — verify nothing else drifted.
+    medium = V4Config.from_preset("medium")
+    assert cfg.model == replace(
+        medium.model, hyper_gen_scope="base_gen", share_subjective_trunk=True,
+        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
+    )
+    assert cfg.train == replace(medium.train, detach_pred_context=False)
+
+
 def test_preset_name_field():
     assert V4Config.from_preset("easy").preset_name == "easy"
     assert V4Config.from_preset("medium").preset_name == "medium"
     assert V4Config.from_preset("hard").preset_name == "hard"
     assert V4Config.from_preset("duo").preset_name == "duo"
+    assert V4Config.from_preset("duo_basegen").preset_name == "duo_basegen"
 
 
 def test_easy_inherits_from_medium():
@@ -124,12 +151,12 @@ def test_hard_inherits_from_medium_except_env():
 
 
 def test_all_presets_construct_without_error():
-    for name in ("easy", "medium", "hard", "duo"):
+    for name in ("easy", "medium", "hard", "duo", "duo_basegen"):
         V4Config.from_preset(name)
 
 
 def test_preset_to_dict_serialisable():
-    for name in ("easy", "medium", "hard", "duo"):
+    for name in ("easy", "medium", "hard", "duo", "duo_basegen"):
         cfg = V4Config.from_preset(name)
         s = json.dumps(cfg.to_dict())
         assert len(s) > 500

@@ -25,6 +25,38 @@ import torch.nn.functional as F
 from hyper_mve.utils.utils import orthogonal_init, small_init
 
 
+def normalize_generated_output(raw, output_scale, norm_output, output_groups):
+    """Apply HyperNet output normalization + learnable scale (shared helper).
+
+    Used by both ``HyperNetMLP`` and ``SubjectiveHyperNet``'s heads so the math is
+    defined once. Identical ops + ``1e-8`` epsilons to the original inline version.
+
+    - ``norm_output=False``: ``raw * output_scale``.
+    - ``output_groups is None``: whole-vector L2 norm (``||raw||=1``) then ``*scale``
+      (FULL gen_scope legacy behavior — unchanged).
+    - ``output_groups`` set: per-group RMS norm so each element's magnitude ≈ scale
+      regardless of group dim (film_head / base_gen). Whole-vector L2 would pin a FiLM
+      gamma element at ~scale/√dim (e.g. 0.1/√512 ≈ 4e-3 -> (1+γ)≈1 -> no modulation);
+      RMS-normalizing the film segment separately keeps |γ| ≈ scale, and the weight
+      segment starts near fan-in standard init.
+    """
+    if not norm_output:
+        return raw * output_scale
+
+    if output_groups is None:
+        norms = torch.linalg.norm(raw, dim=-1, keepdim=True)
+        return raw / (norms + 1e-8) * output_scale
+
+    segs = []
+    offset = 0
+    for g in output_groups:
+        seg = raw[:, offset:offset + g]
+        rms = torch.sqrt(seg.pow(2).mean(dim=-1, keepdim=True) + 1e-8)
+        segs.append(seg / rms)
+        offset += g
+    return torch.cat(segs, dim=-1) * output_scale
+
+
 class HyperNetMLP(nn.Module):
     """从 context embedding 生成 flat parameter vector (v4.7 保留, 结构不变).
 
@@ -93,29 +125,86 @@ class HyperNetMLP(nn.Module):
         """
         h = self.trunk(context)
         raw = self.output_layer(h)
+        return normalize_generated_output(
+            raw, self.output_scale, self.norm_output, self.output_groups
+        )
 
-        if not self.norm_output:
-            return raw * self.output_scale
 
-        if self.output_groups is None:
-            # [v4.0] whole-vector L2 normalization (FULL gen_scope): ||raw|| = 1
-            norms = torch.linalg.norm(raw, dim=-1, keepdim=True)
-            raw = raw / (norms + 1e-8)
-            return raw * self.output_scale
+class SubjectiveHyperNet(nn.Module):
+    """Shared subjective generator (Idea 1): one trunk over ctx_aug -> two heads
+    (theta_rew, theta_pred). Replaces the two independent hyper_rew/hyper_pred MLPs
+    when ``share_subjective_trunk=True``. ``hyper_trans`` (objective) is unaffected.
 
-        # [film_head] per-group RMS normalization so each element's magnitude ≈
-        # output_scale regardless of group dim. Whole-vector L2 would pin a FiLM
-        # gamma element at ~output_scale/√dim (e.g. 0.1/√512 ≈ 4e-3 -> (1+γ)≈1 ->
-        # no modulation); RMS-normalizing the film segment separately keeps |γ| ≈
-        # output_scale, and the head segment starts near fan-in standard init.
-        segs = []
-        offset = 0
-        for g in self.output_groups:
-            seg = raw[:, offset:offset + g]
-            rms = torch.sqrt(seg.pow(2).mean(dim=-1, keepdim=True) + 1e-8)
-            segs.append(seg / rms)
-            offset += g
-        return torch.cat(segs, dim=-1) * self.output_scale
+    Each head keeps its OWN ``output_scale`` and ``output_groups`` so rew/pred retain
+    their distinct init magnitudes + grouped-RMS norm. The shared trunk couples the
+    two subjective representations (the intended effect).
+
+    Detach (D5) under sharing: when ``detach_pred_context=True`` the pred head detaches
+    the SHARED TRUNK OUTPUT (``h.detach()``), so value loss trains ONLY ``pred_head`` --
+    not the shared trunk or context encoder. This is STRONGER than the unshared
+    input-detach (which still trains hyper_pred's own trunk). When False, both heads +
+    trunk train from both losses (the new ``duo_basegen`` preset uses False).
+    """
+
+    def __init__(
+        self,
+        ctx_aug_dim,
+        rew_param_count,
+        pred_param_count,
+        hidden_dims=(256, 256, 256),
+        norm_output=True,
+        rew_output_scale_init=0.1,
+        pred_output_scale_init=0.01,
+        detach_pred_context=True,
+        rew_output_groups=None,
+        pred_output_groups=None,
+    ):
+        super().__init__()
+        layers = []
+        prev_dim = ctx_aug_dim
+        for h_dim in hidden_dims:
+            layers.append(nn.Linear(prev_dim, h_dim))
+            layers.append(nn.LayerNorm(h_dim))
+            layers.append(nn.ReLU())
+            prev_dim = h_dim
+        self.trunk = nn.Sequential(*layers)
+        self.rew_head = nn.Linear(prev_dim, rew_param_count)
+        self.pred_head = nn.Linear(prev_dim, pred_param_count)
+
+        # Same init scheme as HyperNetMLP: orthogonal trunk, small output heads.
+        for module in self.trunk:
+            if isinstance(module, nn.Linear):
+                orthogonal_init(module)
+        small_init(self.rew_head, std=0.01)
+        small_init(self.pred_head, std=0.01)
+
+        self.norm_output = norm_output
+        self.detach_pred_context = detach_pred_context
+        self.rew_output_groups = rew_output_groups
+        self.pred_output_groups = pred_output_groups
+        self.rew_output_scale = nn.Parameter(torch.tensor(float(rew_output_scale_init)))
+        self.pred_output_scale = nn.Parameter(torch.tensor(float(pred_output_scale_init)))
+
+    def forward(self, ctx_aug):
+        """ctx_aug (B, ctx_aug_dim) -> (theta_rew, theta_pred)."""
+        h = self.trunk(ctx_aug)
+        theta_rew = normalize_generated_output(
+            self.rew_head(h), self.rew_output_scale,
+            self.norm_output, self.rew_output_groups,
+        )
+        h_pred = h.detach() if self.detach_pred_context else h
+        theta_pred = normalize_generated_output(
+            self.pred_head(h_pred), self.pred_output_scale,
+            self.norm_output, self.pred_output_groups,
+        )
+        return theta_rew, theta_pred
+
+    def rew_only(self, ctx_aug):
+        """ctx_aug -> theta_rew (callable for reward_diversity_loss under sharing)."""
+        return normalize_generated_output(
+            self.rew_head(self.trunk(ctx_aug)), self.rew_output_scale,
+            self.norm_output, self.rew_output_groups,
+        )
 
 
 class DualHyperNetwork(nn.Module):
@@ -145,6 +234,7 @@ class DualHyperNetwork(nn.Module):
         trans_output_groups=None,         # film_head: 分组 RMS 归一化的连续段大小
         rew_output_groups=None,
         pred_output_groups=None,
+        share_subjective_trunk=False,     # Idea 1: 共享 hyper_rew/pred trunk
     ):
         """
         Args:
@@ -164,10 +254,11 @@ class DualHyperNetwork(nn.Module):
         self.c_ctx_dim = c_ctx_dim
         self.ctx_aug_dim = ctx_aug_dim
         self.detach_pred_context = detach_pred_context
+        self.share_subjective_trunk = share_subjective_trunk
 
         rew_hdims = rew_hidden_dims if rew_hidden_dims is not None else hidden_dims
 
-        # C1: hyper_trans 仅接 c_ctx_dim (16)
+        # C1: hyper_trans 仅接 c_ctx_dim (16) -- 客观通路, 永不共享
         self.hyper_trans = HyperNetMLP(
             input_dim=c_ctx_dim,
             output_dim=trans_param_count,
@@ -177,25 +268,41 @@ class DualHyperNetwork(nn.Module):
             output_groups=trans_output_groups,
         )
 
-        # C2: hyper_rew 接完整 ctx_aug_dim (80), 更深 3 层
-        self.hyper_rew = HyperNetMLP(
-            input_dim=ctx_aug_dim,
-            output_dim=rew_param_count,
-            hidden_dims=rew_hdims,
-            norm_output=norm_output,
-            output_scale_init=rew_output_scale_init,   # 0.1 关键
-            output_groups=rew_output_groups,
-        )
+        if share_subjective_trunk:
+            # Idea 1: 共享 trunk (深度 = rew_hdims) -> 两个 head (theta_rew/theta_pred).
+            # 每个 head 保留各自 output_scale + output_groups.
+            self.subjective = SubjectiveHyperNet(
+                ctx_aug_dim=ctx_aug_dim,
+                rew_param_count=rew_param_count,
+                pred_param_count=pred_param_count,
+                hidden_dims=rew_hdims,
+                norm_output=norm_output,
+                rew_output_scale_init=rew_output_scale_init,
+                pred_output_scale_init=pred_output_scale_init,
+                detach_pred_context=detach_pred_context,
+                rew_output_groups=rew_output_groups,
+                pred_output_groups=pred_output_groups,
+            )
+        else:
+            # C2: hyper_rew 接完整 ctx_aug_dim (80), 更深 3 层
+            self.hyper_rew = HyperNetMLP(
+                input_dim=ctx_aug_dim,
+                output_dim=rew_param_count,
+                hidden_dims=rew_hdims,
+                norm_output=norm_output,
+                output_scale_init=rew_output_scale_init,   # 0.1 关键
+                output_groups=rew_output_groups,
+            )
 
-        # C2: hyper_pred 同接 ctx_aug_dim (80)
-        self.hyper_pred = HyperNetMLP(
-            input_dim=ctx_aug_dim,
-            output_dim=pred_param_count,
-            hidden_dims=hidden_dims,
-            norm_output=norm_output,
-            output_scale_init=pred_output_scale_init,
-            output_groups=pred_output_groups,
-        )
+            # C2: hyper_pred 同接 ctx_aug_dim (80)
+            self.hyper_pred = HyperNetMLP(
+                input_dim=ctx_aug_dim,
+                output_dim=pred_param_count,
+                hidden_dims=hidden_dims,
+                norm_output=norm_output,
+                output_scale_init=pred_output_scale_init,
+                output_groups=pred_output_groups,
+            )
 
         self.trans_param_count = trans_param_count
         self.rew_param_count = rew_param_count
@@ -233,6 +340,10 @@ class DualHyperNetwork(nn.Module):
             f"ctx_aug last dim {ctx_aug.shape[-1]} != ctx_aug_dim {self.ctx_aug_dim}"
         )
 
+        if self.share_subjective_trunk:
+            # 共享 trunk: detach (D5) 在 trunk 输出处处理 (见 SubjectiveHyperNet.forward)
+            return self.subjective(ctx_aug)
+
         theta_rew = self.hyper_rew(ctx_aug)
 
         # D5: hyper_pred 输入是否 detach (仅在传入 hyper_pred 那一行 detach, 不改原 ctx_aug)
@@ -250,6 +361,9 @@ def reward_diversity_loss(hyper_rew, ctx_aug_per_agent, target_cos=0.3, skip_pai
     按 D2: v4 type-aware 已通过 type_emb -> hyper_rew -> theta_rew^i 隐含实现.
     本 loss 作为辅助正则 (cfg.legacy.w_rew_diversity 控制权重, 默认 0.0),
     仅 Pkg-08 Ablation 启用做对照.
+
+    注: share_subjective_trunk=True 时无独立 hyper_rew 模块, 传入
+    model.hyper_net.subjective.rew_only 作为 hyper_rew callable 即可.
 
     Uses hinge loss: 仅当 cos_sim > target_cos 时惩罚, 充分分化后 loss 自然归零.
 

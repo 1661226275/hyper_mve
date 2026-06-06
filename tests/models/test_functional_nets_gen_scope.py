@@ -25,6 +25,10 @@ FULL = {"trans": 35136, "rew": 27009, "pred": 26247}
 # film_head generated (N-independent): film 512 (= 2*128 gamma/beta * 2 hidden) + head.
 FILM = {"trans": 8768, "rew": 641, "pred": 1415}
 GROUPS = {"trans": [512, 8256], "rew": [512, 129], "pred": [512, 903]}
+# base_gen generated (Option B): plain SGD fc1 base (nothing generated) + fc2 fully
+# generated (weight+FiLM) + head. film 256 (fc2 gamma/beta) + weight (fc2 w+b + head).
+BASE = {"trans": 25024, "rew": 16897, "pred": 17671}
+BASE_GROUPS = {"trans": [256, 24768], "rew": [256, 16641], "pred": [256, 17415]}
 
 
 def _build(net, gen_scope):
@@ -98,6 +102,58 @@ def test_full_mode_forward_unchanged_shapes():
     pred = _build("pred", "full")
     pi, v = pred(state, torch.randn(B, FULL["pred"]))
     assert pi.shape == (B, A) and v.shape == (B, 1)
+
+
+@pytest.mark.parametrize("net", ["trans", "rew", "pred"])
+def test_base_gen_generated_counts_and_groups(net):
+    m = _build(net, "base_gen")
+    assert m.generated_param_count == BASE[net]
+    assert m.generated_param_count < m.total_params
+    assert m.gen_groups == BASE_GROUPS[net]
+    assert sum(m.gen_groups) == m.generated_param_count
+
+
+@pytest.mark.parametrize("net", ["trans", "rew", "pred"])
+def test_base_gen_structure(net):
+    m = _build(net, "base_gen")
+    # plain SGD fc1 base (Linear + ln1) exists and trains; fc2 is GENERATED -> absent.
+    assert hasattr(m, "fc1") and m.fc1.weight.requires_grad
+    assert hasattr(m, "ln1") and isinstance(m.ln1, torch.nn.LayerNorm)
+    assert not hasattr(m, "fc2")
+
+
+def test_base_gen_forward_shapes_no_nan():
+    B = 4
+    state = torch.randn(B, LATENT)
+    action = torch.zeros(B, JOINT)
+    action[:, 0] = 1.0
+
+    trans = _build("trans", "base_gen")
+    rew = _build("rew", "base_gen")
+    pred = _build("pred", "base_gen")
+
+    s_next = trans(state, action, torch.randn(B, BASE["trans"]))
+    r = rew(state, action, torch.randn(B, BASE["rew"]))
+    pi, v = pred(state, torch.randn(B, BASE["pred"]))
+
+    assert s_next.shape == (B, LATENT)
+    assert r.shape == (B, 1)
+    assert pi.shape == (B, A)
+    assert v.shape == (B, 1)
+    for t in (s_next, r, pi, v):
+        assert not torch.isnan(t).any()
+
+
+def test_base_gen_state_trans_zero_params_is_residual_identity():
+    # Zero generated params -> head W=b=0 -> delta_s (pre-LN)=0 -> LN(0)=0 -> s_next =
+    # state. Confirms the residual path survives the SGD-base + generated-fc2 split.
+    B = 3
+    trans = _build("trans", "base_gen")
+    state = torch.randn(B, LATENT)
+    action = torch.zeros(B, JOINT)
+    action[:, 0] = 1.0
+    s_next = trans(state, action, torch.zeros(B, BASE["trans"]))
+    assert torch.allclose(s_next, state, atol=1e-5)
 
 
 if __name__ == "__main__":
