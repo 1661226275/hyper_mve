@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
+import pytest
+
 from hyper_mve.configs import V4Config
 from hyper_mve.schemas import AgentType
 
@@ -118,12 +120,137 @@ def test_duo_basegen_preset():
     assert cfg.train == replace(medium.train, detach_pred_context=False)
 
 
+def test_duo_film_lora_preset():
+    cfg = V4Config.from_preset("duo_film_lora")
+    assert cfg.env.N == 2
+    assert cfg.env.type_assignment == (AgentType.ALPHA, AgentType.BETA)
+    assert cfg.env.c_mode == "random_walk"
+    assert cfg.preset_name == "duo_film_lora"
+    # film_head + 3-way output-layer LoRA(r=32), no lora_fc2, separate hypernets.
+    assert cfg.model.hyper_gen_scope == "film_head"
+    assert cfg.model.hyper_output_rank == 32
+    assert cfg.model.lora_fc2_rank is None
+    assert cfg.model.share_subjective_trunk is False
+    assert cfg.model.trans_output_scale_init == 0.1
+    assert cfg.model.rew_output_scale_init == 0.1
+    assert cfg.model.pred_output_scale_init == 0.1
+    assert cfg.train.detach_pred_context is False
+    medium = V4Config.from_preset("medium")
+    assert cfg.model == replace(
+        medium.model, hyper_gen_scope="film_head", hyper_output_rank=32,
+        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
+    )
+    assert cfg.train == replace(medium.train, detach_pred_context=False)
+
+
+def test_duo_film_lora_fc2_preset():
+    cfg = V4Config.from_preset("duo_film_lora_fc2")
+    assert cfg.env.N == 2
+    assert cfg.preset_name == "duo_film_lora_fc2"
+    # lora_fc2 (film_head + per-context rank-8 fc2 delta) + 3-way output-layer LoRA(r=32).
+    assert cfg.model.hyper_gen_scope == "lora_fc2"
+    assert cfg.model.lora_fc2_rank == 8
+    assert cfg.model.hyper_output_rank == 32
+    assert cfg.model.share_subjective_trunk is False
+    assert cfg.model.trans_output_scale_init == 0.1
+    assert cfg.model.pred_output_scale_init == 0.1
+    assert cfg.train.detach_pred_context is False
+    medium = V4Config.from_preset("medium")
+    assert cfg.model == replace(
+        medium.model, hyper_gen_scope="lora_fc2", lora_fc2_rank=8, hyper_output_rank=32,
+        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
+    )
+
+
+def test_duo_base_lora_preset():
+    cfg = V4Config.from_preset("duo_base_lora")
+    assert cfg.env.N == 2
+    assert cfg.preset_name == "duo_base_lora"
+    # base_gen + 3-way output-layer LoRA(r=32); lora_fc2 forbidden -> stays None.
+    assert cfg.model.hyper_gen_scope == "base_gen"
+    assert cfg.model.hyper_output_rank == 32
+    assert cfg.model.lora_fc2_rank is None
+    assert cfg.model.share_subjective_trunk is False
+    medium = V4Config.from_preset("medium")
+    assert cfg.model == replace(
+        medium.model, hyper_gen_scope="base_gen", hyper_output_rank=32,
+        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
+    )
+
+
+def test_medium_film_lora_preset():
+    cfg = V4Config.from_preset("medium_film_lora")
+    medium = V4Config.from_preset("medium")
+    assert cfg.env == medium.env          # N=4 (2a+2b, static) env untouched
+    assert cfg.preset_name == "medium_film_lora"
+    assert cfg.model.hyper_gen_scope == "film_head"
+    assert cfg.model.hyper_output_rank == 32
+    assert cfg.model.lora_fc2_rank is None
+    assert cfg.model.share_subjective_trunk is False
+    assert cfg.train.detach_pred_context is False
+    assert cfg.model == replace(
+        medium.model, hyper_gen_scope="film_head", hyper_output_rank=32,
+        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
+    )
+    assert cfg.train == replace(medium.train, detach_pred_context=False)
+
+
+def test_medium_film_lora_fc2_preset():
+    cfg = V4Config.from_preset("medium_film_lora_fc2")
+    medium = V4Config.from_preset("medium")
+    assert cfg.env == medium.env
+    assert cfg.preset_name == "medium_film_lora_fc2"
+    assert cfg.model.hyper_gen_scope == "lora_fc2"
+    assert cfg.model.lora_fc2_rank == 8
+    assert cfg.model.hyper_output_rank == 32
+    assert cfg.model.share_subjective_trunk is False
+    assert cfg.model == replace(
+        medium.model, hyper_gen_scope="lora_fc2", lora_fc2_rank=8, hyper_output_rank=32,
+        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
+    )
+
+
+def test_medium_base_lora_preset():
+    cfg = V4Config.from_preset("medium_base_lora")
+    medium = V4Config.from_preset("medium")
+    assert cfg.env == medium.env
+    assert cfg.preset_name == "medium_base_lora"
+    assert cfg.model.hyper_gen_scope == "base_gen"
+    assert cfg.model.hyper_output_rank == 32
+    assert cfg.model.lora_fc2_rank is None
+    assert cfg.model.share_subjective_trunk is False
+    assert cfg.model == replace(
+        medium.model, hyper_gen_scope="base_gen", hyper_output_rank=32,
+        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
+    )
+
+
+def test_base_gen_forbids_lora_fc2_rank():
+    """ModelConfig.__post_init__ rejects lora_fc2_rank on base_gen (Delta_W redundant)."""
+    from hyper_mve.configs.model_config import ModelConfig
+    with pytest.raises(AssertionError, match="base_gen"):
+        ModelConfig(hyper_gen_scope="base_gen", lora_fc2_rank=8)
+
+
+def test_lora_fc2_requires_expressive_output_scale():
+    """lora_fc2 with the default 0.01 trans/pred scales fails the >= 0.05 guardrail."""
+    from hyper_mve.configs.model_config import ModelConfig
+    with pytest.raises(AssertionError, match="output_scale_init"):
+        ModelConfig(hyper_gen_scope="lora_fc2", lora_fc2_rank=8)
+
+
 def test_preset_name_field():
     assert V4Config.from_preset("easy").preset_name == "easy"
     assert V4Config.from_preset("medium").preset_name == "medium"
     assert V4Config.from_preset("hard").preset_name == "hard"
     assert V4Config.from_preset("duo").preset_name == "duo"
     assert V4Config.from_preset("duo_basegen").preset_name == "duo_basegen"
+    assert V4Config.from_preset("duo_film_lora").preset_name == "duo_film_lora"
+    assert V4Config.from_preset("duo_film_lora_fc2").preset_name == "duo_film_lora_fc2"
+    assert V4Config.from_preset("duo_base_lora").preset_name == "duo_base_lora"
+    assert V4Config.from_preset("medium_film_lora").preset_name == "medium_film_lora"
+    assert V4Config.from_preset("medium_film_lora_fc2").preset_name == "medium_film_lora_fc2"
+    assert V4Config.from_preset("medium_base_lora").preset_name == "medium_base_lora"
 
 
 def test_easy_inherits_from_medium():
@@ -151,12 +278,16 @@ def test_hard_inherits_from_medium_except_env():
 
 
 def test_all_presets_construct_without_error():
-    for name in ("easy", "medium", "hard", "duo", "duo_basegen"):
+    for name in ("easy", "medium", "hard", "duo", "duo_basegen",
+                 "duo_film_lora", "duo_film_lora_fc2", "duo_base_lora",
+                 "medium_film_lora", "medium_film_lora_fc2", "medium_base_lora"):
         V4Config.from_preset(name)
 
 
 def test_preset_to_dict_serialisable():
-    for name in ("easy", "medium", "hard", "duo", "duo_basegen"):
+    for name in ("easy", "medium", "hard", "duo", "duo_basegen",
+                 "duo_film_lora", "duo_film_lora_fc2", "duo_base_lora",
+                 "medium_film_lora", "medium_film_lora_fc2", "medium_base_lora"):
         cfg = V4Config.from_preset(name)
         s = json.dumps(cfg.to_dict())
         assert len(s) > 500

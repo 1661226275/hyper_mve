@@ -46,6 +46,7 @@ REQUIRED_MODEL_FIELDS = [
     "hyper_hidden_dims", "hyper_rew_hidden_dims",
     "trans_output_scale_init", "rew_output_scale_init", "pred_output_scale_init",
     "hyper_gen_scope", "share_subjective_trunk",
+    "hyper_output_rank", "lora_fc2_rank",
     "use_adaln", "adaln_residual_one_plus", "state_trans_residual",
     "belief_gru_hidden", "belief_pool", "proj_dim",
 ]
@@ -88,9 +89,11 @@ class HyperMuZeroModel(nn.Module):
         joint_action_dim = cfg.env.N * cfg.env.A
         hidden_dim = cfg.model.hidden_dim
         gen_scope = cfg.model.hyper_gen_scope
-        self.state_trans_net = FunctionalStateTransNet(latent_dim, joint_action_dim, hidden_dim, gen_scope)
-        self.reward_head = FunctionalRewardHead(latent_dim, joint_action_dim, hidden_dim, gen_scope)
-        self.prediction_net = FunctionalPredictionNet(latent_dim, cfg.env.A, hidden_dim, gen_scope)
+        # [lora_fc2] rank only takes effect for the lora_fc2 scope (film_head-derived).
+        lora_rank = cfg.model.lora_fc2_rank if gen_scope == "lora_fc2" else None
+        self.state_trans_net = FunctionalStateTransNet(latent_dim, joint_action_dim, hidden_dim, gen_scope, lora_rank)
+        self.reward_head = FunctionalRewardHead(latent_dim, joint_action_dim, hidden_dim, gen_scope, lora_rank)
+        self.prediction_net = FunctionalPredictionNet(latent_dim, cfg.env.A, hidden_dim, gen_scope, lora_rank)
 
         # DualHyperNetwork v2 (spec 01). 按 generated_param_count 定尺寸 (FULL 时 ==
         # total_params; film_head 时只生成 FiLM γ/β + 头), 并把分组边界传给各 HyperNetMLP
@@ -111,6 +114,7 @@ class HyperMuZeroModel(nn.Module):
             rew_output_groups=self.reward_head.gen_groups,
             pred_output_groups=self.prediction_net.gen_groups,
             share_subjective_trunk=cfg.model.share_subjective_trunk,
+            hyper_output_rank=cfg.model.hyper_output_rank,
         )
 
         # Belief gradient gating helper (spec 04)

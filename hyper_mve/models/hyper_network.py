@@ -69,7 +69,7 @@ class HyperNetMLP(nn.Module):
     """
 
     def __init__(self, input_dim, output_dim, hidden_dims=None, norm_output=True,
-                 output_scale_init=0.01, output_groups=None):
+                 output_scale_init=0.01, output_groups=None, output_rank=None):
         """
         Args:
             input_dim:         dimension of input context
@@ -84,6 +84,10 @@ class HyperNetMLP(nn.Module):
                                output_scale, dimension-independent) instead of the whole
                                vector being L2-normalized to unit norm. None (default) =
                                legacy whole-vector L2 norm (FULL gen_scope), unchanged.
+            output_rank:       [LoRA] when set to r, factorize the output projection
+                               Linear(prev, output_dim) into Linear(prev, r, bias=False) ->
+                               Linear(r, output_dim) (params prev*output_dim -> prev*r +
+                               r*output_dim). None (default) = dense (legacy, unchanged).
         """
         super().__init__()
         if hidden_dims is None:
@@ -103,13 +107,24 @@ class HyperNetMLP(nn.Module):
             prev_dim = h_dim
 
         self.trunk = nn.Sequential(*layers)
-        self.output_layer = nn.Linear(prev_dim, output_dim)
 
-        # Initialize trunk with orthogonal, output with small weights
+        # Output projection: dense (default) or [LoRA] low-rank factorization.
+        self.output_rank = output_rank
+        if output_rank is None:
+            self.output_layer = nn.Linear(prev_dim, output_dim)
+            small_init(self.output_layer, std=0.01)
+        else:
+            self.output_A = nn.Linear(prev_dim, output_rank, bias=False)
+            self.output_B = nn.Linear(output_rank, output_dim, bias=True)
+            orthogonal_init(self.output_A)
+            # B small_init (NOT zero): B=0 -> raw=0 -> per-group RMS divides by the 1e-8 floor
+            # -> ~1e4 step-0 gradient spike. small_init reproduces the dense output magnitude.
+            small_init(self.output_B, std=0.01)
+
+        # Initialize trunk with orthogonal weights
         for module in self.trunk:
             if isinstance(module, nn.Linear):
                 orthogonal_init(module)
-        small_init(self.output_layer, std=0.01)
 
         # [v4.0] L2 Norm + Scale stability trick
         self.norm_output = norm_output
@@ -124,7 +139,8 @@ class HyperNetMLP(nn.Module):
             flat_params: (B, output_dim) -- generated parameters
         """
         h = self.trunk(context)
-        raw = self.output_layer(h)
+        raw = (self.output_layer(h) if self.output_rank is None
+               else self.output_B(self.output_A(h)))
         return normalize_generated_output(
             raw, self.output_scale, self.norm_output, self.output_groups
         )
@@ -235,6 +251,7 @@ class DualHyperNetwork(nn.Module):
         rew_output_groups=None,
         pred_output_groups=None,
         share_subjective_trunk=False,     # Idea 1: 共享 hyper_rew/pred trunk
+        hyper_output_rank=None,           # [LoRA] output_layer 低秩分解 (3 路统一 r)
     ):
         """
         Args:
@@ -256,6 +273,14 @@ class DualHyperNetwork(nn.Module):
         self.detach_pred_context = detach_pred_context
         self.share_subjective_trunk = share_subjective_trunk
 
+        # [LoRA] output-layer factorization is wired for the three independent HyperNetMLPs
+        # only; the shared SubjectiveHyperNet branch is not yet supported.
+        if share_subjective_trunk and hyper_output_rank is not None:
+            raise NotImplementedError(
+                "Output-layer LoRA (hyper_output_rank) is not yet wired for the shared "
+                "SubjectiveHyperNet (share_subjective_trunk=True). Set one of them off."
+            )
+
         rew_hdims = rew_hidden_dims if rew_hidden_dims is not None else hidden_dims
 
         # C1: hyper_trans 仅接 c_ctx_dim (16) -- 客观通路, 永不共享
@@ -266,6 +291,7 @@ class DualHyperNetwork(nn.Module):
             norm_output=norm_output,
             output_scale_init=trans_output_scale_init,
             output_groups=trans_output_groups,
+            output_rank=hyper_output_rank,
         )
 
         if share_subjective_trunk:
@@ -292,6 +318,7 @@ class DualHyperNetwork(nn.Module):
                 norm_output=norm_output,
                 output_scale_init=rew_output_scale_init,   # 0.1 关键
                 output_groups=rew_output_groups,
+                output_rank=hyper_output_rank,
             )
 
             # C2: hyper_pred 同接 ctx_aug_dim (80)
@@ -302,6 +329,7 @@ class DualHyperNetwork(nn.Module):
                 norm_output=norm_output,
                 output_scale_init=pred_output_scale_init,
                 output_groups=pred_output_groups,
+                output_rank=hyper_output_rank,
             )
 
         self.trans_param_count = trans_param_count

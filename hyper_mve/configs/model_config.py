@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 from hyper_mve.schemas._constants import (
     D_BELIEF,
@@ -15,7 +16,7 @@ from hyper_mve.schemas._constants import (
 
 
 _VALID_BELIEF_POOL: tuple[str, ...] = ("mean", "max", "attention")
-_VALID_GEN_SCOPE: tuple[str, ...] = ("full", "film_head", "base_gen")
+_VALID_GEN_SCOPE: tuple[str, ...] = ("full", "film_head", "base_gen", "lora_fc2")
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,19 @@ class ModelConfig:
     # (objective) stays separate. False (default) = two independent MLPs (legacy).
     share_subjective_trunk: bool = False
 
+    # [LoRA] Output-layer low-rank factorization applied UNIFORMLY to all three hypernets
+    # (hyper_trans / hyper_rew / hyper_pred): when set to r, each HyperNetMLP.output_layer
+    # Linear(prev, pc) becomes Linear(prev, r, bias=False) -> Linear(r, pc). None (default)
+    # = dense (legacy). NOTE: not yet wired for the shared SubjectiveHyperNet
+    # (share_subjective_trunk=True); combining the two raises NotImplementedError.
+    hyper_output_rank: Optional[int] = None
+
+    # [lora_fc2] film_head-exclusive expressivity booster: per-context rank-r weight delta on
+    # the shared fc2 (W2_eff = W2_base + Bf @ Af). Only takes effect when
+    # hyper_gen_scope == "lora_fc2"; forbidden on base_gen (which generates fc2 fully).
+    # Requires *_output_scale_init >= 0.05 so Delta_W stays expressive (see __post_init__).
+    lora_fc2_rank: Optional[int] = None
+
     # AdaLN (Ch4.6 defence line 2)
     use_adaln: bool = True
     adaln_residual_one_plus: bool = True   # h × (1 + γ) + β
@@ -104,6 +118,28 @@ class ModelConfig:
             raise ValueError(
                 f"Unknown hyper_gen_scope: {self.hyper_gen_scope!r} "
                 f"(valid: {_VALID_GEN_SCOPE})"
+            )
+
+        # [lora_fc2] film_head-exclusive: base_gen already generates fc2 fully, so layering a
+        # rank-r Delta_W on top is mathematically redundant.
+        if self.hyper_gen_scope == "base_gen":
+            assert self.lora_fc2_rank in (None, 0), (
+                "lora_fc2_rank must be None or 0 when gen_scope='base_gen' "
+                "(base_gen already generates fc2 fully; Delta_W is redundant)."
+            )
+
+        # [lora_fc2] scale guardrail: under grouped RMS norm each generated element starts at
+        # ~output_scale, so Delta_W = Bf @ Af ~ output_scale^2 * sqrt(r). At the default 0.01
+        # that collapses to ~3e-4 (dead vs the kaiming fc2 base ~0.088); >= 0.05 (recommend
+        # 0.1) keeps it expressive (~0.028 at scale 0.1, r=8).
+        if self.lora_fc2_rank and self.lora_fc2_rank > 0:
+            assert all(s >= 0.05 for s in (
+                self.trans_output_scale_init,
+                self.rew_output_scale_init,
+                self.pred_output_scale_init,
+            )), (
+                "lora_fc2 requires output_scale_init >= 0.05 on all three hypernets "
+                "(recommend 0.1) to keep Delta_W expressive."
             )
 
     @property

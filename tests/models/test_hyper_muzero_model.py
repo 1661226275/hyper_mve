@@ -283,6 +283,50 @@ def test_film_head_per_agent_prediction_differentiates():
     assert not torch.allclose(theta0, theta2)
 
 
+# ====== LoRA presets (output-layer LoRA + lora_fc2) ======
+
+@pytest.mark.parametrize("preset,scope,fc2_rank", [
+    ("duo_film_lora", "film_head", None),
+    ("duo_film_lora_fc2", "lora_fc2", 8),
+    ("duo_base_lora", "base_gen", None),
+])
+def test_lora_presets_construct_with_output_rank(preset, scope, fc2_rank):
+    cfg = V4Config.from_preset(preset)
+    assert cfg.model.hyper_gen_scope == scope
+    assert cfg.model.hyper_output_rank == 32
+    assert cfg.model.lora_fc2_rank == fc2_rank
+    m = HyperMuZeroModel(cfg)
+    # output-layer LoRA wired on all three independent hypernets (share=False).
+    for sub in (m.hyper_net.hyper_trans, m.hyper_net.hyper_rew, m.hyper_net.hyper_pred):
+        assert sub.output_rank == 32
+        assert hasattr(sub, "output_A") and hasattr(sub, "output_B")
+
+
+def test_lora_fc2_preset_counts_and_end_to_end():
+    cfg = V4Config.from_preset("duo_film_lora_fc2")   # N=2, A=6
+    m = HyperMuZeroModel(cfg)
+    assert m.state_trans_net.generated_param_count == 10816
+    assert m.reward_head.generated_param_count == 2689
+    assert m.prediction_net.generated_param_count == 3463
+    assert hasattr(m.state_trans_net, "fc2")          # shared SGD base for the rank-r delta
+    B, N = 2, cfg.env.N
+    obs = torch.randn(B, N, m.rep_net.obs_dim)
+    s = m.encode(obs)
+    m.update_step(0)
+    m.set_context_objective(torch.full((B,), 0.5))
+    action = torch.zeros(B, N * cfg.env.A)
+    action[:, 0] = 1.0
+    s_next = m.transition(s, action)
+    m.set_context_subjective(
+        0, torch.rand(B, 4),
+        (torch.rand(B), torch.softmax(torch.randn(B, N - 1, 2), dim=-1)),
+    )
+    r = m.predict_reward(s, action)
+    pi, v = m.predict(s)
+    for t in (s_next, r, pi, v):
+        assert not torch.isnan(t).any()
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

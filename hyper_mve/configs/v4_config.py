@@ -13,7 +13,11 @@ from .mup_config import MupConfig
 from .train_config import TrainConfig
 
 
-_PRESET_NAMES: tuple[str, ...] = ("easy", "medium", "hard", "duo", "duo_basegen")
+_PRESET_NAMES: tuple[str, ...] = (
+    "easy", "medium", "hard", "duo", "duo_basegen",
+    "duo_film_lora", "duo_film_lora_fc2", "duo_base_lora",
+    "medium_film_lora", "medium_film_lora_fc2", "medium_base_lora",
+)
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,24 @@ class V4Config:
         if name == "duo_basegen":
             from .presets.duo_basegen import build_duo_basegen_config
             return build_duo_basegen_config()
+        if name == "duo_film_lora":
+            from .presets.duo_film_lora import build_duo_film_lora_config
+            return build_duo_film_lora_config()
+        if name == "duo_film_lora_fc2":
+            from .presets.duo_film_lora_fc2 import build_duo_film_lora_fc2_config
+            return build_duo_film_lora_fc2_config()
+        if name == "duo_base_lora":
+            from .presets.duo_base_lora import build_duo_base_lora_config
+            return build_duo_base_lora_config()
+        if name == "medium_film_lora":
+            from .presets.medium_film_lora import build_medium_film_lora_config
+            return build_medium_film_lora_config()
+        if name == "medium_film_lora_fc2":
+            from .presets.medium_film_lora_fc2 import build_medium_film_lora_fc2_config
+            return build_medium_film_lora_fc2_config()
+        if name == "medium_base_lora":
+            from .presets.medium_base_lora import build_medium_base_lora_config
+            return build_medium_base_lora_config()
         raise ValueError(
             f"Unknown preset: {name!r}. Valid: {_PRESET_NAMES}"
         )

@@ -193,17 +193,20 @@ def plan_generated_layers(layer_specs, gen_scope):
     """Map ``(in, out, use_adaln)`` specs + ``gen_scope`` -> per-layer generation kinds.
 
     Kinds (per layer):
-        "sgd_base"  net owns a plain SGD ``nn.Linear`` (+ norm); NOTHING generated.
-        "gen_film"  HyperNet generates gamma/beta only; the weight is a shared SGD
-                    ``nn.Linear`` (film_head hidden layers).
-        "gen_full"  HyperNet generates weight + bias + gamma + beta, applied via
-                    ``adaln_forward`` (full hidden layers; base_gen fc2).
-        "gen_head"  HyperNet generates weight + bias only (plain output head).
+        "sgd_base"     net owns a plain SGD ``nn.Linear`` (+ norm); NOTHING generated.
+        "gen_film"     HyperNet generates gamma/beta only; the weight is a shared SGD
+                       ``nn.Linear`` (film_head hidden layers).
+        "gen_full"     HyperNet generates weight + bias + gamma + beta, applied via
+                       ``adaln_forward`` (full hidden layers; base_gen fc2).
+        "gen_lora_fc2" HyperNet generates a rank-r weight DELTA (Af, Bf) on a shared SGD
+                       ``nn.Linear`` + gamma/beta (lora_fc2 fc2); W_eff = W_base + Bf @ Af.
+        "gen_head"     HyperNet generates weight + bias only (plain output head).
 
     Mapping (AdaLN layers = the ``use_adaln=True`` hidden layers, in order):
-        full:      every AdaLN layer -> gen_full;              head -> gen_head
-        film_head: every AdaLN layer -> gen_film;              head -> gen_head
-        base_gen:  FIRST AdaLN -> sgd_base, REST -> gen_full;  head -> gen_head
+        full:      every AdaLN layer -> gen_full;                head -> gen_head
+        film_head: every AdaLN layer -> gen_film;                head -> gen_head
+        base_gen:  FIRST AdaLN -> sgd_base, REST -> gen_full;    head -> gen_head
+        lora_fc2:  FIRST AdaLN -> gen_film, REST -> gen_lora_fc2; head -> gen_head
     """
     plan = []
     adaln_idx = 0
@@ -213,6 +216,8 @@ def plan_generated_layers(layer_specs, gen_scope):
                 kind = "gen_film"
             elif gen_scope == "base_gen":
                 kind = "sgd_base" if adaln_idx == 0 else "gen_full"
+            elif gen_scope == "lora_fc2":
+                kind = "gen_film" if adaln_idx == 0 else "gen_lora_fc2"
             elif gen_scope == "full":
                 kind = "gen_full"
             else:
@@ -226,24 +231,27 @@ def plan_generated_layers(layer_specs, gen_scope):
     return plan
 
 
-def count_generated(layer_specs, gen_scope):
+def count_generated(layer_specs, gen_scope, lora_rank=None):
     """Count HyperNet-generated params and the role-grouped norm groups.
 
     The generated vector is role-grouped and contiguous::
 
         [ all FiLM gamma/beta (layer order, gamma then beta)
-        | all generated weights+biases (layer order, weight then bias) ]
+        | all generated weights/factors (layer order) ]
 
     so ``gen_groups = [film_total, weight_total]`` (zeros dropped) feeds HyperNetMLP's
     contiguous per-group RMS norm. For ``film_head`` the weight segment is head-only,
     reproducing the legacy ``[film_total, head_total]`` groups + per-element layout
     exactly. For ``base_gen`` the gen_full fc2 contributes gamma/beta to the FiLM group
-    and weight/bias to the weight group.
+    and weight/bias to the weight group. For ``lora_fc2`` the gen_lora_fc2 fc2 contributes
+    gamma/beta to the FiLM group and its rank-r factors ``Af (r*in)`` + ``Bf (out*r)`` to
+    the weight group (``lora_rank`` is required for that scope; ``r=0`` reduces to film_head).
 
     Returns ``(total, plan, groups)`` where ``plan`` is the ``plan_generated_layers``
     output (stored as the net's ``gen_spec`` and consumed by ``split_generated``).
     """
     plan = plan_generated_layers(layer_specs, gen_scope)
+    r = lora_rank or 0
     film_total = 0
     weight_total = 0
     for in_dim, out_dim, kind in plan:
@@ -252,6 +260,9 @@ def count_generated(layer_specs, gen_scope):
         elif kind == "gen_full":
             film_total += 2 * out_dim
             weight_total += out_dim * in_dim + out_dim
+        elif kind == "gen_lora_fc2":
+            film_total += 2 * out_dim
+            weight_total += r * in_dim + out_dim * r   # Af (r,in) + Bf (out,r)
         elif kind == "gen_head":
             weight_total += out_dim * in_dim + out_dim
         # "sgd_base": nothing generated
@@ -260,21 +271,25 @@ def count_generated(layer_specs, gen_scope):
     return total, plan, groups
 
 
-def split_generated(flat_params, plan):
+def split_generated(flat_params, plan, lora_rank=None):
     """Split a role-grouped flat vector into per-layer tuples, in ``plan`` order.
 
-    The vector is ``[ FiLM region | weight region ]``; a ``gen_full`` layer draws its
-    gamma/beta from the FiLM region AND its weight/bias from the weight region (two
-    independent cursors). Per-layer outputs (unpacked positionally by the net forward):
+    The vector is ``[ FiLM region | weight region ]``; ``gen_full`` / ``gen_lora_fc2``
+    layers draw gamma/beta from the FiLM region AND their weight payload from the weight
+    region (two independent cursors). Per-layer outputs (unpacked positionally by the net
+    forward):
 
-        "sgd_base" -> None
-        "gen_film" -> (gamma, beta)
-        "gen_full" -> (weight, bias, gamma, beta)
-        "gen_head" -> (weight, bias)
+        "sgd_base"     -> None
+        "gen_film"     -> (gamma, beta)
+        "gen_full"     -> (weight, bias, gamma, beta)
+        "gen_lora_fc2" -> (Af (B,r,in), Bf (B,out,r), gamma, beta)   # needs lora_rank
+        "gen_head"     -> (weight, bias)
     """
     B = flat_params.shape[0]
+    r = lora_rank or 0
     film_len = sum(
-        2 * out_dim for (_, out_dim, kind) in plan if kind in ("gen_film", "gen_full")
+        2 * out_dim for (_, out_dim, kind) in plan
+        if kind in ("gen_film", "gen_full", "gen_lora_fc2")
     )
     f_off = 0
     w_off = film_len
@@ -299,6 +314,18 @@ def split_generated(flat_params, plan):
             bias = flat_params[:, w_off:w_off + out_dim]
             w_off += out_dim
             out.append((weight, bias, gamma, beta))
+        elif kind == "gen_lora_fc2":
+            gamma = flat_params[:, f_off:f_off + out_dim]
+            f_off += out_dim
+            beta = flat_params[:, f_off:f_off + out_dim]
+            f_off += out_dim
+            a_size = r * in_dim
+            Af = flat_params[:, w_off:w_off + a_size].view(B, r, in_dim)
+            w_off += a_size
+            b_size = out_dim * r
+            Bf = flat_params[:, w_off:w_off + b_size].view(B, out_dim, r)
+            w_off += b_size
+            out.append((Af, Bf, gamma, beta))
         else:  # "gen_head"
             w_size = out_dim * in_dim
             weight = flat_params[:, w_off:w_off + w_size].view(B, out_dim, in_dim)
@@ -386,10 +413,12 @@ class FunctionalStateTransNet(nn.Module):
     Output: s' (B, latent_dim)
     """
 
-    def __init__(self, latent_dim, joint_action_dim, hidden_dim=128, gen_scope="full"):
+    def __init__(self, latent_dim, joint_action_dim, hidden_dim=128, gen_scope="full",
+                 lora_rank=None):
         super().__init__()
         self.latent_dim = latent_dim
         self.gen_scope = gen_scope
+        self.lora_rank = lora_rank
         input_dim = latent_dim + joint_action_dim
 
         # (in_dim, out_dim, use_adaln)
@@ -404,11 +433,17 @@ class FunctionalStateTransNet(nn.Module):
         # Fixed LayerNorm for output normalization (not generated)
         self.ln = nn.LayerNorm(latent_dim)
 
-        if gen_scope in ("film_head", "base_gen"):
+        if gen_scope in ("film_head", "base_gen", "lora_fc2"):
             self.fc1 = nn.Linear(input_dim, hidden_dim)
             if gen_scope == "film_head":
                 # Shared SGD trunk; HyperNet generates only FiLM gamma/beta + output head.
                 self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+            elif gen_scope == "lora_fc2":
+                # film_head + a per-context rank-r weight DELTA on the shared SGD fc2.
+                self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+                assert sum(int(a) for _, _, a in self.layer_specs) >= 2, (
+                    "lora_fc2 requires >=2 AdaLN layers (fc1 gen_film + fc2 lora delta)"
+                )
             else:  # "base_gen": fc1 is a plain SGD base (Linear+LN+ReLU, no FiLM);
                 # fc2 weight is fully HyperNet-generated (AdaLN), head generated.
                 self.ln1 = nn.LayerNorm(hidden_dim)
@@ -416,7 +451,7 @@ class FunctionalStateTransNet(nn.Module):
                     "base_gen requires >=2 AdaLN layers (fc1 SGD base + fc2 generated)"
                 )
             self.generated_param_count, self.gen_spec, self.gen_groups = \
-                count_generated(self.layer_specs, gen_scope)
+                count_generated(self.layer_specs, gen_scope, lora_rank)
         else:  # "full": HyperNet generates every layer's weights (legacy default)
             self.generated_param_count = self.total_params
             self.gen_spec = None
@@ -445,6 +480,18 @@ class FunctionalStateTransNet(nn.Module):
             x = torch.cat([state, action_onehot], dim=-1)
             x = F.relu(self.ln1(self.fc1(x)))          # fc1 plain SGD base (Linear+LN+ReLU)
             x = adaln_forward(x, w2, b2, g2, bt2)      # fc2 fully generated (AdaLN)
+            delta_s = functional_linear(x, w3, b3)     # generated head
+            delta_s = self.ln(delta_s)                 # fixed output LayerNorm
+            return state + delta_s                     # s' = s + Δs
+
+        if self.gen_scope == "lora_fc2":
+            (g1, bt1), (Af2, Bf2, g2, bt2), (w3, b3) = split_generated(
+                flat_params, self.gen_spec, self.lora_rank)
+            x = torch.cat([state, action_onehot], dim=-1)
+            x = adaln_modulate(self.fc1(x), g1, bt1)   # fc1 shared SGD + FiLM (== film_head)
+            dW = torch.bmm(Bf2, Af2)                    # (B, hidden, hidden) per-context delta
+            W2_eff = self.fc2.weight.unsqueeze(0) + dW  # shared SGD base + low-rank delta
+            x = adaln_forward(x, W2_eff, self.fc2.bias, g2, bt2)  # applied ONCE (don't re-fc2)
             delta_s = functional_linear(x, w3, b3)     # generated head
             delta_s = self.ln(delta_s)                 # fixed output LayerNorm
             return state + delta_s                     # s' = s + Δs
@@ -486,9 +533,11 @@ class FunctionalRewardHead(nn.Module):
     Output: r_i (B, 1)
     """
 
-    def __init__(self, latent_dim, joint_action_dim, hidden_dim=128, gen_scope="full"):
+    def __init__(self, latent_dim, joint_action_dim, hidden_dim=128, gen_scope="full",
+                 lora_rank=None):
         super().__init__()
         self.gen_scope = gen_scope
+        self.lora_rank = lora_rank
         input_dim = latent_dim + joint_action_dim
 
         # (in_dim, out_dim, use_adaln)
@@ -500,17 +549,23 @@ class FunctionalRewardHead(nn.Module):
         self.total_params, self.param_counts = count_params_adaln(self.layer_specs)
         self.param_shapes = layer_specs_to_param_shapes(self.layer_specs)
 
-        if gen_scope in ("film_head", "base_gen"):
+        if gen_scope in ("film_head", "base_gen", "lora_fc2"):
             self.fc1 = nn.Linear(input_dim, hidden_dim)
             if gen_scope == "film_head":
                 self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+            elif gen_scope == "lora_fc2":
+                # film_head + a per-context rank-r weight DELTA on the shared SGD fc2.
+                self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+                assert sum(int(a) for _, _, a in self.layer_specs) >= 2, (
+                    "lora_fc2 requires >=2 AdaLN layers (fc1 gen_film + fc2 lora delta)"
+                )
             else:  # "base_gen": plain SGD fc1 base + generated fc2 (AdaLN)
                 self.ln1 = nn.LayerNorm(hidden_dim)
                 assert sum(int(a) for _, _, a in self.layer_specs) >= 2, (
                     "base_gen requires >=2 AdaLN layers (fc1 SGD base + fc2 generated)"
                 )
             self.generated_param_count, self.gen_spec, self.gen_groups = \
-                count_generated(self.layer_specs, gen_scope)
+                count_generated(self.layer_specs, gen_scope, lora_rank)
         else:
             self.generated_param_count = self.total_params
             self.gen_spec = None
@@ -537,6 +592,16 @@ class FunctionalRewardHead(nn.Module):
             x = torch.cat([state, action_onehot], dim=-1)
             x = F.relu(self.ln1(self.fc1(x)))          # fc1 plain SGD base (Linear+LN+ReLU)
             x = adaln_forward(x, w2, b2, g2, bt2)      # fc2 fully generated (AdaLN)
+            return functional_linear(x, w3, b3)
+
+        if self.gen_scope == "lora_fc2":
+            (g1, bt1), (Af2, Bf2, g2, bt2), (w3, b3) = split_generated(
+                flat_params, self.gen_spec, self.lora_rank)
+            x = torch.cat([state, action_onehot], dim=-1)
+            x = adaln_modulate(self.fc1(x), g1, bt1)   # fc1 shared SGD + FiLM (== film_head)
+            dW = torch.bmm(Bf2, Af2)                    # (B, hidden, hidden) per-context delta
+            W2_eff = self.fc2.weight.unsqueeze(0) + dW  # shared SGD base + low-rank delta
+            x = adaln_forward(x, W2_eff, self.fc2.bias, g2, bt2)  # applied ONCE (don't re-fc2)
             return functional_linear(x, w3, b3)
 
         params = split_params_adaln(flat_params, self.layer_specs)
@@ -573,10 +638,12 @@ class FunctionalPredictionNet(nn.Module):
     Output: policy_logits (B, num_actions), value (B, 1)
     """
 
-    def __init__(self, latent_dim, num_actions=5, hidden_dim=128, gen_scope="full"):
+    def __init__(self, latent_dim, num_actions=5, hidden_dim=128, gen_scope="full",
+                 lora_rank=None):
         super().__init__()
         self.num_actions = num_actions
         self.gen_scope = gen_scope
+        self.lora_rank = lora_rank
 
         # (in_dim, out_dim, use_adaln)
         self.layer_specs = [
@@ -588,17 +655,23 @@ class FunctionalPredictionNet(nn.Module):
         self.total_params, self.param_counts = count_params_adaln(self.layer_specs)
         self.param_shapes = layer_specs_to_param_shapes(self.layer_specs)
 
-        if gen_scope in ("film_head", "base_gen"):
+        if gen_scope in ("film_head", "base_gen", "lora_fc2"):
             self.fc1 = nn.Linear(latent_dim, hidden_dim)
             if gen_scope == "film_head":
                 self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+            elif gen_scope == "lora_fc2":
+                # film_head + a per-context rank-r weight DELTA on the shared SGD fc2.
+                self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+                assert sum(int(a) for _, _, a in self.layer_specs) >= 2, (
+                    "lora_fc2 requires >=2 AdaLN layers (fc1 gen_film + fc2 lora delta)"
+                )
             else:  # "base_gen": plain SGD fc1 base + generated fc2 (AdaLN)
                 self.ln1 = nn.LayerNorm(hidden_dim)
                 assert sum(int(a) for _, _, a in self.layer_specs) >= 2, (
                     "base_gen requires >=2 AdaLN layers (fc1 SGD base + fc2 generated)"
                 )
             self.generated_param_count, self.gen_spec, self.gen_groups = \
-                count_generated(self.layer_specs, gen_scope)
+                count_generated(self.layer_specs, gen_scope, lora_rank)
         else:
             self.generated_param_count = self.total_params
             self.gen_spec = None
@@ -627,6 +700,17 @@ class FunctionalPredictionNet(nn.Module):
             _, (w2, b2, g2, bt2), (w_p, b_p), (w_v, b_v) = gen
             x = F.relu(self.ln1(self.fc1(state)))          # fc1 plain SGD base (Linear+LN+ReLU)
             x = adaln_forward(x, w2, b2, g2, bt2)          # fc2 fully generated (AdaLN)
+            policy_logits = functional_linear(x, w_p, b_p)  # generated head
+            value = functional_linear(x, w_v, b_v)          # generated head
+            return policy_logits, value
+
+        if self.gen_scope == "lora_fc2":
+            gen = split_generated(flat_params, self.gen_spec, self.lora_rank)
+            (g1, bt1), (Af2, Bf2, g2, bt2), (w_p, b_p), (w_v, b_v) = gen
+            x = adaln_modulate(self.fc1(state), g1, bt1)   # fc1 shared SGD + FiLM (== film_head)
+            dW = torch.bmm(Bf2, Af2)                        # (B, hidden, hidden) per-context delta
+            W2_eff = self.fc2.weight.unsqueeze(0) + dW      # shared SGD base + low-rank delta
+            x = adaln_forward(x, W2_eff, self.fc2.bias, g2, bt2)  # applied ONCE (don't re-fc2)
             policy_logits = functional_linear(x, w_p, b_p)  # generated head
             value = functional_linear(x, w_v, b_v)          # generated head
             return policy_logits, value

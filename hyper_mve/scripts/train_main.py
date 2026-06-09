@@ -51,7 +51,11 @@ _DEFERRED_VARIANTS = {
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Hyper-MuZero v4 unified trainer")
-    p.add_argument("--preset", default="medium", choices=("easy", "medium", "hard", "duo", "duo_basegen"))
+    p.add_argument("--preset", default="medium", choices=(
+        "easy", "medium", "hard", "duo", "duo_basegen",
+        "duo_film_lora", "duo_film_lora_fc2", "duo_base_lora",
+        "medium_film_lora", "medium_film_lora_fc2", "medium_base_lora",
+    ))
     p.add_argument("--variant", default="hyper")
     p.add_argument("--max_steps", type=int, default=None, help="override train.max_train_steps")
     p.add_argument("--override", action="append", default=[], help='"section.field=value" (repeatable)')

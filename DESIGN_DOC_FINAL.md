@@ -1244,6 +1244,24 @@ v4.2 引入的阶段性冻结将多任务学习问题转化为 continual learnin
 
 ---
 
+### 5.12 HyperNet 参数效率 + 表达力 (LoRA / lora_fc2)
+
+主轴是 `gen_scope`（`film_head` vs `base_gen`）。在其上叠加两条正交的轴，均为 opt-in：
+
+**(1) Output-layer LoRA（参数效率轴，三路统一）。** 在 `film_head` 下，HyperNet 约 92% 的参数集中在 output_layer（尤以 `hyper_trans` 的 `Linear(256→8768)` 生成 `StateTransNet.fc3` 的 128×64 权重，占全部 HyperNet 参数 ~76%）。将每个 `HyperNetMLP.output_layer` 的 `Linear(prev, θ_pc)` 分解为 `Linear(prev, r, bias=False) → Linear(r, θ_pc)`（`hyper_output_rank=r`，默认关闭）。统一施加于 `hyper_trans / hyper_rew / hyper_pred` 三路（单一 cfg 字段，单一 rank）。`r=32` 时 HyperNet 参数：`film_head` 3.09M→~694k，`base_gen` 15.6M→~2.30M。初始化：A 用 `orthogonal_init`，B 用 `small_init(std=0.01)`（**不可为 0**——`B=0` 时 `raw=0`，分组 RMS 除以 `1e-8` 下限会在 step-0 产生 ~1e4 梯度尖峰）。`share_subjective_trunk=True`（SubjectiveHyperNet）暂未接线，二者同开会抛 `NotImplementedError`。
+
+**(2) `lora_fc2`（表达力轴，仅 film_head）。** `film_head` 因 fc1/fc2 冻结 + FiLM 为对角调制，缺乏 per-context 的特征**混合**能力。新增 gen_scope `lora_fc2` = `film_head` + 对共享 fc2 的 per-context 低秩权重增量：`W2_eff = W2_base + Bf·Af`（秩 r，默认 8）。生成量 = `film_head_count + 256·r`，是 `film_head` 与 `base_gen`（整权重生成）之间的"中间档"。`base_gen` 下被禁止（已整权重生成 fc2，ΔW 冗余，由 `ModelConfig.__post_init__` 断言拦截）。**尺度纪律（断言强制）**：`lora_fc2` 要求三路 `*_output_scale_init ≥ 0.05`（推荐 0.1）——分组 RMS 下每个生成元 ≈ `output_scale`，故 `ΔW ≈ output_scale²·√r`；在 0.1/r=8 时 ≈ 0.028（约 kaiming fc2 基权 0.088 的 32%，有效），在默认 0.01 时坍缩到 ~3e-4（失效）。`r=0` 与 `film_head` 逐字节等价（回归门）。
+
+| 配置 (medium, A=6, N=4) | HyperNet 参数 |
+|---|---|
+| film_head + LoRA(r=32), lora_fc2 OFF | ~694k |
+| film_head + LoRA(r=32) + lora_fc2 r=8 | ~896k |
+| base_gen + LoRA(r=32) | ~2.30M |
+
+**`hyper_rew`(3 层) vs `hyper_pred`(2 层) 深度不对称是有意保留的**：reward 需要更深的 type 分化（§5.11），value 不需要——不做"对称化修正"。预设：`{duo,medium}_film_lora` / `{duo,medium}_film_lora_fc2` / `{duo,medium}_base_lora`（2agent=duo 的 N=2 random_walk，4agent=medium 的 N=4 static；均 `share_subjective_trunk=False`）。全量实验（3 建模情形 × 2 环境 = 6 runs）由 `hyper_mve/scripts/run_lora_experiments.py` 编排，GPU 池默认 {2,3,4}（每进程 `CUDA_VISIBLE_DEVICES=<单卡>` 钉一张卡），结果按 `<env>/<model>[/<gen_scope>]` 落盘。
+
+---
+
 ## 6.1 统一评估框架 (v4.1 新增)
 
 ### 设计原则
