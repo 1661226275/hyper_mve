@@ -594,3 +594,25 @@ def test_no_detach_before_belief_loss():
 - Pkg-04 spec 02 §2.3（trainer 调用模板）
 - Pkg-04 spec 04 双层 detach（main 路径 grad_gating 行为）
 - Pkg-04 澄清 1（model 不暴露 compute_losses，trainer 自组装 loss）
+
+---
+
+## [v4-opt 2026-06] 修订:返回契约新增诊断键
+
+优化阶段(提交 `0ba2eac`/`079fcdf`)为 `compose_total_loss` 返回 dict 增加以下**detached 诊断键**(不参与反向;train_main 按命名空间路由 TB:`diag_*`→`diag/`,`*_raw`→`loss_raw/`,其余→`loss/`):
+
+| 键 | 语义 | 健康判据 |
+|---|---|---|
+| `diag_pi_mve_entropy` | π_mve(数据目标)在展开窗内的熵;≈ ln A ⇒ 规划器未判别 | 离开 ln A 持续下降 |
+| `diag_pi_pred_entropy` | predict 网策略熵(被蒸馏的下游) | 滞后下降 |
+| `diag_cos_pred_cross` / `diag_cos_pred_same` | k=0 各 agent 生成 θ_pred 的跨/同类型平均余弦(duo N=2 时 same=NaN) | cross 显著低于 same 且 < 0.95;cross→1 = 角色坍缩 |
+| `diag_cos_rew_cross` / `diag_cos_rew_same` | 同上,θ_rew;断言 A 在线证据 | 同上 |
+| `L_policy_raw` / `L_value_raw` / `L_reward_raw` / `L_consist_raw` | 未加权损失量纲(w_* 预乘前) | 诊断权重配比 |
+
+实现依赖:`HyperMuZeroModel.current_subjective_thetas()` 访问器(缓存的 θ_rew/θ_pred,提交 0ba2eac 新增)。
+
+## 修订记录 (Changelog)
+
+| 日期 | 修订 | 依据 |
+|---|---|---|
+| 2026-06-10 | 返回契约新增 10 个诊断键 + thetas 访问器依赖 | 提交 0ba2eac;复审 §4.3 |

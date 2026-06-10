@@ -560,3 +560,19 @@ def test_worker_no_oracle_types_leak(worker, cfg_medium, mocker):
 - Pkg-04 spec 02 §2.3（worker 调用模板）+ §5.4（model.forward 不对外）
 - Pkg-04 spec 04 §3.4（worker 不调 update_step）
 - Pkg-04 spec 08 §3.3（v4.7 worker 5 处迁移行号）
+
+---
+
+## [v4-opt 2026-06] 修订:planner-on 采集的必要性论证与调试旗
+
+本 spec 已规定 `use_planner=True` 默认;优化阶段(提交 `0ba2eac`)补充其**必要性论证与工程接线**:
+
+1. **自蒸馏退化引理**(Ch5.9.1b):采集关规划器时 π_tgt = 模型自身先验 ⇒ ∇CE ≡ 0 ⇒ 策略熵钉死 ln(A);均匀策略是"采集-规划-训练"闭环的不动点,ε-greedy 不解此锁。已实测一次(duo 运行)。**use_planner=False 因此不是消融选项,而是训练不可行配置**;
+2. **train_main 接线**:warmup 期(buffer < min_buffer_size)用 `epsilon=1.0, use_planner=False` 纯随机填充;其后采集恒 planner-on,`--no_collect_planner` 仅作调试探针保留;
+3. **健康检查**:`diag/pi_mve_entropy` 是否离开 ln A 为训练第一道检查(spec 05 修订)。
+
+## 修订记录 (Changelog)
+
+| 日期 | 修订 | 依据 |
+|---|---|---|
+| 2026-06-10 | planner-on 必要性论证(ln(A) 不动点)、warmup/调试旗接线、健康检查指针 | 提交 0ba2eac;复审 §4.1;Ch5.9.1b |

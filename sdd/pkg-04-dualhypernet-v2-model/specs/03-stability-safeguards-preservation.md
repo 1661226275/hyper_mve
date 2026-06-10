@@ -369,3 +369,37 @@ def test_grad_gating_referenced(cfg_medium):
 - v4.7 `models/functional_nets.py:245-271` (防线 3 Δs 残差)
 - Pkg-01 spec 05 ModelConfig（use_adaln, state_trans_residual, adaln_residual_one_plus, proj_dim 等字段）
 - Pkg-05 spec 03 BYOL consistency loss（防线 4 详述）
+
+---
+
+## B. [v4-opt 2026-06] 优化阶段修订(防线 1 扩展;与正文冲突处以本节为准)
+
+> 实证动机:FULL 全量生成坍缩(cos_pred_cross 0.61→0.998)与整向量 L2 的 FiLM 稀释。实现提交 `079fcdf`/`dc5bbcd`;代码锚点 `hyper_mve/models/hyper_network.py:28-57,111-122`。
+
+### B1. 防线 1 扩展:分组 RMS 归一(部分生成范围)
+
+`gen_scope ∈ {film_head, base_gen, lora_fc2}` 时,HyperNetMLP 归一化从整向量 L2 改为**分组 RMS**(`output_groups=[film_total, weight_total]`,逐段 RMS 归一 × output_scale):
+- 失效模式:整向量 L2 下单个 FiLM γ 幅值 ≈ scale/√dim(0.1/√512≈4e-3)⇒ (1+γ)≈1,AdaLN 调制名存实亡;
+- 修复后:每生成元幅值 ≈ scale(维度无关);FULL 范围保持整向量 L2,逐字节兼容旧行为;
+- 验收:`tests/models/test_hyper_network_grouped_norm.py`(|γ| ≥ 1e-2 守门)。
+
+### B2. 防线 1 扩展:输出层 LoRA 初始化纪律
+
+`hyper_output_rank=r` 时输出投影分解为 A(prev→r, 正交, 无 bias)→ B(r→pc, small_init std=0.01)。**B 禁止零初始化**:B=0 ⇒ raw=0 ⇒ 分组 RMS 除以 1e-8 下限 ⇒ step-0 约 1e4 梯度尖峰。验收:`tests/models/test_hyper_network_lora.py`。
+
+### B3. 新增稳定性约束:ΔW 尺度律(lora_fc2)
+
+分组 RMS 下每生成元 ≈ scale,故 fc2 低秩增量 ΔW = B_f A_f 的元素 RMS ≈ **scale²·√r**:
+- scale=0.1, r=8 ⇒ ΔW≈0.028(kaiming fc2 基权 0.088 的 ~32%,有效);scale=0.01 ⇒ ΔW≈3e-4(死);
+- 守门断言(`ModelConfig.__post_init__`):lora_fc2 要求三路 scale ≥ 0.05(推荐 0.1);base_gen 禁用 lora_fc2(fc2 已全生成,ΔW 冗余);r=0 与 film_head 逐字节等价(回归门);
+- **未决风险**(复审 Q3,登记):output_scale 可学习且 ΔW 随其二次增长,训练后期 scale 上行可能使 ΔW 越过基权幅值——是否引入 scale clamp 待 sweep 的 scale 轨迹数据决定。
+
+### B4. 防线 1 适用范围注记
+
+原 §2.1 的"L2 norm + output_scale"描述仅适用于 FULL;§2.2 AdaLN(1+γ)与 §2.3 Δs 残差在全部 gen_scope 下保留不变(部分生成的 forward 路径均经 `adaln_modulate`/`adaln_forward` 维持 (1+γ) 形式)。
+
+## 修订记录 (Changelog)
+
+| 日期 | 修订 | 依据 |
+|---|---|---|
+| 2026-06-10 | B1-B4:分组 RMS、LoRA 初始化纪律、ΔW 尺度律(新增防线约束)、防线适用范围注记 | 提交 079fcdf/dc5bbcd;复审 `docs/Review_v4_TheoryAudit_2026-06.md` §3.3-3.4、Q3 |

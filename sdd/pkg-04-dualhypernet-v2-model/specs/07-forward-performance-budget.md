@@ -635,3 +635,15 @@ def test_forward_smoke_under_15ms():
 - `06-data-flow-diagram.md`（数据流 + N agents 调用顺序）
 - Pkg-03 spec 04（BeliefNet 性能 ~1 ms / step）
 - Pkg-05 spec 04（trainer-loop 完整 timing）
+
+---
+
+## [v4-opt 2026-06] 参数预算修订
+
+§3.3 的参数预算以 FULL 全量生成估算,实际 FULL 实现 ~3.09M(超预算 ~3×,见 ARCHITECTURE_OVERVIEW 旧 §10)。**输出层 LoRA(r=32)已解决该超支**:film_head+LoRA ~694k / lora_fc2+LoRA ~896k / base_gen+LoRA ~2.30M(medium;由 `tests/models/test_hyper_network_lora.py` 锚定;权威表 = Ch4.3.4 修订表 + DESIGN_DOC §5.12)。规划性能门(300ms 回归护栏)在 LoRA 档下预期显著放松,待 sweep 实测回填。
+
+## 修订记录 (Changelog)
+
+| 日期 | 修订 | 依据 |
+|---|---|---|
+| 2026-06-10 | 参数预算按 gen_scope/LoRA 修订 | 提交 dc5bbcd;复审 M10 |

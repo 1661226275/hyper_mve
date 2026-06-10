@@ -549,3 +549,32 @@ def test_use_coord_desc_disabled(planner, model, cfg_medium):
 - Pkg-04 spec 08 §3.1（v4.7 → v4 4 处行号迁移指引）
 - Pkg-01 spec 05 TrainConfig（mve_samples / mve_depth / mve_temperature / use_crn / use_coord_desc）
 - Pkg-08 ablation 1/2（CRN ✗ / coord_desc ✗ 对照实验）
+
+---
+
+## [v4-opt 2026-06] 修订:诊断 API 与开关语义勘正
+
+### 1. `return_diagnostics` 形参(提交 `bea3641` 新增)
+
+```python
+sample_mve_plan(model, root_s, cap, belief, c_t, return_diagnostics=False)
+# True 时返回 (pi_mve, {"returns_per_action": (B,N,A), "q_normalized": (B,N,A)})
+```
+
+默认 False,对 worker/测试零影响;离线探针 `scripts/diagnose_mve.py` 是唯一预期调用方。
+
+### 2. `use_coord_desc=False` 语义勘正(复审 M8,重要)
+
+本 spec 原文(§"关闭 coord descent")的"退化为固定顺序"描述**准确**,但其消融含义需勘正:该开关**仅**取消顺序随机化——坐标下降本体(逐 agent 求解、已优化 agent 按其 π_mve 行动的 `optimised` 集合机制)**无条件运行**。因此:
+- 它**不是** Ch6.7 原 2×2 的"Joint 联合枚举"格子;实测语义 = "顺序随机化 on/off" 对照;
+- Joint 联合枚举(A^N 枚举,仅 Easy N=2 可行)无代码路径,登记为 **Pkg-08 实现项**;
+- 建议(Q2 决议)后续将开关改名 `randomize_order` 以名实相符(改名属代码变更,不在本轮文档对齐范围);
+- `use_crn=False` 格子忠实(step-0 独立采样),可单独作为 −CRN 消融。
+
+消融 4 的三轴重定义见 Ch6.7 [v4-opt] 修订。
+
+## 修订记录 (Changelog)
+
+| 日期 | 修订 | 依据 |
+|---|---|---|
+| 2026-06-10 | return_diagnostics API;use_coord_desc 消融语义勘正(非 Joint);Joint 枚举登记 Pkg-08 | 提交 bea3641;复审 §2.4 / M8、Q2 决议 |

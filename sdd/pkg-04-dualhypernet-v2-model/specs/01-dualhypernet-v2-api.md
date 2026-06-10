@@ -2,6 +2,8 @@
 
 > 父文档：[`../proposal.md`](../proposal.md) §2.1 · [`../design.md`](../design.md) §3 D1 / D5 / §6.3
 > **v4 关键改动**：v4.7 双路 `(rule_emb, id_emb)` → v4 双 forward API `forward_trans(c_ctx) + forward_subjective(ctx_aug)`。
+>
+> **[v4-opt 2026-06] 本 spec 已被优化阶段修订**：HyperNetMLP 新增 `output_groups`（分组 RMS 归一）与 `output_rank`（输出层 LoRA）；新增 `SubjectiveHyperNet`（`share_subjective_trunk`）；§3.3 的 scale 语义随分组 RMS 改变；§3.4 D5 改为 gen_scope 依赖。详见文末**修订 A1-A5 与修订记录**；事实底稿 `docs/Review_v4_TheoryAudit_2026-06.md` §3 与 DESIGN_DOC §5.12。
 
 ---
 
@@ -564,3 +566,49 @@ def test_gradient_flow_subjective(hyper_net):
 - `08-integration-contracts.md` §1（API 稳定性表）
 - Pkg-01 spec 05 ModelConfig（c_ctx_dim / ctx_aug_dim 字段来源）
 - v4.7 `hyper_network.py` L21-82（HyperNetMLP 保留）+ L85-161（DualHyperNetwork v1 重写）
+
+---
+
+## A. [v4-opt 2026-06] 优化阶段修订(就地生效,与正文冲突处以本节为准)
+
+> 动机与实证:FULL 全量生成在 duo 运行中角色坍缩(cos_pred_cross 0.61→0.998),触发部分生成机制族。实现提交:`079fcdf`(film_head + 分组 RMS)、`29e03f9`(base_gen + SubjectiveHyperNet)、`dc5bbcd`(输出层 LoRA + lora_fc2)。代码锚点:`hyper_mve/models/hyper_network.py`。
+
+### A1. HyperNetMLP 接口扩展(修订 §2.2)
+
+```python
+HyperNetMLP(input_dim, output_dim, hidden_dims=None, norm_output=True,
+            output_scale_init=0.01,
+            output_groups=None,   # [新] list[int] 连续段大小,sum==output_dim
+            output_rank=None)     # [新] 输出层 LoRA 秩 r
+```
+
+- `output_groups=None`(FULL/legacy):整向量 L2 归一,行为与原 spec 逐字节一致;
+- `output_groups=[film_total, weight_total]`(部分生成):**分组 RMS 归一**——每段独立 RMS 归一后 × output_scale,每生成元幅值 ≈ scale(维度无关)。理由:整向量 L2 会把单个 FiLM γ 稀释到 scale/√dim(0.1/√512≈4e-3 ⇒ (1+γ)≈1,调制失效);
+- `output_rank=r`:输出投影 `Linear(prev, pc)` → `Linear(prev, r, bias=False) → Linear(r, pc)`。初始化纪律:A 正交,**B small_init(std=0.01)且禁止置 0**(B=0 ⇒ raw=0 ⇒ 分组 RMS 的 1e-8 下限在 step-0 产生 ~1e4 梯度尖峰)。
+
+### A2. SubjectiveHyperNet(新增类;修订 §2.3 的"三 MLP 独立"约定)
+
+`share_subjective_trunk=True` 时,hyper_rew/hyper_pred 合并为单 trunk(深度=rew_hidden_dims)+ 双头;每头保留各自 output_scale 与 output_groups。**D5 语义变化**:detach 在 **trunk 输出**处(`h.detach()`),value loss 只训练 pred_head——比非共享的输入 detach 更强。与 `output_rank` 互斥(同开抛 NotImplementedError)。`hyper_trans` 不受影响。
+
+### A3. output_scale 语义修订(修订 §3.3)
+
+分组 RMS 下 scale 含义从"生成向量整体范数"变为"**每生成元幅值**"。部分生成预设(duo 族 / *_lora 族)三路 scale 统一 **0.1**(原 0.01/0.1/0.01 表仅适用于 FULL);`lora_fc2` 下由 ModelConfig 守门断言强制 scale ≥ 0.05(ΔW ≈ scale²·√r 尺度律,spec 03 修订 B3)。
+
+### A4. detach_pred_context 改为 gen_scope 依赖(修订 §3.4 D5)
+
+| gen_scope | 推荐取值 | 理由 |
+|---|---|---|
+| full | True(原 D5) | 防 value loss 扭曲上下文编码器 |
+| film_head / lora_fc2 / base_gen | **False**(duo 族预设) | 功能网主干已是稳定共享 SGD 网络;放开 value 梯度为上下文编码器解饿 |
+
+"运行时不变、ablation 需新建实例"的约定保留。
+
+### A5. 参数量指针更新(修订 §3.7)
+
+spec 07 §3.3 的参数预算以 FULL 估算;实际(medium,+LoRA r=32):film_head ~694k / lora_fc2 ~896k / base_gen ~2.30M / full(无 LoRA) 3.09M。数值由 `tests/models/test_hyper_network_lora.py::test_lora_param_count_formula` 锚定;权威表 = Ch4.3.4 修订表 + DESIGN_DOC §5.12。
+
+## 修订记录 (Changelog)
+
+| 日期 | 修订 | 依据 |
+|---|---|---|
+| 2026-06-10 | A1-A5:output_groups / output_rank / SubjectiveHyperNet / scale 语义 / D5 gen_scope 化 / 参数量指针 | 优化阶段提交 079fcdf/29e03f9/dc5bbcd;复审 `docs/Review_v4_TheoryAudit_2026-06.md` §3、§5-M10、Q8 决议 |
