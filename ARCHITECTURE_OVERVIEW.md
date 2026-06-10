@@ -1,7 +1,7 @@
-# Hyper-MuZero v4 代码主视图（Pkg-01 ~ Pkg-05）
+# Hyper-MuZero v4 代码主视图（Pkg-01 ~ Pkg-05 + 优化阶段）
 
-> 面向「开始实验」的导读：先看 §1 核心思想 → §2 分层架构 → §5 怎么训练。
-> 权威规格见 `sdd/pkg-0X-*/`，本文件是代码侧的速查地图。
+> 面向「开始实验」的导读：先看 §1 核心思想 → §2 分层架构 → §5 怎么训练 → **§11 优化阶段（gen_scope / LoRA / sweep）**。
+> 权威规格见 `sdd/pkg-0X-*/`，本文件是代码侧的速查地图。理论复审与文档↔代码审计见 `docs/Review_v4_TheoryAudit_2026-06.md`。
 
 ---
 
@@ -63,6 +63,7 @@ Pkg-05 训练器 & Worker           hyper_mve/training/ , hyper_mve/planning/ , 
 | `schemas/observation.py` | `ObservationLayout.total_dim(N,K)` 六块观测布局 |
 | `configs/v4_config.py` | `V4Config`（env/model/train/mup/eval/legacy）+ `from_preset` / `to_dict` |
 | `configs/presets/{easy,medium,hard}.py` | 三档难度参考配置（medium 是主对照）|
+| `configs/presets/duo*.py, medium_*lora*.py` | **[v4-opt]** duo 诊断族(N=2, 1α+1β, random_walk)与 gen_scope/LoRA 预设矩阵(§11)|
 
 ### Pkg-02 — ResourceCommons 环境（`envs/resource_commons/`）
 | 文件 | 作用 |
@@ -190,7 +191,8 @@ python hyper_mve/scripts/train_main.py --preset medium --variant hyper \
 ```
 
 **命令行参数**：
-- `--preset {easy,medium,hard}`：难度档（medium 是主对照）
+- `--preset {easy,medium,hard, duo,duo_basegen, duo_film_lora,duo_film_lora_fc2,duo_base_lora, medium_film_lora,medium_film_lora_fc2,medium_base_lora}`：难度/诊断/gen_scope 档（medium 是主对照；duo 族与 *_lora 族见 §11）
+- `--no_collect_planner`：**仅调试**——采集关规划器会触发 ln(A) 自蒸馏退化不动点（Ch5.9.1b），训练采集默认 planner-on
 - `--variant`：目前 Pkg-05 仅 `hyper` 可用；`oracle_only/infer_only` 因 TrainConfig 约束（0<s1<s2<1）留待 Pkg-08；`baseline_*` 留待 Pkg-06（会 `NotImplementedError`）
 - `--max_steps INT`：覆盖 `train.max_train_steps`
 - `--override "section.field=value"`（可重复）：任意 cfg 覆盖，例：
@@ -270,7 +272,7 @@ CRN 让其他 agent 的 step-0 动作**每场景采一次、在 A 个候选间�
 - **坐标下降**：随机 agent 顺序逐个优化；已优化 agent 从其 `π_mve` 采样（协调），未优化从先验策略采样。
 - **确定性（C5-P1）**：`agent_order` 与动作采样都由 `self.crn_rng` 派生 → 重置 seed 输出复现；
   `crn_rng` 跨 episode 持续（worker 持有同一 planner 实例）。
-- **开关（消融）**：`use_crn=False` → step-0 不共享（独立采样）；`use_coord_desc=False` → 固定顺序 `0..N-1`。
+- **开关（消融）**：`use_crn=False` → step-0 不共享（独立采样，忠实的 −CRN 格子）；`use_coord_desc=False` → **仅**固定顺序 `0..N-1`（坐标下降本体仍运行——已优化 agent 仍按 π_mve 行动；**不是** Joint 联合枚举,见 §10 缺口与 Ch6.7 三轴重定义）。
 - reward/value 经 `inverse_scalar_transform` 从标量变换空间还原后再累积折扣回报。
 
 ---
@@ -315,6 +317,8 @@ L_total = L_main + λ_b · L_belief   →   L_total.backward()   （单次 backw
 | `< 5000`（门控预热）| ✅ L_c/L_opp/L_div | ❌ 双层 detach | 仅 L_belief（专项预热）|
 | `≥ 5000` | ✅ | ✅ 但**仅 reward 路**（policy/value 因 `detach_pred_context=True` 被切）| L_belief + reward 小量 |
 
+> **[v4-opt] 真值表脚注**：上表第二行的「仅 reward 路」以默认 `detach_pred_context=True` 为前提。**duo 族与 *_lora 族预设取 False**（理由：film_head 系的功能网主干已是稳定共享 SGD 网络，放开 policy/value 梯度通达上下文编码器以解饿，见 `presets/duo.py` docstring 与 Ch4.3.5）——此时 step≥5000 后 policy/value 路也回流 BeliefNet/编码器。该开关已成为 **gen_scope 依赖**的选择。
+
 **关键设计点**：
 - 一次 `BeliefNet.forward` 供两路共用，不重复前向（数值一致、省算）。
 - `L_belief` 用**预测** `ẑ_pred`（而非 oracle）计算 → 即便 Stage 1 注入 oracle，`head_opp` 仍被训练。
@@ -323,7 +327,47 @@ L_total = L_main + λ_b · L_belief   →   L_total.backward()   （单次 backw
 
 ---
 
-## 10. 已知缺口（开始实验前知悉）
-- **超网络参数量超预算**：当前 vanilla hypernet ~3× 超 spec 07 §3.3 预算，单步前向与 MVE 规划偏慢（规划性能门已放宽到 300ms 回归护栏）。后续可换 chunked hypernet 优化。
-- **变体未接全**：`oracle_only/infer_only`(Pkg-08) 与 `baseline_*`(Pkg-06) 尚未实现。
+## 10. 已知缺口（开始实验前知悉）[v4-opt 2026-06 更新]
+- ~~**超网络参数量超预算**~~：**已由输出层 LoRA 解决**——film_head+LoRA(r=32) 把 HyperNet 参数从 3.09M 压到 ~694k（§11），无需 chunked hypernet。
+- **变体未接全**：`oracle_only/infer_only`(Pkg-08；curriculum.py 已留退化边界钩子) 与 `baseline_*`(Pkg-06) 尚未实现——**Pkg-06 是决策点 1 的阻塞项**。
+- **c_t 隐藏模式缺失**：Ch3.7 模式 B（观测中 c_t 替换为常数，BeliefNet ĉ 头的核心检验场景）无环境开关；当前可见-c 下 ĉ 是恒等读出（复审 M12，Pkg-02 待补 `c_visible`）。
+- **Joint 联合枚举缺失**：消融 4 的"−协调下降"格子无代码路径；现 `use_coord_desc=False` 仅取消顺序随机化（复审 M8,Ch6.7 三轴重定义,Pkg-08 待实现 Easy N=2 Joint 模式）。
 - 这些都不影响 `--variant hyper` 主线训练。
+
+---
+
+## 11. 优化阶段总览（`e5a9e17..dc5bbcd`,2026-06）[v4-opt 新增]
+
+> 时间线与理论影响见 Roadmap Part 3.5;事实底稿见 `docs/Review_v4_TheoryAudit_2026-06.md`。本节是代码侧速查。
+
+### 11.1 两个实测失败模式与修复
+
+| 失败 | 指纹 | 修复 |
+|---|---|---|
+| 采集无规划信号 → 策略熵钉死 ln(A)=1.79 | `diag/pi_mve_entropy` 不动 | planner-on 采集默认(`worker.collect_episode(use_planner=True)`);`--no_collect_planner` 仅调试 |
+| FULL 全量生成 → 角色坍缩 | `diag/cos_pred_cross` 0.61→0.998 | `hyper_gen_scope` 部分生成 + 分组 RMS 归一(见下) |
+
+### 11.2 gen_scope 四档(`ModelConfig.hyper_gen_scope`)
+
+| 档 | fc1 | fc2 | 头 | HyperNet 参数(medium,+LoRA r=32) |
+|---|---|---|---|---|
+| `full`(legacy 默认) | 全生成 | 全生成 | 生成 | ~3.09M(无 LoRA) |
+| `film_head` | SGD 权重+生成 FiLM | 同左 | 生成 | **~694k** |
+| `lora_fc2` | SGD+FiLM | SGD+FiLM+**ΔW=B_f A_f**(r=8) | 生成 | **~896k** |
+| `base_gen` | 纯 SGD 基座(无 FiLM) | 全生成 | 生成 | ~2.30M |
+
+配套机制(`models/hyper_network.py` + `functional_nets.py`):
+- **分组 RMS 归一**(`output_groups=[film 段, weight 段]`):整向量 L2 会把 FiLM γ 稀释到 scale/√dim(≈4e-3,调制失效);分组 RMS 使每生成元 ≈ output_scale → 部分生成预设三路 scale 统一 0.1;
+- **输出层 LoRA**(`hyper_output_rank=32`,三路统一):A 正交、B small_init(std=0.01,**不可为 0**——分组 RMS 的 1e-8 下限会在 step-0 产生 ~1e4 梯度尖峰);
+- **ΔW 尺度律**(lora_fc2 守门):ΔW ≈ output_scale²·√r;`ModelConfig.__post_init__` 强制 scale ≥ 0.05、base_gen 禁 lora_fc2、LoRA×share_subjective_trunk 抛 NotImplementedError;
+- **share_subjective_trunk**:hyper_rew/pred 合一 trunk 双头(detach 在 trunk 输出处,语义更强);LoRA 线暂弃该轴。
+
+### 11.3 预设矩阵与 sweep(决策门 0,在飞)
+
+`scripts/run_lora_experiments.py`:3 建模情形 × 2 环境 = 6 runs;GPU 池默认 {2,3,4}(**0/1 政策禁用**),每 run 单卡 `CUDA_VISIBLE_DEVICES` 钉卡;落盘 `<env>/<model>[/<gen_scope>]/tb|ckpt|train.log`。判定准则(预注册):熵离开 ln A、cos_pred_cross<0.95 为硬门槛,过门槛 cell 按 medium 福利选 thesis-default gen_scope。duo 族(random_walk)结论只作机制存活性证据,断言 B′ 正式判定落在 medium static(复审 Q6 决议)。
+
+### 11.4 诊断设施
+
+- TB 命名空间:`diag_*`→`diag/`,`*_raw`→`loss_raw/`,其余→`loss/`(train_main.py 路由);
+- 关键诊断:`diag/pi_mve_entropy`(对照 ln A)、`diag/pi_pred_entropy`、`diag/cos_{pred,rew}_{cross,same}`(角色分化;断言 A 在线证据);
+- 离线探针:`scripts/diagnose_mve.py`(checkpoint → 逐 agent returns_per_action / q_normalized)。

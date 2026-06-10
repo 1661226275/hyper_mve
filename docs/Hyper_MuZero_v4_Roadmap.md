@@ -116,6 +116,12 @@ git checkout -b v4-implementation  # 新分支开始 v4 改动
 
 > 改动顺序经过仔细设计,**严格按此顺序实施**,避免"改了 A 之后 B 跑不通"的依赖问题。
 
+> **[v4-opt 2026-06] 状态快照(HEAD = `dc5bbcd`)**:
+> - **Stage 1-3 已完成**,以 SDD 包形式落地:Pkg-01(schema/config)、Pkg-02(ResourceCommons)、Pkg-03(TriContext+BeliefNet)、Pkg-04(DualHyperNetwork v2 + 7-API 模型)、Pkg-05(Trainer/Worker/Planner;Linux GPU 修复 `2916037`/`fd2204d`)。**已知缺口**:Pkg-02 缺 Ch3.7 模式 B 的 `c_visible` 开关(复审文档 M12,待补)。
+> - **Stage 4(Pkg-06 基线族)未开始**——仅 SDD,无实现;这是决策点 1 的阻塞项。
+> - Stage 3 与 Stage 4 之间插入了计划外的**优化阶段**(见 Part 3.5),其 gen_scope 选型 sweep 构成新的**决策门 0**(Part 4)。
+> - Pkg-07(μP+评估协议)/ Pkg-08(消融驱动)SDD 未撰写;必备内容备忘见《Review_v4_TheoryAudit_2026-06》§10.3。
+
 ### Stage 1:环境层改动(Week 1,优先级 P0)
 
 依赖关系:无前置依赖,可立即开始。
@@ -243,9 +249,34 @@ git checkout -b v4-implementation  # 新分支开始 v4 改动
 
 ---
 
+## Part 3.5:优化阶段纪事(`e5a9e17..dc5bbcd`,2026-06)[v4-opt 新增]
+
+> Stage 3 完成后的试跑暴露了两类问题,触发一段计划外的优化阶段。完整事实底稿见《Review_v4_TheoryAudit_2026-06》;此处为时间线摘要。
+
+| 提交 | 问题 | 解决 |
+|---|---|---|
+| `e5a9e17`/`e6488d9` | train_main 启动体验(sys.path / 日志噪声 / warmup 进度) | 工程修复 |
+| `0ba2eac` | **采集不带规划器 → 策略熵钉死 ln(A)**(自蒸馏退化不动点,Ch5.9.1b) | planner-on 采集为默认 + `--no_collect_planner` 调试旗 + 诊断指标族(熵/角色余弦/raw 损失,Ch5.8.5);duo 诊断预设(N=2, 1α+1β, random_walk) |
+| `bea3641` | 规划器行为不可离线观察 | `scripts/diagnose_mve.py` + `return_diagnostics` |
+| `079fcdf` | **FULL 全量生成坍缩**(cos_pred_cross 0.61→0.998,value/reward 拉锯) | `hyper_gen_scope="film_head"`(共享 SGD 干 + 生成 FiLM/头)+ 分组 RMS 归一(修复整向量 L2 的 FiLM 稀释)|
+| `29e03f9` | film_head 缺 per-context 特征混合 | `base_gen` 档 + `share_subjective_trunk` 选项 |
+| `dc5bbcd` | HyperNet 参数臃肿 + 表达力/稳定性折中 | 输出层 LoRA(三路 r=32)+ `lora_fc2`(ΔW≈scale²√r 尺度律守门)+ 6 预设 + GPU 池 sweep 编排器 |
+
+**理论影响**:FULL 坍缩证伪了 Ch4.1.2 原论证的隐含假设("生成式条件化的优化免费"),触发断言 B → B′ 的谱重构(2026-06-10 复审决议);ln(A) 不动点把规划信号从工程选项升格为训练可行性必要条件。**Part 6.4 陷阱 4 合规说明**:本次文档修订全部带 `[v4-opt 2026-06]` 标记与修订记录,符合"若必须修改,在 changelog 中明确记录"的例外条款。
+
+---
+
 ## Part 4:决策点 Checkpoint 时间表
 
 > 这些 checkpoint 是项目的"风险管控杠杆",每个 checkpoint 都有明确的"继续 / pivot / 降级" 触发条件。
+>
+> **[v4-opt 2026-06]**:优化阶段插入后,"第 N 周末"的日历锚定失效(且与 Ch6 附录 A 旧周序冲突,复审 M14)——决策点改为**事件驱动序**执行,周数仅作工作量参考。当前状态:**决策门 0 在飞,决策点 1-4 未跑**。
+
+### 决策门 0(`[v4-opt]` 新增,当前在飞):gen_scope 选型
+
+**实验**:6-cell LoRA sweep({duo,medium} × {film_lora, film_lora_fc2, base_lora},`scripts/run_lora_experiments.py`)。
+
+**判定**(预注册矩阵见《Review_v4_TheoryAudit_2026-06》§3.5):硬门槛 = `diag/pi_mve_entropy` 离开 ln A 持续下降、`diag/cos_pred_cross` < 0.95 不上行;过门槛 cell 中按 medium 社会物理福利选 thesis-default gen_scope(同福利取参数小者)。**该门在决策点 1 之前**——消融 3 必须先固定 Hyper 自身形态。建议同时补 FULL 对照 cell(1-2 seed),把坍缩发现从单次观察升级为可报告结论。
 
 ### 决策点 1(Week 5 末):Easy 消融 3 - 项目生死判官
 
@@ -395,6 +426,7 @@ git checkout -b v4-implementation  # 新分支开始 v4 改动
 | 版本 | 日期 | 修订内容 |
 |---|---|---|
 | v1.0 | 2025-XX-XX(填入实际日期) | 初版,从论文设计阶段过渡到实施阶段 |
+| v1.1 [v4-opt] | 2026-06-10 | 优化阶段复审落地:Part 3 状态快照、Part 3.5 优化阶段纪事、决策门 0(gen_scope 选型)、决策点改事件驱动序;断言 B → B′(谱重构)与消融 1/4 重设计同步至 Ch1.5/4/5/6;事实底稿 =《Review_v4_TheoryAudit_2026-06》 |
 
 修订时请在此处追加新行。
 
