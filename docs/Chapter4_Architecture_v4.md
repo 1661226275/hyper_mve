@@ -34,21 +34,23 @@
 - **瓶颈 2(信念稀释)**:同类型不同信念的 agent 最优响应不同,共享网络容量在 belief 空间被平均分配;
 - **瓶颈 3(角色平均化)**:异质 cap_i 使最优策略在 agent 间天然分化,共享 PredictionNet 无法 per-cap 定制。
 
-### 4.1.2 解决路径:hypernetwork 替代 input conditioning(概要)
+### 4.1.2 解决路径:条件化谱与生成范围(概要)
 
-两种条件化方案在表达能力上等价(universal approximation),但**容量分配的几何不同**:
+> **[v4-opt 2026-06 修订]**:本节概要随 Chapter4_1_Motivation §4.1.2 重写(完整论证见该文档)。
 
-- **Input conditioning** $f_W([s, a, c_{\text{ctx}}, \text{role}_i, \text{belief}_i])$:共享 $W$ 必须同时编码所有 context 的行为,容量被平均分配;
-- **Hypernetwork** $f_{h_\Theta(c, r, b)}(s, a)$:每个 context 生成专属 $\theta$,容量是 per-context 的。
+把功能网络有效参数写作 $\theta_{\text{eff}}(c) = \theta_{\text{base}} \oplus g_\Theta(c)$(SGD 共享基座 ⊕ 超网络生成段),各条件化机制按生成段的维度与秩结构排成**条件化谱**:input conditioning(仅上下文相关偏置)↔ FiLM/film_head(对角调制)↔ lora_fc2(秩-r 混合)↔ base_gen(顶层满秩)↔ full(全函数重实例化)。两端在表达能力上等价(universal approximation),学习行为沿**两条轴**分化:
 
-当不同 context 对应的最优函数结构性差异大(如本文类型 α 与类型 β 在 c 低区段偏导差从 +1 到 +2 跨度大),hypernetwork 的样本效率与泛化能力显著优于 input conditioning。这是 Ha 2017、CAVIA 2019、FiLM 2018 等元学习文献反复观察到的现象。
+- **表达力轴**:per-context 容量沿谱单调上升;谱左端共享 $W$ 在 context 空间上容量平均分配,当上下文间最优函数结构性差异大时(本文类型 α/β 偏导 0→2)成为主导误差源——**左端败于容量平均化**;
+- **优化轴**:共享 SGD 基座是跨上下文梯度累加器;full 端移除该累加器后,每个权重需经 $h_\Theta$ 从慢训练的 80 维条件向量中估计,权重估计方差与多损失拉锯导致 per-context 输出方向坍缩(duo 运行实测 `cos_pred_cross` 0.61→0.998,[已观察-单次运行])——**右端败于优化失败**。
+
+核心架构问题因此为:**per-context 容量在谱的哪个位置开始得不偿失**(断言 B′,预注册预测峰值在 film_head+LoRA 至 lora_fc2 之间)。引文归位:Ha 2017 = full 端;FiLM 2018 = 对角点(非"hypernetwork 侧证据");LoRA (Hu 2021) = 秩-r 点;CAVIA 2019 靠近 input-conditioning 端。生成范围的实现机制见 4.3.5 节。
 
 ### 4.1.3 三层 Motivation 结构
 
 | 层级 | 容量瓶颈 | Context 通路 | 可证伪断言 |
 |---|---|---|---|
 | **主层** | 瓶颈 1:类型梯度撕裂 | role_i 中的 **type_emb** | 断言 A(类型异质性钟形曲线) |
-| **辅层 1** | 瓶颈 2:信念稀释 | belief_i 中的 $\hat{c}, \hat{z}$ | 断言 B(零样本泛化) |
+| **辅层 1** | 瓶颈 2:信念稀释 | belief_i 中的 $\hat{c}, \hat{z}$(默认可见-c 下经 $\hat{z}$;$\hat{c}$ 推断需隐藏-c 模式) | 断言 B′(条件化谱 + 零样本泛化) |
 | **辅层 2** | 瓶颈 3:角色平均化 | role_i 中的 **cap_emb** | 断言 C 分量(去除 cap 通路) |
 
 ### 4.1.4 Harsanyi 不完全信息博弈的几何对应
@@ -60,7 +62,9 @@
 | Beliefs over Others' Types | belief_i 通路 | $\hat{c}_i^t$ + Pool($\hat{z}_{i,j}^t$),后验推断 |
 | Type-Conditional Best Response | 主观通路 hyper_rew / hyper_pred | 接收完整三联输入 |
 
-这一对应在 Harsanyi 1967 之后的 60 年里**首次在深度世界模型中被显式实现**。
+这一对应在 Harsanyi 1967 之后的 60 年里**首次被实现为深度世界模型的架构性分解**。
+
+> **[v4-opt 2026-06 强化]**:部分生成(4.3.5 节)使该对应更精确:**共享 SGD 基座 = 共同知识先验**(全体经验共同训练的函数骨架),**生成段(FiLM/头/ΔW)= 类型条件最优响应**(私有信念对骨架的调制)。新颖性主张落在 Harsanyi 二分的架构化分解本身,而非"使用了超网络";full 生成连共同知识也 per-context 重建,是对该二分的过度实现——这与其优化轴失败(4.1.2)在概念上同源。完整论证见 Chapter4_1_Motivation §4.1.4。
 
 ### 4.1.5 方法论原则:偏好不变,行为涌现
 
@@ -305,12 +309,45 @@ class HyperTrans(nn.Module):
 | StateTransNet | 0.1(由 hyper_trans 生成) | 实际运行时 |
 | RewardHead | 0.05(由 hyper_rew 生成) | -- |
 | PredictionNet | 0.1(由 hyper_pred 生成) | -- |
-| **总计** | **~3.2 M** | 用于 Chapter 6 等参数量对照 |
+| **总计** | **~3.2 M** | **[v4-opt 2026-06] 此为 FULL 生成范围的 legacy 估算**,见下表 |
 
-**对照协议**(详见 Chapter 1.5 节贡献 4 加固协议 A):
+> **[v4-opt 2026-06] 按生成范围(4.3.5 节)的 HyperNet 实际参数量**(medium 配置 A=6, N=4;数值由单元测试锚定,出处 DESIGN_DOC §5.12):
 
-- **对齐范围**:hyper_trans + hyper_rew + hyper_pred + StateTransNet + RewardHead + PredictionNet 计入对齐(~2.25 M);
-- **不对齐**:RepresentationNet + BeliefNet + ContextEncoder(~0.9 M)在三条 baseline 间共享,完全相同。
+| gen_scope 配置 | HyperNet 参数(三路合计) |
+|---|---|
+| full(legacy,无 LoRA) | ~3.09 M |
+| film_head + 输出层 LoRA(r=32) | **~694 k** |
+| lora_fc2(r=8)+ 输出层 LoRA(r=32) | **~896 k** |
+| base_gen + 输出层 LoRA(r=32) | ~2.30 M |
+
+**对照协议**(`[v4-opt 2026-06]` 按断言 B′ 双指标协议修订,详见 Chapter 1.5 与 Chapter 6.4):
+
+- **对齐范围**:功能网络总参数(StateTransNet + RewardHead + PredictionNet 及对应条件化机制)沿用加固协议 A 的范围;
+- **双指标报告**:各变体的 HyperNet 参数量与"上下文相关子空间维度"(4.1.2 节谱表)作为两列**单独报告**,不再做单一"等参数量"声明——谱上各 cell 参数量天然不等(694k~3.09M),硬对齐会制造新的不公平;Input-Wide/Deep 对齐到预注册首选 cell(lora_fc2);
+- **不对齐**:RepresentationNet + BeliefNet + ContextEncoder(~0.9 M)在所有 baseline 间共享,完全相同。
+
+### 4.3.5 生成范围(hyper_gen_scope)与部分生成 [v4-opt 2026-06 新增]
+
+> **本节定位**:本节是 4.1.2 节条件化谱在实现层的落点,记录优化阶段(提交 `079fcdf`/`29e03f9`/`dc5bbcd`)引入的四档生成范围及其稳定性纪律。事实底稿见《Review_v4_TheoryAudit_2026-06》§3 与 DESIGN_DOC §5.12。
+
+**四档生成范围**(`ModelConfig.hyper_gen_scope`,对功能网络的每个 AdaLN 隐层与输出头规定"谁生成什么"):
+
+| gen_scope | fc1 | fc2 | 输出头 | 谱位置 |
+|---|---|---|---|---|
+| `full`(legacy 默认) | 全生成(W+b+γ+β) | 全生成 | 生成(W+b) | 右端 |
+| `film_head` | 共享 SGD 权重 + 生成 FiLM γ/β | 同左 | 生成 | 对角点 |
+| `lora_fc2` | 共享 SGD + 生成 FiLM | 共享 SGD + 生成 FiLM + **秩-r 增量** $W_{\text{eff}} = W_{\text{base}} + B_f A_f$ | 生成 | 秩-r 点 |
+| `base_gen` | 纯 SGD 基座(Linear+LN+ReLU,无 FiLM) | 全生成 | 生成 | 近右端 |
+
+**配套机制(三项,各解决一个实测失败模式)**:
+
+1. **分组 RMS 归一**(替代整向量 L2,`film_head`/`base_gen`/`lora_fc2` 生效):整向量 L2 归一会把单个 FiLM γ 元素稀释到 scale/√dim(0.1/√512 ≈ 4e-3 ⇒ (1+γ)≈1,调制名存实亡);分组 RMS 把生成向量按 [FiLM 段 | 权重段] 分组归一,每元素幅值 ≈ output_scale。**这改变了 output_scale 的语义**(从"整向量范数"变为"每元素幅值"),故部分生成预设把三路 scale 统一上调至 0.1。
+2. **输出层 LoRA**(`hyper_output_rank=r`,三路超网络统一):HyperNet 约 92% 参数集中在输出投影(film_head 下 hyper_trans 的 Linear(256→8768) 占 ~76%);分解为 Linear(prev, r, bias=False)→Linear(r, pc)。初始化纪律:**A 正交、B small_init(std=0.01)且不可为 0**——B=0 时 raw=0,分组 RMS 除以 1e-8 下限,step-0 产生 ~1e4 梯度尖峰。
+3. **ΔW 尺度律**(lora_fc2 守门断言):分组 RMS 下每生成元 ≈ scale,故 $\Delta W = B_f A_f$ 元素 RMS ≈ **scale²·√r**。scale=0.1, r=8 ⇒ ΔW≈0.028(kaiming 基权 0.088 的 32%,有效);scale=0.01 ⇒ ΔW≈3e-4(死)。`ModelConfig.__post_init__` 强制 lora_fc2 下三路 scale ≥ 0.05。`base_gen` 禁用 lora_fc2(fc2 已全生成,ΔW 冗余);`r=0` 与 film_head 逐字节等价(回归门)。
+
+**FULL 坍缩纪实**(`[已观察-单次运行]`,4.1.2 节轴二的实证来源):duo 运行中 FULL 范围生成的预测超网络方向坍缩(`diag/cos_pred_cross` 0.61→0.998),value/reward 损失拉锯,策略熵无改善。机理:见 4.1.2 节优化轴;独立诱因 = 上述 L2 稀释。正式结论待 sweep 的 FULL 对照 cell 复现(复审文档 §3.3 与 §3.5 预注册矩阵)。
+
+**其余开关**:`share_subjective_trunk=True` 把 hyper_rew/hyper_pred 合并为单 trunk 双头(共享下 detach_pred_context 在 trunk 输出处生效,语义强于非共享的输入 detach);与输出层 LoRA 互斥(NotImplementedError),LoRA 实验线暂弃该轴。`detach_pred_context` 成为 **gen_scope 依赖**的开关:FULL 下 True(防 value 扭曲编码器),film_head 系下 False(trunk 已是稳定 SGD 网络,放开 value 梯度解饿)——duo 系预设的取值依据。
 
 ---
 
@@ -357,9 +394,11 @@ $$\mathcal{L}_c \;=\; \frac{1}{NT} \sum_{i,t} \bigl(\hat{c}_i^t \;-\; c_t\bigr)^
 
 训练时 $c_t$ 作为 Oracle 信号给出。
 
-**模式 A(默认)**:$c_t$ 在观测中可见 → $\hat{c}_i^t$ 的训练是"对显式信号的复现",收敛快;
+**模式 A(默认)**:$c_t$ 在观测中可见 → $\hat{c}_i^t$ 的训练是"对显式信号的复现"(恒等读出),收敛快但**无推断语义**;
 
-**模式 B($c_t$ 隐藏)**:$c_t$ 不在观测中 → $\hat{c}_i^t$ 必须从资源场演化模式中推断,这是 BeliefNet 的核心考验场景,也是 Chapter 6.9 节零样本泛化实验的关键设定。
+**模式 B($c_t$ 隐藏)**:$c_t$ 不在观测中 → $\hat{c}_i^t$ 必须从资源场演化模式中推断,这是 BeliefNet $\hat{c}$ 头的核心考验场景。
+
+> **[v4-opt 2026-06 勘正]**:(1) 模式 B 的环境开关在 v4 env 中**尚未实现**,登记为 Pkg-02 待补工作项(复审文档 §2.3 / M12);在补齐之前,$\hat{c}$ 头仅在模式 A 的平凡设定下训练。(2) 原文"模式 B 是 Chapter 6.9 零样本泛化的关键设定"**有误**:零样本泛化(断言 B′ (i))检验的是 $c \to \theta$ 映射对未见 $c$ 值的外推,在模式 A 下即适定,与 $\hat{c}$ 推断无关;模式 B 服务的是信念质量实验(Ch6.10)的隐藏-c 档。信念实验自此分**可见-c / 隐藏-c 两档**。
 
 ### 4.5.2 对手类型预测损失 $\mathcal{L}_{\text{opp}}$(v4 监督 2 分类)
 
@@ -387,9 +426,11 @@ $$\mathcal{L}_{\text{opp}} \;=\; \frac{1}{NT(N-1)} \sum_{i,t,j \neq i} \text{CE}
 
 为防止 BeliefNet 输出在所有 agent 间坍缩为常数(失去"信念"的语义),引入多样性正则:
 
-$$\mathcal{L}_{\text{div}} \;=\; -\frac{1}{B} \sum_{\text{batch}} \mathrm{Var}_{i}\bigl(b_i^t\bigr)$$
+$$\mathcal{L}_{\text{div}} \;=\; \max\bigl(0,\; \sigma_{\text{target}}^2 - \mathrm{Var}_{i}(b_i^t)\bigr),\qquad \sigma_{\text{target}} = 0.1$$
 
-其中 $\mathrm{Var}_i$ 是在 batch 内 N 个 agent 的 belief 向量上的方差(各维度方差求平均)。**注**:负号是因为我们要**最大化**方差(防止坍缩),loss 最小化框架下取负号。
+其中 $\mathrm{Var}_i$ 是在 batch 内 N 个 agent 的 belief 向量上的方差(各维度方差求平均)。
+
+> **[v4-opt 2026-06 勘正]**:实现采用 **hinge 形式**(Pkg-03 spec;`belief_div_target_std=0.1`)而非原文的裸 $-\mathrm{Var}$:方差达到目标 $\sigma_{\text{target}}^2$ 后正则自动归零,避免"无限推大方差"的副作用(若所有 agent 本应持有相同信念,裸负方差会强行制造虚假分歧)。原文形式废止。
 
 ### 4.5.4 BeliefNet 总损失
 
@@ -403,7 +444,7 @@ BeliefNet 的训练**与主任务损失联合优化**:
 
 $$\mathcal{L}_{\text{total}} \;=\; \mathcal{L}_{\text{MuZero-main}} \;+\; \lambda_b \cdot \mathcal{L}_{\text{BeliefNet}}$$
 
-默认 $\lambda_b = 0.5$。具体的联合训练协议见 Chapter 5.6-5.7 节。
+默认 $\lambda_b = 1.0$(实现为 `TrainConfig.w_belief`,经 CurriculumScheduler 恒定返回——课程通过 oracle 混合权重而非 $\lambda_b$ 表达;`[v4-opt 2026-06]` 原文 0.5 按实现勘正)。具体的联合训练协议见 Chapter 5.6-5.7 节。
 
 ---
 
@@ -415,9 +456,10 @@ $$\mathcal{L}_{\text{total}} \;=\; \mathcal{L}_{\text{MuZero-main}} \;+\; \lambd
 
 hypernetwork 输出层(生成 θ 的最后一层)的初始化必须谨慎,否则生成的功能网络权重在训练初期可能产生剧烈梯度,导致训练发散。
 
-**具体做法**:
-- hypernetwork 的输出层用 **Xavier uniform 初始化,gain = 0.01**(标准 Xavier 的 1/100);
-- 这使得初期生成的功能网络权重接近 0(但非完全 0),功能网络在初期表现类似一个"无信息"网络,训练慢启动但稳定。
+**具体做法**(`[v4-opt 2026-06]` 按实现勘正,原"Xavier gain=0.01"表述废止):
+- hypernetwork 输出层用 **small_init(std = 0.01)**,trunk 用正交初始化;
+- 输出经归一化 × 可学习 `output_scale` 解耦方向与幅值:FULL 范围下为整向量 L2 归一(scale 初值 trans/rew/pred = 0.01/0.1/0.01,rew 取大以破初始化陷阱,v4.7 经验);部分生成范围(film_head/base_gen/lora_fc2)下为**分组 RMS 归一**(4.3.5 节),scale 语义变为"每元素幅值",预设统一 0.1;
+- 输出层 LoRA 时:A 正交、**B small_init(std=0.01)且不可为 0**(4.3.5 节尺度纪律)。
 
 ### 4.6.2 防线 2:LayerNorm 与 GroupNorm
 
@@ -427,9 +469,7 @@ hypernetwork 输出层(生成 θ 的最后一层)的初始化必须谨慎,否则
 
 ### 4.6.3 防线 3:梯度裁剪
 
-- hypernetwork 的梯度范数裁剪到 $\leq 1.0$(因为动态权重生成对梯度敏感);
-- 主任务的梯度范数裁剪到 $\leq 5.0$;
-- BeliefNet 的梯度范数裁剪到 $\leq 1.0$。
+> **[v4-opt 2026-06 勘正]**:实现采用对**全部参数的单一全局范数裁剪 `grad_clip = 10.0`**(`TrainConfig.grad_clip`,trainer 对 model + projector 参数统一裁剪),而非原文的三路分别裁剪(1.0/5.0/1.0)。原分路方案未实现;若训练观察到超网络路径的梯度尖峰(监控 `train/grad_norm`),分路裁剪可作为后备手段重新评估。Ch6.12.2 表中的 "grad_clip = 5.0" 同步勘正为 10.0。
 
 ### 4.6.4 防线 4:一致性损失(BYOL-style)
 

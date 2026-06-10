@@ -24,7 +24,9 @@
 
 针对 RNS-MMG 下"类型异质 agent 在共享世界模型上产生相反梯度方向"这一根本性架构挑战,本文提出 **DualHyperNetwork** 架构。其核心论断如下:
 
-> **在异构偏好公地博弈中,不同类型 agent 在同一 (s, a) 下的瞬时奖励梯度方向在 $c$ 的部分区段相反(类型 α 永远 $\partial R/\partial u_i = +1$,类型 β 因 Fehr-Schmidt 不平等厌恶项 $\phi(c)\psi(\Delta_i)$ 在 c 低区段对劣势状态产生强反向梯度);共享 RewardHead/PredictionNet 在反向传播中被相反梯度撕裂为类型平均策略,社会福利显著低于 Pareto 上界。DualHyperNetwork 通过 per-agent (type, belief, capability) 条件化的参数生成,使每个 agent 的世界模型权重在网络容量层面完全为该 (类型, 信念, 能力) 组合定制,从架构层面消除类型梯度撕裂、信念稀释与角色平均化三类容量瓶颈。**
+> **在异构偏好公地博弈中,不同类型 agent 在同一 (s, a) 下的瞬时奖励梯度方向在 $c$ 的部分区段相反(类型 α 永远 $\partial R/\partial u_i = +1$,类型 β 因 Fehr-Schmidt 不平等厌恶项 $\phi(c)\psi(\Delta_i)$ 在 c 低区段对劣势状态产生强反向梯度);共享 RewardHead/PredictionNet 在反向传播中被相反梯度撕裂为类型平均策略,社会福利显著低于 Pareto 上界。DualHyperNetwork 通过 per-agent (type, belief, capability) 条件化的参数生成,在**共享 SGD 基座 ⊕ 生成调制段**的分解下,为每种 (类型, 信念, 能力) 组合分配专属容量,从架构层面消除类型梯度撕裂、信念稀释与角色平均化三类容量瓶颈;生成范围(谱上从 FiLM 调制到全量生成)是该分配的科学变量,其最优位置由实验判定(断言 B′)。**
+
+> **[v4-opt 2026-06 注]**:原表述"世界模型权重完全为该组合定制"对应全量生成(谱右端);优化阶段实证(FULL 方向坍缩,Ch4.3.5)表明全量定制在优化轴上失败,核心论断按"基座 ⊕ 调制"分解修订。
 
 ### 类型 β 的语义说明:心理偏好 vs 行为现象
 
@@ -44,11 +46,11 @@
 
 - **断言 A(类型梯度撕裂)**:在类型异质设定下,共享 RewardHead 的社会福利显著低于 per-agent θ_rew(由超网络生成);差距在类型混合比例 = 50/50 时最大,在同质设定(0% 或 100% 类型 β)下趋于零。**注**:若实际曲线峰值偏离 50/50(例如偏向 α-多侧),这本身是 informative 结果——它揭示了"DualHyperNetwork 优势来源于类型异质性 + 类型学习难度差异"的具体组合,论文写作中将作为正向发现报告,而非偏离预期。
 
-- **断言 B(信念专属容量优于 input conditioning)**:与"context as input"(把 c_ctx, type_emb, belief_i 直接 concat 到共享网络输入)的等参数量基线相比,DualHyperNetwork 在未见 $c$ 值的零样本泛化上有显著优势;差距来源于 hypernetwork 对 belief 维度的专属容量分配,而非表达能力差异。**对照实验的等参数量对齐严格遵循三条加固协议**(见贡献 4 实验协议)。
+- **断言 B′(生成范围谱上的容量分配,`[v4-opt 2026-06]` 重构自原断言 B)**:把条件化机制按上下文相关参数子空间的维度与秩排成谱(input conditioning ↔ FiLM/film_head ↔ lora_fc2 ↔ base_gen ↔ full,Ch4.1.2),则 (i) 谱左端因**容量平均化**在未见 $c$ 值的零样本泛化上显著劣于部分生成(原断言 B 方向保留);(ii) 谱右端因**优化失败**(权重估计方差与方向坍缩)显著劣于部分生成(FULL 坍缩作为发现报告);(iii) 性能峰值位于谱**内部**(预注册预测:film_head+LoRA 至 lora_fc2 之间)。三个失败面分别可证伪。对照实验按**双指标协议**(对齐功能网络总参数;HyperNet 参数与上下文相关子空间维度单列报告)执行,见贡献 4 实验协议。
 
 - **断言 C(三联通路的不可替代性)**:c_ctx、role_i(含 type_emb + cap_emb + id_emb)、belief_i(含 $\hat{c}$ + $\hat{z}$)三联输入对主观通路 hyper_rew/hyper_pred 缺一不可;任一通路被移除均导致主指标显著下降,且三个通路的贡献相互正交、可累加。
 
-DualHyperNetwork 的设计在数学结构上严格对应于 Harsanyi (1967) [10] 不完全信息博弈中"共同知识 / 私人信念"的二分:客观通路 hyper_trans 仅以 c_ctx 为输入,生成所有 agent 共享的资源场动力学权重 θ_state(共同知识);主观通路 hyper_rew / hyper_pred 接收完整三联输入,生成 per-agent 权重(私人信念)。这一对应在文献中**首次**被实现为深度世界模型的架构性几何分解。
+DualHyperNetwork 的设计在数学结构上严格对应于 Harsanyi (1967) [10] 不完全信息博弈中"共同知识 / 私人信念"的二分,且在两个层级上同时成立:**通路层**——客观通路 hyper_trans 仅以 c_ctx 为输入,生成所有 agent 共享的 θ_state(共同知识);主观通路 hyper_rew / hyper_pred 接收完整三联输入,生成 per-agent 权重(私人信念);**参数层**(`[v4-opt 2026-06]` 强化)——共享 SGD 基座 = 共同知识先验,生成调制段(FiLM/头/ΔW)= 类型条件最优响应。新颖性主张落在 Harsanyi 二分的**架构化分解**本身(在文献中首次被实现为深度世界模型的架构性几何分解),FiLM 与 LoRA 是实现该分解的机制选择。
 
 详细架构、三联通路设计、四层稳定性防线、Harsanyi 对应,见第四章。
 
@@ -104,7 +106,7 @@ DualHyperNetwork 的设计在数学结构上严格对应于 Harsanyi (1967) [10]
 | 实验 | 检验内容 | 对应断言 |
 |---|---|---|
 | 主对比(Medium 配置,**2α+2β**) | 整体性能优势 | -- |
-| 消融 1(架构骨架) | Hyper vs Input-Wide vs Input-Deep vs Shared,严格等参数量 + μP 对齐 | 断言 A、B |
+| 消融 1(条件化谱骨架,`[v4-opt 2026-06]` 加 gen_scope 轴) | Shared / Input-Wide / Input-Deep / Hyper-film_head / Hyper-lora_fc2 / Hyper-base_gen / Hyper-full,双指标协议 + μP | 断言 A、B′ |
 | 消融 2(Context 通路) | c_ctx / role / belief 各自贡献 | 断言 C |
 | 消融 3(类型异质性扫描) | 类型 β 比例 0/4 → 4/4,**额外加 1α+3β 数据点** | 断言 A 的边界 |
 | 消融 4(规划器双重技术) | Coordinate Descent × CRN 的 2×2 | 断言 D |
@@ -112,15 +114,15 @@ DualHyperNetwork 的设计在数学结构上严格对应于 Harsanyi (1967) [10]
 | 零样本泛化 | 训练时见 $c \in \{0.2, 0.5, 0.8\}$,测试 $c \in \{0.0, 0.35, 0.65, 1.0\}$ | 断言 B |
 | 信念推断质量 | $\hat{c}$ 与 $\hat{z}$ 的准确率随训练步演化 | 课程学习有效性 |
 
-### 等参数量对齐协议(Q4 加固版)
+### 参数对照协议(Q4 加固版,`[v4-opt 2026-06]` 按断言 B′ 修订为双指标)
 
-**断言 B 的硬验证依赖严格的对照实验设计**,本文采用以下三条加固协议:
+**断言 B′ 的硬验证依赖严格的对照实验设计**。生成范围谱上各变体的 HyperNet 参数量天然不等(film_head+LoRA ~694k ↔ full ~3.09M,Ch4.3.4),原"严格等参数量"声明不再适用,修订为:
 
-- **加固 A(对齐范围)**:仅 hyper_trans + hyper_rew + hyper_pred + StateTransNet + RewardHead + PredictionNet 计入"等参数量"对齐。BeliefNet、RepresentationNet、ContextEncoder 在三条 baseline(Shared / Input / Hyper)间完全共享、参数完全相同,不计入对齐——避免稀释关键差异。
+- **加固 A(对齐范围,保留)**:功能网络通路(StateTransNet + RewardHead + PredictionNet 及其条件化机制)计入对照范围。BeliefNet、RepresentationNet、ContextEncoder 在所有 baseline 间完全共享、参数完全相同,不计入——避免稀释关键差异。
 
-- **加固 B(Input baseline 双跑)**:Input-MA-MuZero 同时跑 Input-Wide(加宽 hidden_dim 匹配总参数量)与 Input-Deep(加深 depth 匹配总参数量)两个变体。仅当 Hyper-MuZero 显著优于二者时,断言 B 才算硬验证。
+- **加固 B′(双指标报告,替代原"等参数量")**:每个变体报告两列独立指标——**HyperNet/条件化机制参数量**与**上下文相关子空间维度**(Ch4.1.2 谱表)。Input-Wide(加宽)与 Input-Deep(加深)对齐到预注册首选 cell(lora_fc2)的功能通路总参数;不做跨 gen_scope 的硬对齐(硬对齐在谱上会制造新的不公平)。仅当部分生成变体显著优于 Input-Wide 与 Input-Deep 两者时,断言 B′(i) 才算硬验证。
 
-- **加固 C(μP 学习率对齐)**:启用 Tensor Programs / μP (Yang & Hu, 2021) [41] 完整版本进行 hidden_dim scaling 时的学习率自动调整,并对每个 baseline 独立 LR sweep,取最佳 LR 再做主对比。这是顶会审稿标准的对照实验设计,确保等参数量对照不被优化动力学差异污染。
+- **加固 C(μP 学习率对齐,保留)**:启用 Tensor Programs / μP (Yang & Hu, 2021) [41] 完整版本进行 hidden_dim scaling 时的学习率自动调整,并对每个 baseline 独立 LR sweep,取最佳 LR 再做主对比。这是顶会审稿标准的对照实验设计,确保参数对照不被优化动力学差异污染。
 
 ### 主对比配置标注
 

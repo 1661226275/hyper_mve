@@ -3,6 +3,8 @@
 > **本章定位**:第四章已经定义了"如何看世界"的架构,本章定义"如何做决策与如何训练"。我们将面对两个核心难题——联合动作空间的组合爆炸、以及多智能体随机性造成的信号噪声陷阱——分别用**逐智能体协调下降**与**共同随机数**两项技术予以解决,最终给出一个在 ResourceCommons 这类异构偏好公地博弈中可工作的完整 model-based 规划-训练循环。
 >
 > **v4 关键演进**:相对 v3 版本,本章核心改动是(1)规划器与训练算法全面接入类型机制——`set_context` 接收 type_i、RewardHead 预测目标按类型分支(类型 α 用 $u_i$,类型 β 用 $u_i + \phi(c)\psi(\Delta)$);(2)BeliefNet 训练目标的对手类型推断头从动作预测改为类型 2 分类(α / β),使用 Oracle type_j 监督;(3)**新增 5.7 节"对手类型推断的课程学习协议"**,定义 Oracle → 退火 → 纯推断三阶段;(4)μP 启用与 LR sweep 协议作为附录指引;(5)Instantaneous Δ 的 reward scale 自然对齐说明(无需复杂 normalization)。
+>
+> **[v4-opt 2026-06 修订摘要]**:按优化阶段实证与《Review_v4_TheoryAudit_2026-06》勘正:π_mve 的 z-score 归一(5.2.3 / 算法 5.1)、γ=0.95、spa=8、损失权重按实现(5.6.3)、全 agent 视角训练(5.6.5 重写)、ε-greedy 采集(算法 5.2)、**自蒸馏退化引理与规划信号必要性(5.9.1b 新增)**、EMA 约定勘正(5.8.1)、诊断指标族(5.8.5 新增)。
 
 ---
 
@@ -87,11 +89,11 @@ $$G(a^{(c)}) \;=\; r_0^{(c)} \;+\; \sum_{k=1}^{K-1} \gamma^k \cdot r_k^{(c)} \;+
 
 **v4 中的关键扩展**:奖励 $r_k^{(c)}$ 由 type-specific RewardHead 计算——类型 α 的 RewardHead 仅预测物理项 $u_i$,类型 β 的 RewardHead 预测 $u_i + \phi(c)\psi(\Delta_i)$。这种类型分支由第四章 hyper_rew 通过 role_i 中的 type_emb 实现,详见 5.6 节。
 
-最终改进策略:
+最终改进策略(`[v4-opt 2026-06]` 含实现采用的 z-score 归一,原裸 softmax 表述勘正):
 
-$$\pi_{\text{mve}}(a) \;=\; \frac{\exp(G(a) / \tau_{\text{tmp}})}{\sum_{a'} \exp(G(a') / \tau_{\text{tmp}})}$$
+$$\tilde{G}(a) \;=\; \frac{G(a) - \mathrm{mean}_{a'} G(a')}{\mathrm{std}_{a'} G(a') + \epsilon}\,,\qquad \pi_{\text{mve}}(a) \;=\; \frac{\exp(\tilde{G}(a) / \tau_{\text{tmp}})}{\sum_{a'} \exp(\tilde{G}(a') / \tau_{\text{tmp}})}$$
 
-其中 $\tau_{\text{tmp}}$ 是 softmax 温度系数(下标 tmp 区分于 type 变量 $\tau_i$)。
+其中 $\tau_{\text{tmp}}$ 是 softmax 温度系数(下标 tmp 区分于 type 变量 $\tau_i$)。**z-score 归一的作用**:跨候选回报先标准化再过 softmax,使温度具有"每标准差"的语义、对 reward 量纲不变——否则 reward scale 随训练增长时,固定温度下 $\pi_{\text{mve}}$ 的锐度会随之漂移。它与 CRN 构成信号链的两端:CRN 消除候选间的非目标方差,z-score 把幸存的目标信号放大到温度可分辨的尺度。
 
 **问题清楚**:基础 MVE 在 MARL 下直接面临 5.1.2 节的 SNR 塌陷问题,需要进一步技术改良。
 
@@ -179,7 +181,7 @@ CRN 只能在**比较候选间差异**的同一时刻奏效。一旦 K 步展开
 所以严格地说,CRN **完美消除第 0 步的非目标方差**,但第 1 至 K-1 步的非目标方差仍然存在。幸运的是:
 
 1. 第 0 步的差异是规划信号的**主导来源**(后续步骤的差异是第 0 步差异在动力学下的扩散);
-2. 后续步骤的方差被 $\gamma^k$ 衰减(默认 $\gamma = 0.99$,$\gamma^5 \approx 0.95$,仍有衰减效应);
+2. 后续步骤的方差被 $\gamma^k$ 衰减(默认 $\gamma = 0.95$,$\gamma^5 \approx 0.77$;`[v4-opt 2026-06]` 原文 0.99 按实现 `TrainConfig.gamma=0.95` 勘正);
 3. K 通常较小($K = 5$),展开方差累积有限。
 
 ### 5.4.4 CRN 的工程实现要点
@@ -207,7 +209,8 @@ CRN 在代码层面的关键约束:
     s_0     ── 联合根隐状态(已由 RepresentationNet 编码)
     model   ── Hyper-MuZero 模型(含双路超网络)
     K       ── 展开步数(默认 5)
-    spa     ── samples per agent(其他 agent 采样数,默认 4)
+    spa     ── samples per agent(其他 agent 采样数;实现 spa = mve_samples // A
+               = 50 // 6 = 8,[v4-opt 2026-06] 原默认 4 按实现勘正)
     τ_tmp   ── softmax 温度(默认 1.0)
     order   ── agent 优化顺序(随机排列)
     {τ_i}   ── agent 类型分配(自己 type 已知,Self Info 设定)
@@ -269,8 +272,8 @@ CRN 在代码层面的关键约束:
 48:        Ḡ_i^{(c)} = (1/spa) · Σ_{spa_idx} G_i^{(c, spa_idx)}
 49:    end for
 50:
-51:    ── 步骤 4: softmax 得到改进策略
-52:    π_mve^i = softmax(Ḡ_i / τ_tmp)
+51:    ── 步骤 4: z-score 归一 + softmax 得到改进策略 (5.2.3 节)
+52:    π_mve^i = softmax(zscore_a(Ḡ_i) / τ_tmp)
 53: end for
 54:
 55: return {π_mve^i}
@@ -282,7 +285,7 @@ CRN 在代码层面的关键约束:
 
 $$\mathcal{O}_{\text{plan}} \;=\; N \cdot A \cdot \text{spa} \cdot K \cdot (\text{StateTransNet 前向}\,+\,\text{RewardHead 前向})$$
 
-基础配置 $N = 4, A = 6, \text{spa} = 4, K = 5$:总前向次数 $= 4 \times 6 \times 4 \times 5 = 480$,在 GPU 批处理下可在 $\sim 50$ ms 内完成。
+基础配置 $N = 4, A = 6, \text{spa} = 8, K = 5$(`[v4-opt 2026-06]` spa 按实现勘正):总前向次数 $= 4 \times 6 \times 8 \times 5 = 960$,在 GPU 批处理下可在 $\sim 100$ ms 内完成。
 
 **v4 类型分支的额外开销**:type-specific $\theta_{\text{rew}}^i$ 由 hyper_rew 在 `set_context` 时一次性生成,**不增加 K 步展开的内层开销**;额外开销只在每个外层 agent 的 set_context 调用,可忽略。
 
@@ -323,6 +326,8 @@ $$\langle\;o^t,\;\mathbf{a}^t,\;\mathbf{r}^t,\;\boldsymbol{\Delta}^t,\;\pi_{\tex
 1. **初始编码**:$s^0 = \text{RepresentationNet}(o^0)$
 2. **K 步动力学展开**(使用共享 θ_state):
    $$s^{k+1} = \text{StateTransNet}(s^k, \mathbf{a}^k; \theta_{\text{state}}) \quad,\quad k = 0, 1, \ldots, K-1$$
+
+   > **[v4-opt 2026-06] 两个实现细节**:(1) **θ_state 由窗口根部的 $c_t$ 一次生成、K 步内复用**——static c 模式下精确;random_walk 模式(duo 系预设)下是陈旧近似(窗口内 c 漂移但 θ_state 不更新),其影响随 K 与漂移步长增大,正式实验若用漂移 c 需评估该近似。(2) **梯度半衰**(v4.6 技巧):每步展开后 $s^{k} \leftarrow 0.5\, s^{k} + 0.5\,\text{sg}(s^{k})$,使穿越时间的梯度按 0.5 的因子衰减,抑制 K 步反传的梯度放大。
 3. **每步预测**(按当前视角 agent $i$ 的类型 $\tau_i$ 分支):
    $$\hat{r}_i^k = \text{RewardHead}(s^k, \mathbf{a}^k; \theta_{\text{rew}}^i)$$
    $$\hat{\pi}_i^k, \hat{v}_i^k = \text{PredictionNet}(s^k; \theta_{\text{pred}}^i)$$
@@ -356,7 +361,7 @@ $$\mathcal{L}_{\text{consist}}^k \;=\; -\,\text{CosSim}\bigl(\;\text{Proj}(s^{k+
 
 **BeliefNet 损失**:见 5.7 节(v4 课程学习协议),包含 $c$ 推断 + 对手类型 2 分类 + 信念多样性正则三项。
 
-**典型权重**:$\lambda_{\text{cons}} = 0.5$,$\lambda_b = 0.5$(可由课程阶段调节,见 5.7 节)。
+**实现权重**(`[v4-opt 2026-06]` 按 `TrainConfig` 勘正,原"全 1.0 + λ_b=0.5"废止):$w_{\text{policy}} = 1.0$,$w_{\text{value}} = 0.25$,$w_{\text{reward}} = 3.0$,$\lambda_{\text{cons}} = w_{\text{consist}} = 0.5$,$\lambda_b = w_{\text{belief}} = 1.0$(恒定,课程经 oracle 混合权重而非 $\lambda_b$ 表达)。$w_{\text{reward}} = 3.0$ 与 `rew_output_scale_init = 0.1` 配套,使 reward 梯度对上下文编码器的贡献比达 ~30%(v4.7 §5.11 教训:两者单独都不足以破初始化陷阱);$w_{\text{value}} = 0.25$ 抑制 value 路径对共享表征的过度塑形。
 
 ### 5.6.4 Instantaneous Δ 的 reward scale 自然对齐
 
@@ -372,17 +377,16 @@ $$\mathcal{L}_{\text{consist}}^k \;=\; -\,\text{CosSim}\bigl(\;\text{Proj}(s^{k+
 
 **对比 cumulative 设计**:cumulative 下 $|\Delta_i^{(t)}|$ 可达 $\eta_{\max} \cdot T = 1.5 \times 200 = 300$,Fehr-Schmidt 项可达 600,需要 reward scale 归一化与 warmup 窗口,工程复杂度显著上升。这是我们在 v4 设计阶段经过严格论证后选择 instantaneous 的核心理由(详见第一章 1.5 节贡献 4 的相关讨论)。
 
-### 5.6.5 随机视角采样
+### 5.6.5 视角覆盖:全 agent 视角训练 [v4-opt 2026-06 重写]
 
-由于本文采用"广播-视角"架构(第四章 4.3 节),训练时每个样本可以从任意 agent 视角计算损失。具体做法:
+> **修订说明**:原版本规定"每条子序列随机/分层抽取单个 agent 视角"。v4 实现改为**每个训练步对全部 N 个 agent 视角计算损失**(逐 agent 调用 `set_context_subjective` 后累加 $\mathcal{L}_{\text{policy/value/reward}}$,再除以 $K \cdot N$),v4.7 的单视角采样方案废止。本节按实现重写。
 
-对每条采样子序列,**随机选择一个 agent_id** $i \sim \mathcal{U}(\{1, \ldots, N\})$ 作为本次训练的视角,然后:
+全视角训练的取舍:
 
-- 主观通路的 $\theta_{\text{rew}}^i, \theta_{\text{pred}}^i$ 按 agent $i$ 的 (类型 $\tau_i$, 能力 $\text{cap}_i$, 信念 $b_i$) 生成;
-- 损失 $\mathcal{L}_{\text{policy}}, \mathcal{L}_{\text{value}}, \mathcal{L}_{\text{reward}}$ 都用 agent $i$ 的目标值($\pi_{\text{mve},i}, z_i, r_i$)计算;
-- 同一 batch 中不同样本可以是不同的 (agent_id, 类型) 组合,这样在统计上**所有 (agent_id, 类型) 组合都被均匀训练**。
+- **优点**:类型覆盖天然均衡(2α+2β 下每步必然两类型各半),无单视角方案的批内类型偏置;每条子序列的数据被完全利用;`diag/cos_{rew,pred}_{cross,same}` 等角色分化诊断(5.8.5 节)可在每步同时观测全部 agent 对。
+- **代价**:每步前向/反向开销 ×N。在 N=4(Medium)可接受;N=8(Hard)若算力受限,可回退为单视角采样作为算力换型(此时需恢复类型分层约束)。
 
-**v4 的额外注意**:由于主对比固定为 2α+2β,随机视角采样需要确保类型 α 与类型 β 在统计上均衡覆盖。**工程建议**:每个 batch 内强制保证类型 α 与类型 β 视角各占约 50%(stratified sampling),而非纯随机——纯随机在小 batch 下可能出现连续多个 batch 都是类型 α 视角的偏置。
+**buffer 级类型分层**:`EpisodeReplayBuffer` 提供 episode 级的分层采样(按 episode 的类型分配归入 α-heavy / β-heavy 桶,各桶至少占 batch 的 `stratified_min_per_type_frac = 0.3`)。**注意其生效条件**:类型分配在单个配置内固定时(如 Medium 恒为 2α+2β),所有 episode 落入同一桶,分层退化为均匀采样(no-op);它仅在混合多种 type_assignment 的数据流(如消融 3 跨配置汇集)中才起作用。
 
 ---
 
@@ -484,9 +488,9 @@ $$\mathcal{L}_{\text{BeliefNet}} \;=\; \lambda_c \cdot \mathcal{L}_c \;+\; \lamb
 
 本章采用 Deep Q-Networks [45] 引入的 **Target Network** 技术,但用 **指数滑动平均(EMA)** 同步:
 
-$$\theta^{\text{target}} \;\leftarrow\; \tau_{\text{ema}} \cdot \theta^{\text{online}} + (1 - \tau_{\text{ema}}) \cdot \theta^{\text{target}}$$
+$$\theta^{\text{target}} \;\leftarrow\; \tau_{\text{ema}} \cdot \theta^{\text{target}} + (1 - \tau_{\text{ema}}) \cdot \theta^{\text{online}}$$
 
-每个训练步执行一次 EMA 更新,$\tau_{\text{ema}} \in (0, 1]$ 控制同步速度。本文默认 $\tau_{\text{ema}} = 0.005$(每 200 步等价完成一次硬同步)。**记号注**:$\tau_{\text{ema}}$ 区分于 type 变量 $\tau_i$ 与 softmax 温度 $\tau_{\text{tmp}}$。
+每个训练步执行一次 EMA 更新。**`[v4-opt 2026-06]` 约定与数值按实现勘正**:$\tau_{\text{ema}}$ 在实现中是**保留率**(乘在 target 上),默认 $\tau_{\text{ema}} = 0.99$,等效更新率 $1 - \tau_{\text{ema}} = 0.01$(约每 100 步等价一次硬同步)。原版本采用相反约定(τ 乘 online)且数值 0.005(等效更新率为现值一半),已废止;0.005 与 0.01 的速率差异对稳定性的影响未单独消融,登记为待回归验证项。**记号注**:$\tau_{\text{ema}}$ 区分于 type 变量 $\tau_i$ 与 softmax 温度 $\tau_{\text{tmp}}$。
 
 **为何用 EMA 而非硬同步**:EMA 提供了更平滑的目标变化,与第四章双路超网络的**动态权重生成**特别契合——超网络输出对条件向量极其敏感,硬同步会引入 step function 式的跃变,扰乱训练。
 
@@ -514,13 +518,28 @@ $$\mathcal{L}_{\text{consist}}^k \;=\; -\,\text{CosSim}\bigl(\;\text{Proj}(s^{k+
 
 上述稳定化技术的超参数存在相互耦合,本章给出的默认配置经过早期实验验证可工作:
 
-| 技术 | 关键参数 | 默认值 | 调参建议 |
+| 技术 | 关键参数 | 默认值(`[v4-opt 2026-06]` 按实现) | 调参建议 |
 |---|---|---|---|
-| Target EMA | $\tau_{\text{ema}}$ | 0.005 | 训练不稳时降至 0.001,过慢时升至 0.01 |
+| Target EMA | $\tau_{\text{ema}}$(保留率) | 0.99(更新率 0.01) | 训练不稳时升至 0.995(更新率减半),过慢时降至 0.98 |
 | 一致性损失 | $\lambda_{\text{cons}}$ | 0.5 | 看到表示坍缩($s^k$ 方差降至 0)时升至 1.0 |
-| BeliefNet 损失 | $\lambda_b$ | 0.5 | belief 训练不充分时升至 1.0 |
+| BeliefNet 损失 | $\lambda_b$ | 1.0(恒定 = `w_belief`) | belief 训练不充分时升至 1.5 |
 | 课程退火窗口 | 阶段分割 | 30% / 40% / 30% | 阶段 2 损失突跃时延长至 50% |
+| 梯度裁剪 | grad_clip(全局单值) | 10.0 | 见 Ch4.6.3 勘正 |
 | 价值/奖励 scale | scalar_transform | 标准 MuZero $h$ | 不需调 |
+
+### 5.8.5 训练健康诊断指标族 [v4-opt 2026-06 新增]
+
+优化阶段实装的标准诊断(TensorBoard 命名空间:`diag_*` → `diag/`,未加权损失 → `loss_raw/`,其余 → `loss/`),构成训练健康的检查清单:
+
+| 指标 | 语义 | 健康判据 |
+|---|---|---|
+| `diag/pi_mve_entropy` | 规划器判别力;≈ $\ln A$(A=6 时 1.79)⇒ 未判别(5.9.1b 不动点指纹) | 训练中离开 $\ln A$ 并持续下降 |
+| `diag/pi_pred_entropy` | 策略网络锐度(被 $\pi_{\text{mve}}$ 蒸馏的下游) | 滞后于 pi_mve_entropy 下降 |
+| `diag/cos_pred_cross` / `cos_pred_same` | 跨/同类型 θ_pred 余弦;cross→1 = 角色坍缩(FULL 失败指纹,Ch4.3.5) | cross 显著低于 same 且 < 0.95 |
+| `diag/cos_rew_cross` / `cos_rew_same` | 同上,θ_rew;断言 A 的**训练时在线证据** | 同上 |
+| `loss_raw/*` | 未加权损失量纲 | 诊断 $w_*$ 配比 |
+
+配套离线探针:`scripts/diagnose_mve.py` 加载 checkpoint 后打印逐 agent 的 `returns_per_action` 与 `q_normalized`(`MVEPlanner.sample_mve_plan(return_diagnostics=True)`),用于离线检查规划器是否区分动作。
 
 ---
 
@@ -555,9 +574,11 @@ for global_step = 1 to T_max do
     a10: {π_mve^i} = MVE_Planner(s^t, model, K, spa, τ_tmp, order,
                                   {τ_i}, {cap_i}, {b_i})
     
-    a11: ── 从 π_mve 采样实际动作
+    a11: ── ε-greedy 动作选择 ([v4-opt 2026-06]: ε 概率均匀随机, 否则按 π_mve 采样;
+    a11b:    ε 从 1.0 线性衰减至 0.05 (28K 步); warmup 期 (buffer 未达 min_buffer_size)
+    a11c:    ε=1.0 且关闭规划器, 纯随机填充)
     a12: for i = 1 to N do
-    a13:     a_i^t ~ π_mve^i
+    a13:     a_i^t = Uniform(A)  with prob ε;  else  a_i^t ~ π_mve^i
     a14: end for
     
     a15: ── 执行动作,获得真实反馈
@@ -603,6 +624,20 @@ for global_step = 1 to T_max do
 
 end for
 ```
+
+### 5.9.1b 规划信号的必要性:自蒸馏退化引理 [v4-opt 2026-06 新增]
+
+> **背景**:算法 5.2 第 a09-a10 行规定采集时运行 MVE 规划器。实现初版偏离了这一规定(采集默认关闭规划器),实测策略熵钉死在 $\ln A$ 不动——该实证(提交 `0ba2eac`)暴露出本章原版本缺少对"为什么 a10 行是 load-bearing"的论证。补充如下。
+
+**自蒸馏退化引理(非正式)**:策略损失为 $\mathcal{L}_{\text{policy}} = -\sum_a \pi_{\text{tgt}}(a)\log\hat\pi(a)$。若采集时不运行规划器,则存入 buffer 的策略目标就是模型自身先验($\pi_{\text{tgt}} = \hat\pi$),交叉熵对 logits 的梯度
+
+$$\nabla_{\text{logits}} \mathcal{L}_{\text{policy}} \;=\; \hat\pi - \pi_{\text{tgt}} \;\equiv\; 0$$
+
+策略网络得不到任何改进信号,熵停留在初始化的 $\ln A$;且由于 $\pi_{\text{mve}}$ 同时充当 MVE 展开中其他 agent 的行为先验,规划器的后续调用也在退化分布上自洽——**均匀策略是"采集-规划-训练"整个闭环的不动点**。ε-greedy 不解此锁:它只改变行为策略,不改变 $\pi_{\text{tgt}} = \hat\pi$ 的恒等。
+
+**含义**:在 $A^N$ 大到 MCTS 不可行、必须依赖 MVE 风格规划的多智能体 MuZero 训练中,规划信号不是"提升样本效率的技巧",而是**训练可行性的必要条件**——这把本章贡献(协调下降 + CRN 使规划信号在可接受开销下具备判别力)的地位从效率优化提升为可行性基础设施。工程上:训练采集默认 planner-on,`--no_collect_planner` 仅作为调试探针保留;`diag/pi_mve_entropy` 是否离开 $\ln A$ 是训练健康的第一道检查(5.8.5 节)。
+
+*(证据等级:不动点论证为 [理论推断];熵钉死现象为 [已观察-单次运行]——论文正文引用前需补 1-2 seed 的 planner-off 对照曲线。)*
 
 ### 5.9.2 训练-规划-推断的循环关系
 
