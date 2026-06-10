@@ -1,6 +1,6 @@
 # 第四章 双路超网络架构与三联条件化(v4 完整版)
 
-> **本章定位**:第三章定义了 ResourceCommons 这一异构偏好公地博弈环境,本章定义在该环境上工作的网络架构——**DualHyperNetwork v4**,通过 (type, belief, capability) 三联条件化的双路超网络解决类型梯度撕裂、信念稀释、角色平均化三类容量瓶颈。本章的核心论证(4.1 节)已经将 DualHyperNetwork 与 Harsanyi 不完全信息博弈、hypernetwork vs input conditioning 容量分配理论、Fehr-Schmidt 偏好梯度结构严格对应。
+> **本章定位**:第三章定义了 ResourceCommons 这一异构偏好公地博弈环境,本章定义在该环境上工作的网络架构——**DualHyperNetwork v4**,通过 (type, belief, capability) 三联条件化的双路超网络解决类型梯度撕裂、信念稀释、角色平均化三类容量瓶颈。本章的核心论证(4.1 节)已经将 DualHyperNetwork 与 Harsanyi 不完全信息博弈、条件化谱上的容量分配理论(表达力轴 × 优化轴,[v4-opt 2026-06])、Fehr-Schmidt 偏好梯度结构严格对应。
 >
 > **v4 关键演进总览**(相对 v3):
 > 1. **4.1 motivation 重构**:从"主客解耦防止梯度撕裂"升级为基于"容量分配几何"的严格论证,锚定三个可证伪断言(A:类型梯度撕裂、B:信念专属容量、C:三联通路必要性);
@@ -547,7 +547,7 @@ hypernetwork 输出层(生成 θ 的最后一层)的初始化必须谨慎,否则
 
 本章在第三章 ResourceCommons 异构偏好公地博弈环境的基础上,完成了 DualHyperNetwork v4 架构的完整设计。核心要点:
 
-1. **设计原则的严格化(4.1)**:从 v3"主客解耦防止梯度撕裂"的笼统 motivation 升级为基于"容量分配几何"的严格论证,Fehr-Schmidt 偏导对照表(4.1.1)给出了类型梯度撕裂的可计算证据,hypernetwork vs input conditioning 的容量论证(4.1.2)有 Ha 2017、CAVIA 2019、FiLM 2018 等文献支撑;
+1. **设计原则的严格化(4.1)**:从 v3"主客解耦防止梯度撕裂"的笼统 motivation 升级为基于"容量分配几何"的严格论证,Fehr-Schmidt 偏导对照表(4.1.1)给出了类型梯度撕裂的可计算证据,条件化谱的双轴容量论证(4.1.2,[v4-opt 2026-06]:Ha 2017 = full 端、FiLM 2018 = 对角点、LoRA 2021 = 秩-r 点、CAVIA 2019 近 input 端)由优化阶段的 FULL 坍缩实证补全了优化轴;
 
 2. **三联通路的工程实现(4.2)**:c_ctx(共同知识)+ role_i(Self Info,**含 type_emb**)+ belief_i(BeliefNet 推断的 $\hat{c}$ + 类型 2 分类 $\hat{z}$),严格对应 Chapter 4.1.4 节 Harsanyi 表格;
 
@@ -563,6 +563,6 @@ hypernetwork 输出层(生成 θ 的最后一层)的初始化必须谨慎,否则
 
 8. **v3 → v4 演进表(4.8)**:9 个维度的对比,明确每一处改动的"为什么"。
 
-整个 Chapter 4 v4 严格服务于 Chapter 1.5 节贡献 2 的三个可证伪断言:断言 A 的架构来源是 type_emb 进入 role_i 通路 + per-type θ_rew(4.2.2 + 4.3.3);断言 B 的架构来源是 hypernetwork vs input conditioning 的容量分配几何(4.1.2);断言 C 的架构来源是 c_ctx + role + belief 三联通路的不可替代性(4.2 + 4.3.3)。
+整个 Chapter 4 v4 严格服务于 Chapter 1.5 节贡献 2 的三个可证伪断言:断言 A 的架构来源是 type_emb 进入 role_i 通路 + per-type θ_rew(4.2.2 + 4.3.3);断言 B′ 的架构来源是条件化谱上的容量分配几何——表达力轴 × 优化轴(4.1.2 + 4.3.5);断言 C 的架构来源是 c_ctx + role + belief 三联通路的不可替代性(4.2 + 4.3.3)。
 
 下一章(Chapter 5)将在本章架构基础上,定义"如何做决策与如何训练"——MVE+CRN 规划器、K 步展开训练、课程学习协议,完成 Hyper-MuZero v4 方法的最后一公里。

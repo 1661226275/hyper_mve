@@ -24,7 +24,7 @@
 | 断言 | 内容 | 验证实验 |
 |---|---|---|
 | **A** | 类型梯度撕裂(类型异质下共享 RewardHead 显著劣于 per-agent θ_rew) | 消融 3(类型异质性扫描钟形曲线) |
-| **B** | 信念专属容量(Hyper > Input-conditioning 在零样本泛化上) | 消融 1(架构骨架) + 零样本泛化 |
+| **B′** | 生成范围谱上的容量分配([v4-opt 2026-06] 重构自 B:左端容量平均化 / 右端优化失败 / 内部峰值) | 消融 1(条件化谱 7 变体) + 零样本泛化 + 决策门 0 sweep |
 | **C** | 三联通路必要性(c_ctx / role / belief 缺一不可) | 消融 2(Context 通路拆分) |
 | **D** | 规划器双重技术不可分割性 | 消融 4(Coord × CRN 的 2×2) |
 
@@ -221,7 +221,7 @@ git checkout -b v4-implementation  # 新分支开始 v4 改动
 - [ ] **`baselines/conflict_aware_ga.py`** - **最高风险**,若 NeurIPS 2025 源码不可得需要自实现
 - [ ] **`baselines/mappo.py`** - 共享 critic + per-agent actor + type input
 - [ ] **`baselines/qmix.py`** - Q-value 分解 + type conditioning
-- [ ] **`baselines/input_conditioning.py`**(v4 关键,贡献 2 断言 B 的对照)
+- [ ] **`baselines/input_conditioning.py`**(v4 关键,贡献 2 断言 B′ 谱左端的对照)
   - [ ] Input-Wide 变体:加宽 hidden_dim 匹配 Hyper 参数量
   - [ ] Input-Deep 变体:加深 depth 匹配 Hyper 参数量
 - [ ] **公平性 audit**:
@@ -305,7 +305,7 @@ git checkout -b v4-implementation  # 新分支开始 v4 改动
 
 **触发 P0 的应对**:与导师讨论是否调整贡献 2 的成色(从"核心创新"降为"统一框架"),或者把贡献重心转移到 Chapter 5 的 MVE+CRN 规划器(贡献 3)。
 
-### 决策点 2(Week 7 末):Easy 消融 1 - 断言 B 初步验证
+### 决策点 2(Week 7 末):Easy 消融 1 - 断言 B′ 初步验证
 
 **实验**:Easy 配置 N=2,4 个 variant(Shared / Input-Wide / Input-Deep / Hyper)× 3 seeds = 12 runs。
 
@@ -316,8 +316,8 @@ git checkout -b v4-implementation  # 新分支开始 v4 改动
 | 结果 | 行动 |
 |---|---|
 | Hyper > max(Input-Wide, Input-Deep),福利差 > 5% | **继续 Medium 完整对照** |
-| Hyper 与 Input 无显著差距,但零样本泛化有差距 | **继续**,但断言 B 措辞调整为"分布外泛化优势" |
-| Hyper 与 Input 在所有指标无显著差距 | **触发断言 B 降级预案**:Chapter 4.1.2 容量分配几何论证降为"理论可能性",贡献 2 降级 |
+| 部分生成与 Input 无显著差距,但零样本泛化有差距 | **继续**,但断言 B′(i) 措辞调整为"分布外泛化优势" |
+| 部分生成与 Input 在所有指标无显著差距 | **触发断言 B′(i) 降级预案**:Chapter 4.1.2 表达力轴论证降为"理论可能性",贡献 2 降级(B′(ii)/(iii) 由 FULL 格子与谱形单独判定) |
 
 ### 决策点 3(Week 9 末):Medium 主对比 - 整体性能验证
 
@@ -350,7 +350,7 @@ git checkout -b v4-implementation  # 新分支开始 v4 改动
 | **算力不足** | 中 | 高 | Pre-flight 2.1 早期确认;若不足启动降级方案 |
 | **Baseline 源码不可得** | 中(尤其 Conflict-Aware GA) | 中 | Pre-flight 2.2 早期确认;若不可得替换或砍除 |
 | **决策点 1 失败(断言 A 不成立)** | 中 | **极高** | Easy 消融 3 提前在 Week 5 末完成,留 7 周时间 pivot |
-| **决策点 2 失败(断言 B 不成立)** | 中 | 高 | 降级预案:断言 B 措辞改为"分布外优势" |
+| **决策点 2 失败(断言 B′(i) 不成立)** | 中 | 高 | 降级预案:断言 B′(i) 措辞改为"分布外优势";(ii)/(iii) 独立判定 |
 | **课程学习不收敛** | 中 | 中 | 延长阶段 2 退火期;若仍无效,简化 BeliefNet 任务 |
 | **训练不稳定 / 表示坍缩** | 低 | 中 | 已有 BYOL consistency loss + EMA target,通常能解决 |
 | **类型分配的 ID 偏置** | 低 | 低 | seed 间随机化 (类型, agent_id) 绑定 |
