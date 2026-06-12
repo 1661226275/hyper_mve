@@ -616,3 +616,24 @@ def test_no_detach_before_belief_loss():
 | 日期 | 修订 | 依据 |
 |---|---|---|
 | 2026-06-10 | 返回契约新增 10 个诊断键 + thetas 访问器依赖 | 提交 0ba2eac;复审 §4.3 |
+
+## [v4-opt 2026-06b] 修订:策略 CE 的 planner_on 掩蔽 + 陈旧度诊断
+
+1. **策略 CE 掩蔽**:batch 新增 `planner_on (B,) bool`(spec 03 修订)。策略损失改为
+   masked mean:`L_policy += (ce * mask).sum() / mask.sum().clamp(min=1)`——
+   planner-off episode(warmup / `--no_collect_planner`)的 pi_mve 是模型自身先验
+   (自蒸馏目标,Ch5.9.1b),不再产生虚假策略梯度;value/reward/consistency/belief
+   不受影响(随机数据仍有监督价值)。键缺失(直接调用方/旧测试)⇒ 全 1 掩码,
+   行为同旧;
+2. **`diag_pi_mve_entropy` 同步掩蔽**:仅在 planner-on 样本上统计(warmup 先验会
+   抬高均值);batch 内无 planner-on 样本时为 NaN(train_main 的 TB writer 跳过
+   NaN 标签——顺带消灭 N=2 时恒 NaN 的 `cos_*_same` 死标签);
+3. **新诊断键 `diag_target_age`**(trainer 注入,非 compose 返回):`global_step −
+   collected_at_step` 的 batch 均值,量化存储目标的陈旧度(buffer=5000 episodes ≈
+   5000 步历史)。
+
+## 修订记录 (Changelog)(追加)
+
+| 日期 | 修订 | 依据 |
+|---|---|---|
+| 2026-06-11 | planner_on 掩蔽策略 CE;H_pi_mve 掩蔽;diag_target_age | 2agent 诊断;用户决策 2026-06-11(掩蔽方案) |

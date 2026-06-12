@@ -578,3 +578,24 @@ sample_mve_plan(model, root_s, cap, belief, c_t, return_diagnostics=False)
 | 日期 | 修订 | 依据 |
 |---|---|---|
 | 2026-06-10 | return_diagnostics API;use_coord_desc 消融语义勘正(非 Joint);Joint 枚举登记 Pkg-08 | 提交 bea3641;复审 §2.4 / M8、Q2 决议 |
+
+### 3. [v4-opt 2026-06b] z-score 噪声护栏(`mve_qstd_floor`)与诊断键扩充
+
+2agent 诊断(2026-06-11):π_mve = softmax(zscore(Ḡ)/τ) 在候选回报近等时把 spa-场景
+均值的采样噪声放大到单位尺度 ⇒ 输出"自信但任意"的目标(实测 H_pi_mve 在 ~6000 步后
+回升与之相容)。修订:
+
+1. **`train.mve_qstd_floor`(默认 0.01;0.0 关闭)**:Phase 4 中 `q_std_raw <
+   floor` 的行回退为**均匀目标**(无信息时的诚实目标),`torch.where` 实现,CRN
+   布局不动;
+2. **诊断键扩充**:`return_diagnostics=True` 时新增 `q_std (B,N)`(护栏前原始值)、
+   `q_gap (B,N)`(候选回报 max−min)、`uniform_frac`(被护栏命中的行占比);worker
+   采集时全程消费(张量本就已算出,零额外开销),落 TB `collect/q_std` 等;
+3. 护栏阈值的标定依据:先看 `collect/q_std` 分布再调 —— 默认 0.01 为保守初值,
+   预期命中率应远低于 50%,否则说明模型对候选动作几乎无区分(本身即诊断信号)。
+
+## 修订记录 (Changelog)(追加)
+
+| 日期 | 修订 | 依据 |
+|---|---|---|
+| 2026-06-11 | mve_qstd_floor 噪声护栏;q_std/q_gap/uniform_frac 诊断键;worker 全程消费 | 2agent 诊断(H_pi_mve 回升);用户决策 2026-06-11 |

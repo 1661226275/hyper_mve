@@ -1,4 +1,10 @@
-"""EvalConfig — evaluation protocol parameters (Pkg-07 implements)."""
+"""EvalConfig — evaluation protocol parameters (Pkg-07 implements).
+
+[v4-opt 2026-06] The in-training periodic evaluation (training/evaluation.py,
+wired into train_main) consumes ``evaluate_freq`` + the ``eval_c_grid`` /
+``eval_episodes_*`` fields below. The remaining scan-point fields stay reserved
+for the full Pkg-07 protocol.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,8 +14,17 @@ from dataclasses import dataclass
 class EvalConfig:
     """Evaluation cadence and scan points (Ch6.2 / 6.6 / 6.9)."""
 
-    evaluate_freq: int = 500            # evaluate every N train steps
-    evaluate_episodes: int = 30
+    # [v4-opt 2026-06] 500 -> 1000: in-training eval cadence (after buffer warmup).
+    evaluate_freq: int = 1000           # evaluate every N train steps (0 disables)
+    evaluate_episodes: int = 30         # reserved for the full Pkg-07 suite
+
+    # [v4-opt 2026-06] in-training dual-mode eval (training/evaluation.py):
+    # deterministic (argmax, epsilon=0) episodes on static-c eval envs, per c value.
+    # "prior" = planner OFF (the distilled policy pi_hat); "planner" = planner ON
+    # (the true acting agent). The planner-prior return gap measures distillation.
+    eval_c_grid: tuple[float, ...] = (0.2, 0.5, 0.8)
+    eval_episodes_prior: int = 4
+    eval_episodes_planner: int = 2
 
     # c-segment evaluation (Ch6.2.4)
     c_segments: tuple[tuple[float, float], ...] = (

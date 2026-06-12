@@ -50,6 +50,15 @@ def build_duo_config() -> V4Config:
         pred_output_scale_init=0.1,
     )
 
-    train = replace(base.train, detach_pred_context=False)
+    train = replace(
+        base.train,
+        detach_pred_context=False,
+        # [v4-opt 2026-06] N=2 belief losses are trivial (one fixed opponent label;
+        # 2-agent variance hinge) and the gate opening at 5000 coincided with the
+        # LR-warmup end — two confounded regime changes right at the observed
+        # policy-loss U-turn. Keep the belief path permanently detached from the
+        # main loss in duo runs (L_belief still trains the BeliefNet).
+        belief_grad_gating_steps=1_000_000_000,
+    )
 
     return replace(base, env=env, model=model, train=train, preset_name="duo")

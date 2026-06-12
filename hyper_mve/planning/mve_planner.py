@@ -77,6 +77,8 @@ class MVEPlanner:
         self.mve_samples = cfg.train.mve_samples
         self.mve_depth = cfg.train.mve_depth
         self.mve_temperature = cfg.train.mve_temperature
+        # [v4-opt 2026-06] uniform fallback when candidate returns are noise-level flat.
+        self.mve_qstd_floor = getattr(cfg.train, "mve_qstd_floor", 0.0)
         self.gamma = cfg.train.gamma
         self.use_crn = cfg.train.use_crn
         self.use_coord_desc = cfg.train.use_coord_desc
@@ -108,14 +110,19 @@ class MVEPlanner:
             belief: {agent_id: (c_hat (B,), z_hat (B, N-1, 2))} per agent (D7).
             c_t:    (B,) shared context scalar.
             return_diagnostics: if True, also return the per-agent per-action
-                expected returns and their normalised scores (offline probe only;
-                default False keeps the (B, N, A) return for the worker/tests).
+                expected returns and their normalised scores (cheap — all tensors
+                are already computed; default False keeps the (B, N, A) return for
+                the worker/tests).
 
         Returns:
             pi_mve: (B, N, A) per-agent search policy.
-            If ``return_diagnostics``: ``(pi_mve, {"returns_per_action": (B, N, A),
-            "q_normalized": (B, N, A)})`` — the raw expected return per candidate
-            first-action (original reward scale) and its z-scored value.
+            If ``return_diagnostics``: ``(pi_mve, diag)`` with keys
+            ``returns_per_action`` (B, N, A) raw expected return per candidate
+            first-action (original reward scale); ``q_normalized`` (B, N, A) its
+            z-scored value; ``q_std`` (B, N) raw per-candidate return std (pre-floor);
+            ``q_gap`` (B, N) max-min spread of the candidate returns; and
+            ``uniform_frac`` scalar — fraction of (B, N) rows that fell below
+            ``mve_qstd_floor`` and were replaced by the uniform target [v4-opt 2026-06].
         """
         B = root_s.shape[0]
         N, A = self.N, self.A
@@ -159,6 +166,7 @@ class MVEPlanner:
         pi_mve = torch.zeros(B, N, A, device=device)
         diag_returns = torch.zeros(B, N, A, device=device)   # probe: expected return per action
         diag_qnorm = torch.zeros(B, N, A, device=device)     # probe: z-scored return per action
+        diag_qstd = torch.zeros(B, N, device=device)         # probe: raw candidate-return std
         optimised = set()
 
         for j in agent_order:
@@ -261,14 +269,34 @@ class MVEPlanner:
             # ── Phase 4: aggregate with CRN layout (B*M,) -> (B, spa, A) -> (B, A)
             returns_per_action = cum_return_j.view(B, spa, A).mean(dim=1)
             q_mean = returns_per_action.mean(dim=-1, keepdim=True)
-            q_std = returns_per_action.std(dim=-1, keepdim=True) + 1e-8
-            q_normalized = (returns_per_action - q_mean) / q_std
-            pi_mve[:, j] = F.softmax(q_normalized / temperature, dim=-1)
+            q_std_raw = returns_per_action.std(dim=-1, keepdim=True)     # (B, 1) pre-floor
+            q_normalized = (returns_per_action - q_mean) / (q_std_raw + 1e-8)
+            pi_j = F.softmax(q_normalized / temperature, dim=-1)
+            # [v4-opt 2026-06] noise guard: when the A candidates' returns are nearly
+            # equal, the z-score amplifies spa-scenario sampling noise to unit scale
+            # and softmax emits a confident-but-arbitrary target. Below the floor the
+            # honest target is "no information" = uniform.
+            if self.mve_qstd_floor > 0.0:
+                noise_rows = q_std_raw < self.mve_qstd_floor              # (B, 1)
+                pi_j = torch.where(noise_rows, torch.full_like(pi_j, 1.0 / A), pi_j)
+            pi_mve[:, j] = pi_j
             diag_returns[:, j] = returns_per_action
             diag_qnorm[:, j] = q_normalized
+            diag_qstd[:, j] = q_std_raw.squeeze(-1)
 
             optimised.add(j)
 
         if return_diagnostics:
-            return pi_mve, {"returns_per_action": diag_returns, "q_normalized": diag_qnorm}
+            diag_qgap = diag_returns.max(dim=-1).values - diag_returns.min(dim=-1).values
+            if self.mve_qstd_floor > 0.0:
+                uniform_frac = (diag_qstd < self.mve_qstd_floor).float().mean()
+            else:
+                uniform_frac = torch.zeros((), device=device)
+            return pi_mve, {
+                "returns_per_action": diag_returns,
+                "q_normalized": diag_qnorm,
+                "q_std": diag_qstd,            # (B, N) raw (pre-floor)
+                "q_gap": diag_qgap,            # (B, N) max-min candidate return spread
+                "uniform_frac": uniform_frac,  # scalar in [0, 1]
+            }
         return pi_mve  # (B, N, A)

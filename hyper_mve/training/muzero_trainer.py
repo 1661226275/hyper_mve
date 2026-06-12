@@ -113,6 +113,11 @@ class MuZeroTrainer:
 
         out = {k: (v.item() if torch.is_tensor(v) else float(v)) for k, v in losses.items()}
         out["lr"] = self.lr_scheduler.get_last_lr()[0]
+        # [v4-opt 2026-06] target staleness: mean age (train steps) of the sampled
+        # episodes' stored pi_mve targets (buffer=5000 episodes can hold ~5000 steps
+        # of history; stale CE rises mechanically once the model moves fast).
+        if "collected_at_step" in batch:
+            out["diag_target_age_steps"] = float(global_step) - batch["collected_at_step"].float().mean().item()
         return out
 
     # ------------------------------------------------------ n-step return

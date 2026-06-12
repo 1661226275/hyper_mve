@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
+import time
+from collections import deque
 from dataclasses import replace
 
 # Allow `from hyper_mve...` when launched as `python hyper_mve/scripts/train_main.py`
@@ -36,7 +39,7 @@ from hyper_mve.configs import V4Config
 from hyper_mve.models import HyperMuZeroModel, Projector
 from hyper_mve.envs.resource_commons.env import ResourceCommonsEnv
 from hyper_mve.schemas import AgentType
-from hyper_mve.training import EpisodeReplayBuffer, MuZeroTrainer, Worker
+from hyper_mve.training import EpisodeReplayBuffer, MuZeroTrainer, Worker, run_eval
 
 _SUB_CONFIGS = ("env", "model", "train", "mup", "eval", "legacy")
 _DEFERRED_VARIANTS = {
@@ -133,10 +136,14 @@ def main(argv=None) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(cfg, args.variant)
     projector = Projector(cfg.model.latent_dim, cfg.model.proj_dim)
-    env = ResourceCommonsEnv(cfg.env, seed=args.seed)
+    # [v4-opt 2026-06] vectorized collection: episodes_per_iter envs stepped in
+    # lockstep through the (already batched) MVE planner — the old B=1 path was
+    # kernel-launch bound (~0.08 train-steps/s on GPU).
+    n_envs = max(1, cfg.train.episodes_per_iter)
+    envs = [ResourceCommonsEnv(cfg.env, seed=args.seed * 1000 + i) for i in range(n_envs)]
 
     trainer = MuZeroTrainer(cfg, model, projector=projector, device=device)
-    worker = Worker(cfg, model, env)
+    worker = Worker(cfg, model, envs=envs)
     buffer = EpisodeReplayBuffer(cfg)
 
     start_step = trainer.load_checkpoint(args.resume_from) if args.resume_from else 0
@@ -158,12 +165,17 @@ def main(argv=None) -> None:
           f"min_buffer_size={cfg.train.min_buffer_size} episodes "
           f"(T_max={cfg.env.T_max}; silent collection, can take a while)...", flush=True)
 
-    # Warm up the buffer (fast collection without the planner).
+    # Warm up the buffer (fast batched collection without the planner). The stored
+    # pi_mve is the model's own prior — a self-distillation target — so the episodes
+    # are flagged planner_on=False and the policy loss masks them [v4-opt 2026-06].
     log_every = max(1, cfg.train.min_buffer_size // 20)
+    last_logged = 0
     while len(buffer) < cfg.train.min_buffer_size:
-        records, c_t_seq = worker.collect_episode(epsilon=1.0, use_planner=False)
-        buffer.store_episode(records, c_t_seq)
-        if len(buffer) % log_every == 0:
+        for res in worker.collect_episodes(epsilon=1.0, use_planner=False):
+            buffer.store_episode(res.records, res.c_t_seq,
+                                 planner_on=False, collected_at_step=start_step)
+        if len(buffer) - last_logged >= log_every:
+            last_logged = len(buffer)
             print(f"[warmup] buffer {len(buffer)}/{cfg.train.min_buffer_size}", flush=True)
 
     # Training collection MUST carry the planning signal: with use_planner=False the
@@ -172,20 +184,59 @@ def main(argv=None) -> None:
     # MVE plan is an *improved* target the prediction net can learn toward.
     collect_planner = not args.no_collect_planner
     print(f"[train_main] warmup done; starting training loop "
-          f"(collection planner={'ON' if collect_planner else 'OFF'}).", flush=True)
+          f"(collection planner={'ON' if collect_planner else 'OFF'}; "
+          f"n_envs={n_envs}; eval every {cfg.eval.evaluate_freq} steps).", flush=True)
+
+    # --- [v4-opt 2026-06] periodic deterministic evaluation (dual mode + c-grid) ---
+    types_np = np.array([int(t) for t in cfg.env.type_assignment])
+    alpha_mask = types_np == int(AgentType.ALPHA)
+    beta_mask = types_np == int(AgentType.BETA)
+    best_eval_return = -float("inf")
+
+    def _run_and_log_eval(step: int) -> None:
+        nonlocal best_eval_return
+        metrics = run_eval(model, cfg, global_step=step)
+        planner_total = metrics.get("planner/return_total", float("nan"))
+        prior_total = metrics.get("prior/return_total", float("nan"))
+        gap = metrics.get("planner_prior_gap", float("nan"))
+        print(f"[eval] step {step}  planner_total={planner_total:.3f} "
+              f"prior_total={prior_total:.3f} gap={gap:.3f}", flush=True)
+        if writer is not None:
+            for k, v in metrics.items():
+                if isinstance(v, float) and math.isnan(v):
+                    continue
+                writer.add_scalar(f"eval/{k}", v, step)
+        ref = planner_total if not math.isnan(planner_total) else prior_total
+        if not math.isnan(ref) and ref > best_eval_return:
+            best_eval_return = ref
+            trainer.save_checkpoint(os.path.join(args.ckpt_dir, "best.pt"))
+
+    if cfg.eval.evaluate_freq > 0:
+        _run_and_log_eval(global_step)   # post-warmup baseline
+
+    collect_window: deque = deque(maxlen=32)   # recent CollectResult for collect/* stats
+    collect_sec = train_sec = env_steps_per_sec = 0.0
 
     while global_step < max_steps:
         eps = _epsilon(cfg, global_step)
-        for _ in range(cfg.train.episodes_per_iter):
-            records, c_t_seq = worker.collect_episode(epsilon=eps, use_planner=collect_planner)
-            buffer.store_episode(records, c_t_seq)
+        t0 = time.perf_counter()
+        results = worker.collect_episodes(epsilon=eps, use_planner=collect_planner)
+        for res in results:
+            buffer.store_episode(res.records, res.c_t_seq,
+                                 planner_on=collect_planner, collected_at_step=global_step)
+            collect_window.append(res)
+        collect_sec = time.perf_counter() - t0
+        env_steps_per_sec = sum(len(r.records) for r in results) / max(collect_sec, 1e-9)
 
+        t1 = time.perf_counter()
         for _ in range(cfg.train.train_steps_per_iter):
             batch = buffer.sample_batch(cfg.train.batch_size, cfg.train.unroll_K)
             losses = trainer.train_step(batch, global_step)
             global_step += 1
 
             if global_step % 100 == 0:
+                rets = np.stack([r.returns for r in collect_window], axis=0)   # (n, N)
+                ret_total = float(rets.sum(axis=1).mean())
                 msg = (
                     f"step {global_step}  total={losses['total']:.4f} "
                     f"main={losses['main']:.4f} | "
@@ -194,11 +245,15 @@ def main(argv=None) -> None:
                     f"belief={losses['belief']:.4f} | "
                     f"H_pi_mve={losses['diag_pi_mve_entropy']:.3f} "
                     f"cos_pred_cross={losses['diag_cos_pred_cross']:.3f} "
+                    f"ret={ret_total:.2f} eps={eps:.2f} "
                     f"lr={losses['lr']:.2e}"
                 )
                 print(msg, flush=True)
                 if writer is not None:
                     for k, v in losses.items():
+                        # NaN tags (e.g. cos_*_same with N=2: no same-type pair) are skipped.
+                        if isinstance(v, float) and math.isnan(v):
+                            continue
                         # route: diag_* -> diag/, *_raw -> loss_raw/, else loss/
                         if k.startswith("diag_"):
                             tag = f"diag/{k[len('diag_'):]}"
@@ -207,10 +262,39 @@ def main(argv=None) -> None:
                         else:
                             tag = f"loss/{k}"
                         writer.add_scalar(tag, v, global_step)
+                    # --- collect/* observability [v4-opt 2026-06] ---
+                    writer.add_scalar("collect/return_total", ret_total, global_step)
+                    if alpha_mask.any():
+                        writer.add_scalar("collect/return_alpha",
+                                          float(rets[:, alpha_mask].sum(axis=1).mean()), global_step)
+                    if beta_mask.any():
+                        writer.add_scalar("collect/return_beta",
+                                          float(rets[:, beta_mask].sum(axis=1).mean()), global_step)
+                    writer.add_scalar("collect/epsilon", eps, global_step)
+                    writer.add_scalar("collect/H_pi_mve_fresh",
+                                      float(np.mean([r.pi_entropy_mean for r in collect_window])),
+                                      global_step)
+                    qstds = [r.q_std_mean for r in collect_window if not math.isnan(r.q_std_mean)]
+                    if qstds:
+                        writer.add_scalar("collect/q_std", float(np.mean(qstds)), global_step)
+                        writer.add_scalar("collect/q_gap", float(np.mean(
+                            [r.q_gap_mean for r in collect_window if not math.isnan(r.q_gap_mean)]
+                        )), global_step)
+                        writer.add_scalar("collect/uniform_frac", float(np.mean(
+                            [r.uniform_frac for r in collect_window if not math.isnan(r.uniform_frac)]
+                        )), global_step)
+                    # --- perf/* throughput probes [v4-opt 2026-06] ---
+                    writer.add_scalar("perf/collect_sec_per_iter", collect_sec, global_step)
+                    writer.add_scalar("perf/train_sec_per_iter", train_sec, global_step)
+                    writer.add_scalar("perf/env_steps_per_sec", env_steps_per_sec, global_step)
+
+            if cfg.eval.evaluate_freq > 0 and global_step % cfg.eval.evaluate_freq == 0:
+                _run_and_log_eval(global_step)
             if global_step % 10_000 == 0:
                 trainer.save_checkpoint(os.path.join(args.ckpt_dir, f"step_{global_step}.pt"))
             if global_step >= max_steps:
                 break
+        train_sec = time.perf_counter() - t1
 
     trainer.save_checkpoint(os.path.join(args.ckpt_dir, f"step_{global_step}.pt"))
     if writer is not None:

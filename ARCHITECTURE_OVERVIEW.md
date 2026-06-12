@@ -371,3 +371,29 @@ L_total = L_main + λ_b · L_belief   →   L_total.backward()   （单次 backw
 - TB 命名空间:`diag_*`→`diag/`,`*_raw`→`loss_raw/`,其余→`loss/`(train_main.py 路由);
 - 关键诊断:`diag/pi_mve_entropy`(对照 ln A)、`diag/pi_pred_entropy`、`diag/cos_{pred,rew}_{cross,same}`(角色分化;断言 A 在线证据);
 - 离线探针:`scripts/diagnose_mve.py`(checkpoint → 逐 agent returns_per_action / q_normalized)。
+
+### 11.5 2agent 三连跑诊断与修复(2026-06-11)[v4-opt 2026-06b]
+
+> 数据源:`2agent/{basegen, film_head/{on,off}}` 三 run(seed 0,~11k 步)。诊断结论与修复一并落码。
+
+**实测发现:**
+
+| 发现 | 证据 | 修复 |
+|---|---|---|
+| 吞吐瓶颈:0.08 train-steps/s(1M 步 ≈ 135 天) | event 时间戳;采集 B=1 → 每 env step ~70 次小 GPU 调用 | **向量化采集**:`Worker.collect_episodes` 以 n_envs=episodes_per_iter(8)lockstep 推进,planner 批量 B=8 |
+| 零可观测:无回报、无评估(22 个 TB 标签全为损失/诊断) | TB 标签清单 | **`eval/*` + `collect/*` + `perf/*` 三族**(见下) |
+| policy loss U 形(~6000 步谷底后回升),H_pi_mve 同步回升 | 三 run 一致 | 三个混杂因素分别处理(下三行) |
+| warmup 1000 episodes 存自蒸馏 π 目标(planner-off ⇒ pi_mve=自身先验),~4000 步才被 FIFO 逐出 | worker.py 旧 95-96 行 | **planner_on 掩蔽**:buffer per-episode 元数据 + 策略 CE masked mean |
+| belief 闸门(5000)与 LR warmup 终点(5000)重合 ⇒ 双 regime change 混杂 | grad_gating.py / train_config | duo 族预设 `belief_grad_gating_steps=1e9`(N=2 belief 损失本就平凡;L_belief 仍训 BeliefNet) |
+| z-score 把近等候选回报的采样噪声放大为单位尺度目标 | mve_planner Phase 4 仅 1e-8 下限 | **`mve_qstd_floor`(默认 0.01)**:q_std 低于阈值的行回退均匀目标 |
+| `cos_*_same` N=2 恒 NaN(无同类型对) | loss_composition `_role_cosine` | TB writer 跳过 NaN 标签(语义本就正确,纯日志卫生) |
+| `cos_rew_cross`≈0.98(奖励头几乎不随上下文分化;FS 项 ~5% 奖励尺度被淹没) | basegen/film_on TB | 暂记录;靠新评估族判断是否实际损害回报 |
+
+**新 TB 标签族:**
+- `eval/{prior,planner}/return_{total,alpha,beta}[_c{0.2,0.5,0.8}]`、`eval/planner_prior_gap`、`eval/planner/{pi_mve_entropy,q_std,uniform_frac}` —— 每 `eval.evaluate_freq`(默认 1000)步一次,双模式(prior=蒸馏策略 argmax π̂ / planner=真实智能体 argmax π_mve)确定性评估,static-c 网格 + 固定种子 + 固定 planner CRN(跨评估可比);best ckpt 按 `planner/return_total` 存 `best.pt`;
+- `collect/{return_total,return_alpha,return_beta,epsilon,H_pi_mve_fresh,q_std,q_gap,uniform_frac}` —— 采集侧滚动均值(近 32 episodes);
+- `perf/{collect_sec_per_iter,train_sec_per_iter,env_steps_per_sec}`;`diag/target_age_steps`(采样目标陈旧度)。
+
+**验证脚本:**`scripts/test_vectorized_worker.py`(B=1/B=8、确定性重复、掩蔽路径)、`scripts/test_eval_runner.py`(标签集、有限性、确定性)。
+
+**采集后修订 1**:确定性评估 argmax 在均匀概率行(噪声护栏回退或自然平局)上会恒选 action 0(ResourceCommons 中 = NOOP) ⇒ planner-mode eval 系统性低估。修复:`Worker.collect_episodes` 新增 `tiebreak_rng` 参数,均匀行用随机化 argmax(`np.random.choice(flatnonzero(p == p.max()))`);`run_eval` 以固定种子 1234567 注入(CRN 跨评估)。`planner_prior_gap` 改为按 c 网格逐点取均值再做差,消除两模式 episode 数不对称带来的偏置。

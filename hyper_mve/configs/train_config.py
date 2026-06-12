@@ -75,6 +75,13 @@ class TrainConfig:
     mve_samples: int = 50
     mve_depth: int = 5
     mve_temperature: float = 1.0
+    # [v4-opt 2026-06] z-score noise guard (2agent run diagnosis): rows whose raw
+    # per-candidate return std falls below this floor get a UNIFORM pi_mve target.
+    # Without it, near-equal candidate returns make the z-score amplify the
+    # spa-scenario sampling noise to unit scale and softmax emits a confident but
+    # arbitrary target (observed as H_pi_mve drifting up after step ~6000).
+    # 0.0 disables the guard (legacy behaviour).
+    mve_qstd_floor: float = 0.01
 
     # 2x2 ablation switches (Ch6.7)
     use_crn: bool = True

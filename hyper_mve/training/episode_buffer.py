@@ -40,19 +40,35 @@ class EpisodeReplayBuffer:
 
         self._episodes: "deque[dict[str, np.ndarray]]" = deque(maxlen=self.max_episodes)
         self._c_t_seqs: "deque[np.ndarray]" = deque(maxlen=self.max_episodes)
+        # [v4-opt 2026-06] parallel per-episode metadata (same FIFO discipline):
+        # planner_on=False marks self-distillation pi_mve targets (warmup / debug
+        # collection) so the policy loss can mask them; collected_at_step feeds the
+        # diag/target_age_steps staleness probe.
+        self._planner_on: "deque[bool]" = deque(maxlen=self.max_episodes)
+        self._collected_at: "deque[int]" = deque(maxlen=self.max_episodes)
 
         self.stratified: bool = cfg.train.stratified_sampling
         self.stratified_min_frac: float = cfg.train.stratified_min_per_type_frac
 
     # ------------------------------------------------------------- store
 
-    def store_episode(self, records: list[TimeStepRecord], c_t_seq: torch.Tensor) -> None:
+    def store_episode(
+        self,
+        records: list[TimeStepRecord],
+        c_t_seq: torch.Tensor,
+        planner_on: bool = True,
+        collected_at_step: int = 0,
+    ) -> None:
         """Store one episode.
 
         Args:
             records: T ``TimeStepRecord`` (Pkg-01 spec 04).
             c_t_seq: (T,) float32 — parallel c_t scalar series (worker collects it
                 from ``env.info['c_true']`` per step).
+            planner_on: False when the episode's pi_mve came from the model's own
+                prior (warmup / --no_collect_planner) — those targets are
+                self-distillation and the policy loss masks them [v4-opt 2026-06].
+            collected_at_step: global_step at collection time (staleness probe).
         """
         T = len(records)
         assert T == len(c_t_seq), (
@@ -78,6 +94,8 @@ class EpisodeReplayBuffer:
         }
         self._episodes.append(episode)
         self._c_t_seqs.append(np.asarray(c_t_seq.detach().cpu().numpy(), dtype=np.float32))
+        self._planner_on.append(bool(planner_on))
+        self._collected_at.append(int(collected_at_step))
 
     # ------------------------------------------------------------ sample
 
@@ -182,5 +200,13 @@ class EpisodeReplayBuffer:
             for ep_idx, start in zip(ep_indices, start_indices)
         ]
         out["c_t"] = torch.from_numpy(np.stack(c_t_slices, axis=0))  # (B, K+1)
+
+        # [v4-opt 2026-06] per-episode metadata: policy-loss mask + staleness probe.
+        out["planner_on"] = torch.tensor(
+            [self._planner_on[ep_idx] for ep_idx in ep_indices], dtype=torch.bool,
+        )                                                            # (B,)
+        out["collected_at_step"] = torch.tensor(
+            [self._collected_at[ep_idx] for ep_idx in ep_indices], dtype=torch.long,
+        )                                                            # (B,)
 
         return out

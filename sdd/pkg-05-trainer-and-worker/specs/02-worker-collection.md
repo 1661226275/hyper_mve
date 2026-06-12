@@ -576,3 +576,29 @@ def test_worker_no_oracle_types_leak(worker, cfg_medium, mocker):
 | 日期 | 修订 | 依据 |
 |---|---|---|
 | 2026-06-10 | planner-on 必要性论证(ln(A) 不动点)、warmup/调试旗接线、健康检查指针 | 提交 0ba2eac;复审 §4.1;Ch5.9.1b |
+
+## [v4-opt 2026-06b] 修订:向量化采集 + 确定性评估模式 + planner_on 标志
+
+2agent 三连跑诊断(2026-06-11)发现单环境采集是吞吐瓶颈:planner 本身已支持任意 B,
+但 worker 以 B=1 喂入 ⇒ 每 env step ~70 次小 batch GPU 调用(kernel-launch 受限),
+实测 0.08 train-steps/s(1M 步 ≈ 135 天)。修订:
+
+1. **`Worker.collect_episodes(n_envs, epsilon, use_planner, deterministic, reset_seeds, reset_options)`**:
+   n_envs 个 ResourceCommons 环境 lockstep 推进(env 仅在 T_max 终止,Pkg-02 spec 08,
+   故无需 done-mask),planner 每 env-step 一次 B=n_envs 批调用。旧 `collect_episode`
+   API 保留,内部委托 B=1 路径(行为不变);
+2. **返回类型 `CollectResult`**:records/c_t_seq 之外新增 per-episode 可观测量 —
+   `returns (N,)`、`pi_entropy_mean`、planner 探针 `q_std_mean / q_gap_mean /
+   uniform_frac`(planner-off 时为 NaN),供 train_main 的 `collect/*` TB 族;
+3. **确定性评估模式**:`deterministic=True` ⇒ ε 忽略、动作 = argmax(pi_mve)、不消耗
+   采样 RNG;`reset_seeds/reset_options` 支持固定种子 + 固定 c(training/evaluation.py
+   的双模式 c-grid 评估在此之上构建);
+4. **planner_on 责任划分**:worker 不再隐式存自蒸馏目标 —— 调用方(train_main)必须把
+   planner-off 采集的 episode 以 `store_episode(..., planner_on=False)` 入库,策略损失
+   据此掩蔽(spec 03 / spec 05 配套修订)。
+
+## 修订记录 (Changelog)(追加)
+
+| 日期 | 修订 | 依据 |
+|---|---|---|
+| 2026-06-11 | 向量化采集(collect_episodes/CollectResult)、确定性评估模式、planner_on 标志责任 | 2agent 诊断(0.08 steps/s;U 形 policy loss);用户决策 2026-06-11 |

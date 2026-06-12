@@ -114,6 +114,18 @@ def compose_total_loss(
     types_true = batch["tau"].long()         # (B, K+1, N) int64
     dones = batch["dones"]                   # (B, K+1) bool
 
+    # [v4-opt 2026-06] policy-target mask: planner_on=False episodes carry
+    # self-distillation pi_mve (model's own prior, e.g. buffer warmup) — training
+    # the policy CE on them is the Ch5.9.1b zero-information fixed point, so they
+    # are excluded from L_policy (value/reward/consistency still train on them).
+    # Absent key (direct callers / legacy tests) ⇒ all-ones mask (old behaviour).
+    planner_on = batch.get("planner_on")
+    if planner_on is None:
+        planner_mask = torch.ones(obs.shape[0], device=device)
+    else:
+        planner_mask = planner_on.to(device).float()             # (B,)
+    n_planner = planner_mask.sum().clamp(min=1.0)
+
     # ================================================================
     # Step 1: one BeliefNet forward (no oracle) -> predicted c_hat / z_hat (grad)
     # ================================================================
@@ -201,7 +213,9 @@ def compose_total_loss(
             r_k = model.predict_reward(s_pred, action_onehot)    # (B, 1) scaled
 
             target_pi = pi_mve[:, k, agent]                      # (B, A)
-            L_policy = L_policy + -(target_pi * F.log_softmax(p_k, dim=-1)).sum(-1).mean()
+            ce = -(target_pi * F.log_softmax(p_k, dim=-1)).sum(-1)        # (B,)
+            # masked mean over planner-on samples [v4-opt 2026-06]
+            L_policy = L_policy + (ce * planner_mask).sum() / n_planner
 
             target_r = scalar_transform(rewards[:, k, agent].unsqueeze(-1))      # (B, 1)
             L_reward = L_reward + F.mse_loss(r_k, target_r)
@@ -230,8 +244,14 @@ def compose_total_loss(
     H_pi_pred = (H_pi_pred / KN).detach()
     # planner (pi_mve) entropy over the unrolled window (data target; no grad).
     # ≈ ln(A) ⇒ planner not differentiating; lower ⇒ it favours specific actions.
+    # [v4-opt 2026-06] masked to planner-on samples (warmup priors would skew it);
+    # NaN when the batch holds no planner-on sample (TB writer skips NaN).
     pim = pi_mve[:, :K].clamp_min(1e-9)                          # (B, K, N, A)
-    H_pi_mve = -(pim * pim.log()).sum(-1).mean().detach()
+    H_per_sample = -(pim * pim.log()).sum(-1).mean(dim=(1, 2))   # (B,)
+    if float(planner_mask.sum()) > 0:
+        H_pi_mve = ((H_per_sample * planner_mask).sum() / planner_mask.sum()).detach()
+    else:
+        H_pi_mve = torch.tensor(float("nan"), device=device)
     # hypernet role discrimination (k=0 generated params): cross-type vs same-type cosine.
     cos_pred_cross, cos_pred_same = _role_cosine(theta_pred_per_agent, cfg.env.type_assignment)
     cos_rew_cross, cos_rew_same = _role_cosine(theta_rew_per_agent, cfg.env.type_assignment)

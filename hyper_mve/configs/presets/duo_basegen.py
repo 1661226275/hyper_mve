@@ -46,6 +46,11 @@ def build_duo_basegen_config() -> V4Config:
         pred_output_scale_init=0.1,
     )
 
-    train = replace(base.train, detach_pred_context=False)
+    train = replace(
+        base.train,
+        detach_pred_context=False,
+        # [v4-opt 2026-06] duo family: belief gate never opens (see duo.py rationale).
+        belief_grad_gating_steps=1_000_000_000,
+    )
 
     return replace(base, env=env, model=model, train=train, preset_name="duo_basegen")

@@ -662,3 +662,24 @@ def test_fifo_buffer_eviction(cfg_medium):
 - `08-integration-contracts.md` §1（buffer API 稳定性）
 - Pkg-01 spec 04 TimeStepRecord（12 字段定义）
 - Pkg-01 spec 05 TrainConfig（buffer_size / stratified_sampling / unroll_K）
+
+---
+
+## [v4-opt 2026-06] 修订:per-episode 元数据(planner_on / collected_at_step)
+
+2agent 诊断(2026-06-11)发现 warmup 的 1000 条 episode 以模型自身先验为 pi_mve
+(自蒸馏目标,Ch5.9.1b),却以全权重参与策略 CE 直至 FIFO 逐出(~4000 步)。修订:
+
+1. `store_episode(records, c_t_seq, planner_on: bool = True, collected_at_step: int = 0)`
+   —— 两个 per-episode 元数据用与 `_c_t_seqs` 相同的平行 deque(同 FIFO 纪律)存储,
+   **不改 TimeStepRecord schema**(12 字段不动);
+2. `sample_batch` 输出新增 `planner_on (B,) bool` 与 `collected_at_step (B,) long`;
+3. 消费方:spec 05 策略 CE 按 `planner_on` 掩蔽;trainer 以 `global_step −
+   collected_at_step` 产出 `diag/target_age_steps`(buffer=5000 episodes ≈ 5000 步
+   历史,目标陈旧度首次可观测)。
+
+## 修订记录 (Changelog)
+
+| 日期 | 修订 | 依据 |
+|---|---|---|
+| 2026-06-11 | planner_on / collected_at_step 平行元数据 + batch 字段 | 2agent 诊断(warmup 自蒸馏污染);用户决策 2026-06-11(掩蔽方案) |
