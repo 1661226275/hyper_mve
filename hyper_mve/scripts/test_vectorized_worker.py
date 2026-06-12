@@ -112,6 +112,7 @@ def main() -> None:
     # ResourceCommons — without tie-break, every action would collapse to NOOP.
     # Sanity check: ten random uniform rows shouldn't all argmax to action 0.
     rng = np.random.default_rng(7)
+    A = cfg.env.A
     uniform_pi = np.full((10, A), 1.0 / A, dtype=np.float32)
     chosen = np.array([int(rng.choice(np.flatnonzero(p >= p.max() - 1e-9))) for p in uniform_pi])
     assert len(set(chosen)) > 1, f"tie-break degenerate: chose only {set(chosen)}"
