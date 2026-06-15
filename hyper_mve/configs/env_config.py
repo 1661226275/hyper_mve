@@ -52,6 +52,20 @@ class EnvConfig:
     c_shock_prob: float = 0.2
     c_shock_range: float = 0.3
 
+    # [v4-opt 2026-06c] P0.3: c_t observability switch (Review_v4_TheoryAudit §2.3,
+    # Ch3.7 "c_hidden" mode). When False, the c_t slot in each agent's observation
+    # `global` block is overwritten with `c_hidden_constant` so the ĉ-head becomes a
+    # real inference target instead of identity-readback. ẑ-head behaviour is
+    # unaffected (see §9-3 of the diagnosis: under duo N=2 with fixed type assignment
+    # ẑ is structurally trivial regardless of c visibility).
+    # Notes:
+    #   - The Oracle field info["c_true"] is NOT touched; only the model-facing
+    #     observation is masked.
+    #   - context_evolution still drives c_t dynamics internally, so resource
+    #     dynamics and reward computations remain consistent with the rule.
+    c_visible: bool = True
+    c_hidden_constant: float = 0.5
+
     # Resource dynamics (Ch3.3)
     Q_max: float = Q_MAX
     alpha_min: float = ALPHA_MIN

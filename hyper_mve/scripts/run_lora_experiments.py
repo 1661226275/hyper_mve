@@ -73,6 +73,11 @@ PRESETS = {
         "film_off": "duo_film_lora",
         "film_on": "duo_film_lora_fc2",
         "basegen": "duo_base_lora",
+        # [v4-opt 2026-06c] P1.2: B'(i) zero-shot protocol cell — same preset as
+        # film_off but with c_mode forced to static via --override (so trained on a
+        # fixed grid of c values, eval probes unseen c). Random-walk c only gives
+        # 'mechanism survival' evidence for B'; static c is the proper extrapolation test.
+        "film_off_static": "duo_film_lora",
     },
     "4agent": {
         "film_off": "medium_film_lora",
@@ -86,7 +91,19 @@ LEAF_SUBPATH = {
     "film_off": os.path.join("film_head", "off"),
     "film_on": os.path.join("film_head", "on"),
     "basegen": "basegen",
+    # [v4-opt 2026-06c] P1.2: keep the static-c cell visually distinct from the
+    # main random-walk cells so any side-by-side analysis stays unambiguous.
+    "film_off_static": os.path.join("film_head_static", "off"),
 }
+
+# [v4-opt 2026-06c] P1.2: per-cell train_main --override args, applied on top of
+# the preset. Empty/missing key → no override.
+SITUATION_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "film_off_static": ("env.c_mode=static",),
+}
+
+# The set of situations the sweep will fan out over by default (in launch order).
+DEFAULT_SITUATIONS: tuple[str, ...] = ("basegen", "film_off", "film_on")
 
 POLL_SECONDS = 5.0
 
@@ -102,7 +119,20 @@ def parse_args(argv=None):
                    help="comma-separated physical GPU ids to use as the pool (GPUs 0,1 are off-limits)")
     p.add_argument("--envs", default="2agent,4agent",
                    help="comma-separated subset of {2agent,4agent} to run")
-    p.add_argument("--seed", type=int, default=0, help="seed passed to every run")
+    p.add_argument("--seed", type=int, default=None,
+                   help="legacy single-seed flag (use --seeds for multi-seed). "
+                        "If set, equivalent to --seeds <seed>.")
+    # [v4-opt 2026-06c] P1.1: multi-seed fan-out. The eval-return std observed in
+    # the 2agent dump was ~28 on a tail mean of ~52 -> single-seed verdicts are
+    # within 1σ of each other across cells. ≥2-3 seeds per cell are needed for the
+    # B'(iii) peak claim to be defensible (Review §3.5 hard-gate caveat).
+    p.add_argument("--seeds", default=None,
+                   help="comma-separated list of seeds, one run per (env × situation × seed). "
+                        "Default: '0' (equivalent to previous --seed 0 behaviour).")
+    # [v4-opt 2026-06c] P1.2: optionally add the static-c B'(i) protocol cell.
+    p.add_argument("--include_static_b_prime", action="store_true",
+                   help="add a film_head + c_mode=static cell (B'(i) zero-shot protocol) "
+                        "for each enabled env (only 2agent supports it currently).")
     p.add_argument("--max_steps", type=int, default=None,
                    help="override train.max_train_steps for every run (default: use each preset's budget)")
     p.add_argument("--variant", default="hyper", help="train_main --variant")
@@ -145,6 +175,24 @@ def parse_gpu_pool(gpus_str):
     return uniq
 
 
+def _resolve_seeds(args) -> list[int]:
+    """Resolve the seed list (P1.1).
+
+    Precedence: ``--seeds`` (multi-seed) > ``--seed`` (legacy single) > default [0].
+    Mixing them is an error so the user-facing semantics stay obvious.
+    """
+    if args.seeds is not None and args.seed is not None:
+        raise SystemExit("[run_lora] pass either --seeds or --seed, not both")
+    if args.seeds is not None:
+        seeds = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
+        if not seeds:
+            raise SystemExit(f"[run_lora] empty --seeds list: {args.seeds!r}")
+        return seeds
+    if args.seed is not None:
+        return [int(args.seed)]
+    return [0]
+
+
 def build_jobs(args):
     """Build the ordered list of run descriptors for the requested environments."""
     envs = [e.strip() for e in args.envs.split(",") if e.strip()]
@@ -152,22 +200,43 @@ def build_jobs(args):
         if e not in PRESETS:
             raise SystemExit(f"[run_lora] unknown env {e!r} (valid: {sorted(PRESETS)})")
 
+    seeds = _resolve_seeds(args)
+    multi_seed = len(seeds) > 1
+
+    situations = list(DEFAULT_SITUATIONS)
+    if args.include_static_b_prime:
+        situations.append("film_off_static")
+
     jobs = []
-    # Order situations base->film so the (usually heavier) base_gen runs start first.
+    # Order: env x situation x seed. Within each env, situations are ordered
+    # base->film so the (usually heavier) base_gen runs start first; the optional
+    # static-B' cell appends last. Seeds are the innermost loop so the GPU pool
+    # round-robins through cells per seed rather than finishing seed=0 entirely.
     for env in envs:
-        for situation in ("basegen", "film_off", "film_on"):
+        for situation in situations:
+            if situation not in PRESETS[env]:
+                # e.g. 4agent has no static-B' variant yet — silently skip.
+                continue
             preset = PRESETS[env][situation]
-            leaf = os.path.join(args.root, env, LEAF_SUBPATH[situation])
-            jobs.append({
-                "name": f"{env}/{situation}",
-                "env": env,
-                "situation": situation,
-                "preset": preset,
-                "leaf": leaf,
-                "log_dir": os.path.join(leaf, "tb"),
-                "ckpt_dir": os.path.join(leaf, "ckpt"),
-                "logfile": os.path.join(leaf, "train.log"),
-            })
+            overrides = SITUATION_OVERRIDES.get(situation, ())
+            for seed in seeds:
+                seed_subdir = f"seed{seed}" if multi_seed else ""
+                leaf = os.path.join(args.root, env, LEAF_SUBPATH[situation], seed_subdir)
+                # When seed_subdir is empty, os.path.join leaves a trailing "" -> normpath cleans it.
+                leaf = os.path.normpath(leaf)
+                name = f"{env}/{situation}" + (f"/s{seed}" if multi_seed else "")
+                jobs.append({
+                    "name": name,
+                    "env": env,
+                    "situation": situation,
+                    "preset": preset,
+                    "seed": seed,
+                    "overrides": overrides,
+                    "leaf": leaf,
+                    "log_dir": os.path.join(leaf, "tb"),
+                    "ckpt_dir": os.path.join(leaf, "ckpt"),
+                    "logfile": os.path.join(leaf, "train.log"),
+                })
     return jobs
 
 
@@ -177,10 +246,12 @@ def build_command(job, args):
         sys.executable, TRAIN_MAIN,
         "--preset", job["preset"],
         "--variant", args.variant,
-        "--seed", str(args.seed),
+        "--seed", str(job["seed"]),
         "--log_dir", job["log_dir"],
         "--ckpt_dir", job["ckpt_dir"],
     ]
+    for ov in job.get("overrides", ()):
+        cmd += ["--override", ov]
     if args.max_steps is not None:
         cmd += ["--max_steps", str(args.max_steps)]
     if not args.collect_planner:

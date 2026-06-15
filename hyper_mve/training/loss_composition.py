@@ -69,6 +69,46 @@ def _role_cosine(thetas, type_assignment):
     return cross_v, same_v
 
 
+def _role_l2(thetas, type_assignment):
+    """[v4-opt 2026-06c] P2.2: pairwise L2 distance of per-agent hypernet params.
+
+    Disambiguates 'rising cos_rew_cross' (which can mean either 'genuine direction
+    convergence = role collapse' or 'same direction with growing magnitude offsets')
+    by exposing the raw L2 norm of the difference. Combined with the cross-type
+    cosine: high cosine + rising L2 = different magnitudes, same direction (head
+    sharing structurally OK); high cosine + flat L2 = role collapse.
+
+    Same NaN semantics as :func:`_role_cosine` (NaN when a category has no pairs).
+    """
+    N = len(thetas)
+    nan = torch.tensor(float("nan"), device=thetas[0].device)
+    cross, same = [], []
+    for i in range(N):
+        for j in range(i + 1, N):
+            d = (thetas[i] - thetas[j]).norm(dim=-1).mean()
+            (same if type_assignment[i] == type_assignment[j] else cross).append(d)
+    cross_v = torch.stack(cross).mean() if cross else nan
+    same_v = torch.stack(same).mean() if same else nan
+    return cross_v, same_v
+
+
+def _per_type_norm(thetas, type_assignment, target_type_int: int):
+    """[v4-opt 2026-06c] P2.2: mean L2 norm of generated params over agents of one type.
+
+    Returns a scalar tensor (mean over matching agents then over batch) or NaN if
+    no agent matches ``target_type_int`` (e.g. an all-ALPHA configuration probed
+    for BETA).
+    """
+    matching = [
+        thetas[i].norm(dim=-1).mean()
+        for i in range(len(thetas))
+        if int(type_assignment[i]) == target_type_int
+    ]
+    if not matching:
+        return torch.tensor(float("nan"), device=thetas[0].device)
+    return torch.stack(matching).mean()
+
+
 def compose_total_loss(
     model: HyperMuZeroModel,
     batch: dict[str, torch.Tensor],
@@ -191,6 +231,19 @@ def compose_total_loss(
     theta_pred_per_agent: list[torch.Tensor] = []         # k=0 per-agent generated params
     theta_rew_per_agent: list[torch.Tensor] = []
 
+    # [v4-opt 2026-06c] P2.1: distillation diagnostics (KL(π_mve ‖ π_pred) — the
+    # direction the policy CE loss already minimises — plus argmax match rate and
+    # separate sharpness probes for both distributions). All masked by planner_on
+    # for consistency with the policy loss; NaN if the batch contains no planner-on
+    # sample.  These pin down whether pi_mve's entropy plateau is a *target* problem
+    # (mve_max_prob low) or a *prior* problem (mve_max_prob high but pred fails to
+    # follow), and whether stalled KL is "two equally soft distributions" (kl ≈ const
+    # but mve_max_prob low) or "real distillation".
+    KL_mve_to_pred = torch.zeros((), device=device)
+    mode_match = torch.zeros((), device=device)
+    pi_mve_max_prob = torch.zeros((), device=device)
+    pi_pred_max_prob = torch.zeros((), device=device)
+
     for k in range(K):
         action_onehot = actions_to_one_hot(actions[:, k], A)     # (B, N*A)
         s_next = model.transition(s_pred, action_onehot)         # objective (theta_state)
@@ -226,6 +279,29 @@ def compose_total_loss(
             # --- diagnostics (detached): predict-net entropy + k=0 generated params ---
             probs_pred = F.softmax(p_k.detach(), dim=-1)
             H_pi_pred = H_pi_pred + -(probs_pred * torch.log(probs_pred + 1e-9)).sum(-1).mean()
+
+            # [v4-opt 2026-06c] P2.1: per-(k, agent) distillation diagnostics, masked
+            # to planner_on rows so warmup self-distillation entries (target_pi == pred)
+            # don't bias the KL/mode-match estimate. Direction: KL(π_mve ‖ π_pred) —
+            # the same direction the policy CE loss gradient walks (L_policy =
+            # H(π_mve) + KL(π_mve ‖ π_pred); falls to 0 iff π_pred == π_mve). This
+            # also matches the candidate distillation auxiliary in P3.2, so a future
+            # KL-loss experiment can read its own loss off this scalar.
+            with torch.no_grad():
+                pi_mve_detached = target_pi.detach()
+                # add tiny floors before log to avoid -inf where either distribution
+                # has a perfectly zero entry (rare in practice).
+                log_mve = (pi_mve_detached + 1e-9).log()
+                log_pred = probs_pred.clamp_min(1e-9).log()
+                kl_row = (pi_mve_detached * (log_mve - log_pred)).sum(-1)  # (B,)
+                mm_row = (probs_pred.argmax(-1) == pi_mve_detached.argmax(-1)).float()
+                pmve_row = pi_mve_detached.max(-1).values                 # (B,)
+                ppred_row = probs_pred.max(-1).values                     # (B,)
+                KL_mve_to_pred = KL_mve_to_pred + (kl_row * planner_mask).sum() / n_planner
+                mode_match = mode_match + (mm_row * planner_mask).sum() / n_planner
+                pi_mve_max_prob = pi_mve_max_prob + (pmve_row * planner_mask).sum() / n_planner
+                pi_pred_max_prob = pi_pred_max_prob + (ppred_row * planner_mask).sum() / n_planner
+
             if k == 0:
                 th_rew, th_pred = model.current_subjective_thetas()
                 theta_rew_per_agent.append(th_rew.detach())
@@ -255,6 +331,28 @@ def compose_total_loss(
     # hypernet role discrimination (k=0 generated params): cross-type vs same-type cosine.
     cos_pred_cross, cos_pred_same = _role_cosine(theta_pred_per_agent, cfg.env.type_assignment)
     cos_rew_cross, cos_rew_same = _role_cosine(theta_rew_per_agent, cfg.env.type_assignment)
+
+    # [v4-opt 2026-06c] P2.2: reward-hypernet L2 distance + per-type norms. Cosine
+    # alone cannot distinguish "same direction, different magnitude" (acceptable —
+    # shared head structurally OK with α/β reward magnitude offsets) from "genuine
+    # role collapse" (failure mode). L2 disambiguates.
+    l2_rew_cross, l2_rew_same = _role_l2(theta_rew_per_agent, cfg.env.type_assignment)
+    # AgentType.ALPHA = 0, AgentType.BETA = 1 (see schemas/_constants.py).
+    norm_rew_alpha = _per_type_norm(theta_rew_per_agent, cfg.env.type_assignment, 0)
+    norm_rew_beta = _per_type_norm(theta_rew_per_agent, cfg.env.type_assignment, 1)
+
+    # [v4-opt 2026-06c] P2.1: finalize distillation diagnostics (KN-mean).
+    if float(planner_mask.sum()) > 0:
+        diag_kl_mve_to_pred = (KL_mve_to_pred / KN).detach()
+        diag_mode_match = (mode_match / KN).detach()
+        diag_pi_mve_max_prob = (pi_mve_max_prob / KN).detach()
+        diag_pi_pred_max_prob = (pi_pred_max_prob / KN).detach()
+    else:
+        nan = torch.tensor(float("nan"), device=device)
+        diag_kl_mve_to_pred = nan
+        diag_mode_match = nan
+        diag_pi_mve_max_prob = nan
+        diag_pi_pred_max_prob = nan
 
     L_main = (
         cfg.train.w_policy * L_policy
@@ -294,4 +392,20 @@ def compose_total_loss(
         "diag_cos_pred_same": cos_pred_same,
         "diag_cos_rew_cross": cos_rew_cross,
         "diag_cos_rew_same": cos_rew_same,
+        # [v4-opt 2026-06c] P2.2: reward-hypernet L2 + per-type norms — disambiguates
+        # 'same direction, different magnitude' (acceptable) from genuine role
+        # collapse (failure). NaN when a type has no agent or only one (e.g. duo).
+        "diag_l2_rew_cross": l2_rew_cross,
+        "diag_l2_rew_same": l2_rew_same,
+        "diag_norm_rew_alpha": norm_rew_alpha,
+        "diag_norm_rew_beta": norm_rew_beta,
+        # [v4-opt 2026-06c] P2.1: distillation health — KL(π_mve ‖ π_pred) (the
+        # direction the policy CE loss minimises), argmax match rate, and *separate*
+        # mode-mass (max prob) probes for both distributions so a stalled KL can be
+        # disambiguated as either 'two equally soft distributions' (both max-probs
+        # low) or 'real distillation closing' (mode-match high, max-probs both rise).
+        "diag_kl_mve_to_pred": diag_kl_mve_to_pred,
+        "diag_mode_match_pred_mve": diag_mode_match,
+        "diag_pi_mve_max_prob": diag_pi_mve_max_prob,
+        "diag_pi_pred_max_prob": diag_pi_pred_max_prob,
     }

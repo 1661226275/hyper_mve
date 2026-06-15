@@ -59,6 +59,19 @@ def build_duo_config() -> V4Config:
         # policy-loss U-turn. Keep the belief path permanently detached from the
         # main loss in duo runs (L_belief still trains the BeliefNet).
         belief_grad_gating_steps=1_000_000_000,
+        # [v4-opt 2026-06c] P0.4: 2agent runs showed diag/target_age_steps ≈ 2500 at
+        # the tail with the default 5000-episode buffer. After P0.2 sharpens π_mve,
+        # batching against 2500-step-old (= old-aggregation) targets is the next
+        # bottleneck; halving the buffer brings target age to ~750 steps.
+        buffer_size=1500,
+        # [v4-opt 2026-06c] P0.2(a): the planner aggregation softmax(z_score(Ḡ)/τ)
+        # structurally floors π_mve entropy at ≈ 1.39 (verified by 20k-draw MC),
+        # which matched the observed plateau exactly across all three 2agent cells.
+        # Dropping τ from 1.0 → 0.5 is the cheapest test of whether the entropy
+        # plateau is the z-score's fault. Side effect to monitor: π_mve also drives
+        # collection sampling (worker.py:110-112) so sharper targets reduce
+        # exploration — fall back is ε-greedy at ε_min=0.05.
+        mve_temperature=0.5,
     )
 
     return replace(base, env=env, model=model, train=train, preset_name="duo")

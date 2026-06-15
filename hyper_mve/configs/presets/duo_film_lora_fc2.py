@@ -46,6 +46,9 @@ def build_duo_film_lora_fc2_config() -> V4Config:
         detach_pred_context=False,
         # [v4-opt 2026-06] duo family: belief gate never opens (see duo.py rationale).
         belief_grad_gating_steps=1_000_000_000,
+        # [v4-opt 2026-06c] duo family P0.4 + P0.2(a) — see duo.py docstring for rationale.
+        buffer_size=1500,
+        mve_temperature=0.5,
     )
 
     return replace(base, env=env, model=model, train=train, preset_name="duo_film_lora_fc2")

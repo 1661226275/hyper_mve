@@ -39,6 +39,11 @@ _ACTION_DELTAS: dict[int, tuple[int, int]] = {
 NOOP = 0
 HARVEST = 5
 
+# [v4-opt 2026-06c] P0.3: offset of c_t within each agent's flattened observation.
+# c_t sits at the start of the `global` block; we resolve the (start, end) at env
+# construction time and mask `obs[:, c_slot]` post-build when cfg.c_visible=False.
+_GLOBAL_BLOCK_NAME = "global"
+
 
 def _action_to_delta(action: int) -> tuple[int, int]:
     """Map a discrete action to a grid displacement; NOOP/HARVEST/unknown → (0, 0)."""
@@ -95,6 +100,13 @@ class ResourceCommonsEnv(gym.Env):
         # RNG + context evolution (Pkg-02 spec 05)
         self._rng: np.random.Generator = np.random.default_rng(seed)
         self._context_evo = build_context_evolution(cfg.c_mode, cfg)
+
+        # [v4-opt 2026-06c] P0.3: precompute c_t column index for post-build masking
+        # when cfg.c_visible=False. The `global` block is `[c_t, time_remaining]`, so
+        # c_t lives at `global` block start.
+        self._c_obs_slot: int = ObservationLayout.block_offset(
+            _GLOBAL_BLOCK_NAME, self.N, self.K,
+        )[0]
 
         # State + per-step caches (filled by reset / step)
         self._state: Optional[ResourceCommonsState] = None
@@ -187,6 +199,10 @@ class ResourceCommonsEnv(gym.Env):
         self._last_deltas = np.zeros(self.N, dtype=np.float32)
 
         obs = build_joint_observation(self._state, self.L, self.T_max, self.K)
+        # [v4-opt 2026-06c] P0.3: replace c_t slot with the configured constant when
+        # the env is in c_hidden mode. info["c_true"] is unaffected (Oracle field).
+        if not self.cfg.c_visible:
+            obs[:, self._c_obs_slot] = np.float32(self.cfg.c_hidden_constant)
         info = self._build_info()
         return obs, info
 
@@ -276,6 +292,10 @@ class ResourceCommonsEnv(gym.Env):
         self._state.done = bool(done)
 
         obs = build_joint_observation(self._state, self.L, self.T_max, self.K)
+        # [v4-opt 2026-06c] P0.3: replace c_t slot with the configured constant when
+        # the env is in c_hidden mode. info["c_true"] is unaffected (Oracle field).
+        if not self.cfg.c_visible:
+            obs[:, self._c_obs_slot] = np.float32(self.cfg.c_hidden_constant)
         info = self._build_info()
         return obs, reward, bool(done), False, info
 
