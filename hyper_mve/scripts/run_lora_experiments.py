@@ -1,7 +1,7 @@
 """Run the full LoRA experiment sweep in one shot (sharing disabled).
 
 Covers every required modelling situation x environment, scheduling them across a fixed pool
-of GPUs (by default GPUs 2,3,4 -- GPUs 0 and 1 are intentionally never touched).
+of GPUs (by default GPUs 2..7 -- GPUs 0 and 1 are intentionally never touched).
 
 ================================================================================
 Experiment matrix  (share_subjective_trunk = False everywhere; output_rank LoRA r=32 always on)
@@ -39,13 +39,17 @@ GPU scheduling
 ================================================================================
 Each training run is single-GPU (train_main uses cuda:0). To pin one physical GPU per run we
 launch each subprocess with CUDA_VISIBLE_DEVICES=<one id> so it sees exactly one device as
-cuda:0 -- this is more robust than exporting CUDA_VISIBLE_DEVICES=2,3,4 globally (which would
-make every run land on the first visible GPU). The pool defaults to {2,3,4}, so up to 3 runs
-execute concurrently; as each finishes its GPU is returned to the pool and the next run starts.
+cuda:0 -- this is more robust than exporting CUDA_VISIBLE_DEVICES=2,3,4,5,6,7 globally (which
+would make every run land on the first visible GPU). [v4-opt 2026-06c] The pool defaults to
+{2,3,4,5,6,7} (extended from the previous {2,3,4} so a fanned-out --seeds x --include_static_b_prime
+sweep -- up to ~12 jobs -- can run with at most 2x oversubscription rather than 4x). Up to
+``len(pool)`` runs execute concurrently; as each finishes its GPU is returned to the pool
+and the next run starts. Each GPU still hosts ONE process at a time (running[] is keyed by
+gpu_id), so peak GPU memory is unchanged from the prior default.
 
 Examples
 --------
-    # full sweep, GPUs 2,3,4, full preset budget:
+    # full sweep, GPUs 2..7, full preset budget:
     python hyper_mve/scripts/run_lora_experiments.py
 
     # shorter smoke sweep (cap steps), custom output root:
@@ -53,6 +57,9 @@ Examples
 
     # only the 2-agent level, print the plan without launching:
     python hyper_mve/scripts/run_lora_experiments.py --envs 2agent --dry_run
+
+    # restrict to a subset of the pool (legacy 3-GPU layout):
+    python hyper_mve/scripts/run_lora_experiments.py --gpus 2,3,4
 """
 from __future__ import annotations
 
@@ -115,8 +122,12 @@ def parse_args(argv=None):
     )
     p.add_argument("--root", default="runs/lora_sweep",
                    help="output root; per-run results go under <root>/<env>/<model>[/<gen_scope>]")
-    p.add_argument("--gpus", default="2,3,4",
-                   help="comma-separated physical GPU ids to use as the pool (GPUs 0,1 are off-limits)")
+    # [v4-opt 2026-06c] Pool extended 2,3,4 -> 2,3,4,5,6,7 so a fanned-out
+    # --seeds x --include_static_b_prime sweep (up to ~12 jobs) can run on ≤2x
+    # oversubscription rather than ≤4x. Override with --gpus to narrow further.
+    p.add_argument("--gpus", default="2,3,4,5,6,7",
+                   help="comma-separated physical GPU ids to use as the pool (GPUs 0,1 are off-limits). "
+                        "One run per GPU is in flight at any time — concurrency = len(pool).")
     p.add_argument("--envs", default="2agent,4agent",
                    help="comma-separated subset of {2agent,4agent} to run")
     p.add_argument("--seed", type=int, default=None,
@@ -161,7 +172,7 @@ def parse_gpu_pool(gpus_str):
         if gid in (0, 1):
             raise SystemExit(
                 f"[run_lora] GPU {gid} is off-limits (policy: never use GPU 0 or 1). "
-                f"Use --gpus 2,3,4."
+                f"Use --gpus 2,3,4,5,6,7 (default) or any subset."
             )
         pool.append(gid)
     if not pool:
