@@ -37,23 +37,27 @@
 
 ## 2. 行内引用：需新增编号入注册表（13 项）
 
-正文已用但未编号的关键引用，必须在提交前补入注册表：
+正文已用但未编号的关键引用，必须在提交前补入注册表。
 
-| 锚点 | 完整引用 | 章节 |
-|---|---|---|
-| MAMBA | Egorov, V., Shpilman, A. (2022). MAMBA: Multi-Agent Model-Based Reinforcement Learning. AAMAS 2022. | §1.3, §2.2, §5.4 |
-| MARIE | Liu, Y., Zhang, W., et al. (2024). MARIE: Multi-Agent World Model with Role-Aware Encoding. ICML 2024. | §1.3, §2.2, §5.4 |
-| MAPPO | Yu, C., Velu, A., Vinitsky, E., Gao, J., Wang, Y., Bayen, A., Wu, Y. (2022). The Surprising Effectiveness of PPO in Cooperative Multi-Agent Games. NeurIPS 2022. | §1.3, §5.1, §5.4 |
-| QMIX | Rashid, T., Samvelyan, M., de Witt, C. S., Farquhar, G., Foerster, J., Whiteson, S. (2018). QMIX: Monotonic Value Function Factorisation for Deep Multi-Agent RL. ICML 2018. | §1.3, §5.1, §5.4 |
-| MADDPG | Lowe, R., Wu, Y., Tamar, A., Harb, J., Abbeel, P., Mordatch, I. (2017). Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments. NeurIPS 2017. | §1.3, §2.1 |
-| LoRA | Hu, E., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., et al. (2022). LoRA: Low-Rank Adaptation of Large Language Models. ICLR 2022. | §2.3, §4.2, §4.4 |
-| Dreamer | Hafner, D., Lillicrap, T., Ba, J., Norouzi, M. (2020). Dream to Control: Learning Behaviors by Latent Imagination. ICLR 2020. | §1.3, §2.2 |
-| DreamerV3 | Hafner, D., Pasukonis, J., Ba, J., Lillicrap, T. (2023). Mastering Diverse Domains through World Models. arXiv:2301.04104. | §2.2 |
-| Jaques 2019 | Jaques, N., Lazaridou, A., Hughes, E., Gulcehre, C., Ortega, P., Strouse, D., et al. (2019). Social Influence as Intrinsic Motivation. ICML 2019. | §1.3, §2.1 |
-| Yang 2020 LIO | Yang, J., Li, A., Farajtabar, M., Sunehag, P., Hughes, E., Zha, H. (2020). Learning to Incentivize Other Learning Agents. NeurIPS 2020. | §1.3, §2.1 |
-| μP / Yang & Hu 2021 | Yang, G., Hu, E. J. (2021). Tensor Programs IV: Feature Learning in Infinite-Width Neural Networks. ICML 2021. | §4.6, §5.1 |
-| DiT | Peebles, W., Xie, S. (2023). Scalable Diffusion Models with Transformers. ICCV 2023. | §4.4 |
-| StyleGAN | Karras, T., Laine, S., Aila, T. (2019). A Style-Based Generator Architecture for GANs. CVPR 2019. | §4.4 |
+> **2026-06-17 更新**：第 1 章已分配 11 个 [N] 编号（标 ✓ 者）。其余 2 项（LoRA / μP / DiT / StyleGAN）在 §2/§4 行文时分配。最终提交前按 GB/T 7714-2015 整体重编号 1..M。
+
+| 已分配 [N] | 锚点 | 完整引用 | 章节 |
+|---|---|---|---|
+| **[3] ✓** | MAPPO | Yu, C., Velu, A., Vinitsky, E., Gao, J., Wang, Y., Bayen, A., Wu, Y. (2022). The Surprising Effectiveness of PPO in Cooperative Multi-Agent Games. NeurIPS 2022. | §1.3, §5.1, §5.4 |
+| **[4] ✓** | QMIX | Rashid, T., Samvelyan, M., de Witt, C. S., Farquhar, G., Foerster, J., Whiteson, S. (2018). QMIX: Monotonic Value Function Factorisation for Deep Multi-Agent RL. ICML 2018. | §1.3, §5.1, §5.4 |
+| **[5] ✓** | MADDPG | Lowe, R., Wu, Y., Tamar, A., Harb, J., Abbeel, P., Mordatch, I. (2017). Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments. NeurIPS 2017. | §1.3, §2.1 |
+| **[6] ✓** | Dreamer | Hafner, D., Lillicrap, T., Ba, J., Norouzi, M. (2020). Dream to Control: Learning Behaviors by Latent Imagination. ICLR 2020. | §1.3, §2.2 |
+| **[7] ✓** | DreamerV3 | Hafner, D., Pasukonis, J., Ba, J., Lillicrap, T. (2023). Mastering Diverse Domains through World Models. arXiv:2301.04104. | §1.3, §2.2 |
+| **[8] ✓** | MAMBA | Egorov, V., Shpilman, A. (2022). MAMBA: Multi-Agent Model-Based Reinforcement Learning. AAMAS 2022. | §1.2, §1.3, §2.2, §5.4 |
+| **[17] ✓** | MARIE | Liu, Y., Zhang, W., et al. (2024). MARIE: Multi-Agent World Model with Role-Aware Encoding. ICML 2024. | §1.3, §2.2, §5.4 |
+| **[18] ✓** | Jaques 2019 (Social Influence) | Jaques, N., Lazaridou, A., Hughes, E., Gulcehre, C., Ortega, P., Strouse, D., et al. (2019). Social Influence as Intrinsic Motivation. ICML 2019. | §1.3, §2.1 |
+| **[19] ✓** | Yang 2020 LIO | Yang, J., Li, A., Farajtabar, M., Sunehag, P., Hughes, E., Zha, H. (2020). Learning to Incentivize Other Learning Agents. NeurIPS 2020. | §1.3, §2.1 |
+| **[20] ✓** | Bowling & Veloso 2002 | Bowling, M., Veloso, M. (2002). Multiagent learning using a variable learning rate. Artificial Intelligence Journal, 136(2). | §1.2, §2.1 |
+| **[21] ✓** | Hernandez-Leal 2017 | Hernandez-Leal, P., Kaisers, M., Baarslag, T., de Cote, E. M. (2017). A Survey of Learning in Multiagent Environments: Dealing with Non-Stationarity. arXiv:1707.09183. | §1.2 |
+| 待分配 | LoRA | Hu, E., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., et al. (2022). LoRA: Low-Rank Adaptation of Large Language Models. ICLR 2022. | §2.3, §4.2, §4.4 |
+| 待分配 | μP / Yang & Hu 2021 | Yang, G., Hu, E. J. (2021). Tensor Programs IV: Feature Learning in Infinite-Width Neural Networks. ICML 2021. | §4.6, §5.1 |
+| 待分配 | DiT | Peebles, W., Xie, S. (2023). Scalable Diffusion Models with Transformers. ICCV 2023. | §4.4 |
+| 待分配 | StyleGAN | Karras, T., Laine, S., Aila, T. (2019). A Style-Based Generator Architecture for GANs. CVPR 2019. | §4.4 |
 
 ---
 

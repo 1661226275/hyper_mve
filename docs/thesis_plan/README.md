@@ -81,3 +81,16 @@ Plan Mode 已完成。后续可切换：
 2. **Task #8** — Pkg-05 MVE planner `planner_mode=joint_enum` 路径（支持 Easy N=2 完整 2×2）
 
 详见 `MASTER_PLAN.md` "未完工件" 节。
+
+---
+
+## Plan Mode 后续待办（2026-06-17 新增）
+
+第 1 章 Stage 2.5 验证（`drafts/ch1_verification_report.md`）识别一项作者决策事项：
+
+3. **§6.11 类型梯度可视化的最终归位** — `drafts/ch1.md` 断言表、`MASTER_PLAN.md` §2、`INSIGHTS.md` I14 均一致引用 §6.11，但 Ch6 主规划字数预算（4 000 字 · "贡献复述 · 局限 · W2 两方向 · 结语"）下未显式列出 §6.11 子节。**Stage 3 reviewer panel 之前请明确**：
+   - (a) Ch6 大纲下显式增设 §6.11 子节（建议 ~800 字，承担"类型梯度量化表 → 钟形曲线峰值实测"的可视化责任）
+   - (b) 移迁到 §5.11 失败案例节（与失败诊断同处一节）
+   - (c) 保留 §6.11 编号但作为附录 F（原"v3 完整配置"未收，可改作类型梯度可视化）
+
+   选定后同步更新 `MASTER_PLAN.md` §2 断言表、`INSIGHTS.md` I14 部署位置、`drafts/ch1_full.md` §1.5 断言 A 行。当前 `drafts/ch1_full.md` 保留 §6.11 cross-ref 与三份源文档一致。
