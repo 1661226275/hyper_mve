@@ -78,3 +78,38 @@ class EvalReport:
 
     # === Schema version sentinel (1) — for forward migration ===
     schema_version: str = "pkg08-spec01-v1"
+
+    def to_dict(self) -> dict:
+        """JSON-safe plain-dict view of the report.
+
+        Used by the sweep worker (``_sweep_worker.py`` prefers ``to_dict`` over
+        ``dataclasses.asdict``). Two reasons we cannot use ``asdict`` here:
+
+          * ``asdict`` deep-copies every field, and the ``Mapping`` fields are
+            stored as :class:`types.MappingProxyType`, which is not
+            deep-copyable (``TypeError: cannot pickle 'mappingproxy' object``).
+          * The tuple-keyed maps (``return_per_segment``,
+            ``return_per_type_ratio`` and their ``_sem`` twins) have tuple keys,
+            which ``json.dumps`` rejects. We stringify those keys here.
+
+        Float / int / bool / None keys pass through unchanged (``json.dumps``
+        coerces numeric keys to strings on its own). The conversion is one-way;
+        nothing in the pipeline reads these maps back by key.
+        """
+        from dataclasses import fields
+
+        def _key(k):
+            if isinstance(k, tuple):
+                return ",".join(str(x) for x in k)
+            return k
+
+        out: dict = {}
+        for f in fields(self):
+            value = getattr(self, f.name)
+            # Detect mapping-like fields (MappingProxyType included) without
+            # importing the concrete proxy type.
+            if hasattr(value, "items") and not isinstance(value, (str, bytes)):
+                out[f.name] = {_key(k): v for k, v in value.items()}
+            else:
+                out[f.name] = value
+        return out
