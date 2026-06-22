@@ -17,7 +17,7 @@ Hyper-MuZero v4 的核心贡献是 4 条可证伪断言。每条断言都不是"
 | **C 三路必要性** | c_ctx / role_i / belief_i 三路缺一不可 | 移除 belief 路 → 性能掉 | `no_belief`（移除 belief 路）|
 | **D planner 双技术** | MVE+CRN+coord-descent 联合解 SNR 崩塌 | 单技术 → planner 退化为均匀 | （Pkg-08 planner ablation，**非 baseline model**）|
 
-**结论**：断言 A/B/C 的证伪压力**直接**落在 Pkg-06 必须提供的 5 个对照模型上。断言 D 由 planner cfg flag 承载（`use_crn` / `use_coord_desc`），不需要独立 model，归 Pkg-08。
+**结论**：断言 A/B/C 的证伪压力**直接**落在 Pkg-06 必须提供的 5 个对照模型上。断言 D 由 planner cfg flag 承载（`use_crn` / `randomize_order`），不需要独立 model，归 Pkg-08。
 
 ### 1.2 等参公平性是断言 B 的生死线
 
@@ -205,7 +205,7 @@ spec 07 给单步 forward 分档预算 + 单测护栏，避免 baseline 实现�
 
 - ❌ **不实现** baseline 实际代码（本包仅 SDD 文档；实施在 Pkg-06 实施期）。
 - ❌ **不修改** Pkg-01/02/03/04/05 任何 SDD 或代码（仅消费上游已发布接口）。
-- ❌ **不提供** 断言 D（planner 双技术）的对照 model —— 由 Pkg-08 cfg flag（`use_crn` / `use_coord_desc`）承载。
+- ❌ **不提供** 断言 D（planner 双技术）的对照 model —— 由 Pkg-08 cfg flag（`use_crn` / `randomize_order`）承载。
 - ❌ **不纳入** MAPPO / QMix / Mamba 等异范式 baseline —— 它们无法复用 7-API / MuZeroTrainer，会破坏"仅 model 类不同"的公平契约（属另一条对比线，不在本包）。
 - ❌ **不重写** trainer / worker / buffer / loss —— Pkg-06 全部变化压缩到 model 工厂 + shared_backbones。
 - ❌ **不引入** 新依赖（仅 PyTorch + numpy + 上游已发布接口）；μP 宽度对齐等新机制不采用（超出依赖约束）。

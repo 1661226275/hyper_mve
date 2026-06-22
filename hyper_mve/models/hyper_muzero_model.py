@@ -58,6 +58,14 @@ REQUIRED_TRAIN_FIELDS = [
 class HyperMuZeroModel(nn.Module):
     """v4 统一 HyperMuZero Model (Ch4.3 + 4.4)."""
 
+    #: pkg-07 spec 02 §3 SB5 — backbone attribute names. Filtered out by
+    #: :func:`hyper_mve.baselines.shared_backbones.count_conditioning_params`
+    #: so the conditioning-subsystem parameter count is comparable across
+    #: hyper + 5 internal baseline variants.
+    SHARED_BACKBONE_PREFIXES: tuple[str, ...] = (
+        "rep_net", "belief_net", "tri_context_encoder",
+    )
+
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg

@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 
 from hyper_mve.schemas import AgentType
 
+from .baselines_config import BaselinesConfig
 from .env_config import EnvConfig
 from .eval_config import EvalConfig
 from .legacy_config import LegacyConfig
@@ -35,6 +36,7 @@ class V4Config:
     mup: MupConfig = field(default_factory=MupConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     legacy: LegacyConfig = field(default_factory=LegacyConfig)
+    baselines: BaselinesConfig = field(default_factory=BaselinesConfig)
 
     preset_name: str = "custom"
 

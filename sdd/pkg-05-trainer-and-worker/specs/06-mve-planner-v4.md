@@ -51,7 +51,7 @@ class MVEPlanner:
         self.mve_depth = cfg.train.mve_depth           # K_mve, 默认 5
         self.mve_temperature = cfg.train.mve_temperature  # 默认 1.0
         self.use_crn = cfg.train.use_crn               # 默认 True (Pkg-08 ablation 1)
-        self.use_coord_desc = cfg.train.use_coord_desc # 默认 True (Pkg-08 ablation 2)
+        self.randomize_order = cfg.train.randomize_order  # 默认 True (Pkg-08 ablation 2)
         
         # CRN rng state (review 修订 5: 跨 episode 持续)
         self.crn_rng = np.random.default_rng(seed=cfg.train.epsilon_decay_steps)  # 任意 seed
@@ -95,7 +95,7 @@ class MVEPlanner:
         # ============================================================
         # Phase 1: 随机 agent 顺序 + 预采样其他 agent step 0 动作 (v4.7 L128-148 保留)
         # ============================================================
-        if self.use_coord_desc:
+        if self.randomize_order:
             agent_order = self.crn_rng.permutation(N).tolist()
         else:
             agent_order = list(range(N))
@@ -273,7 +273,7 @@ def test_crn_step0_deterministic_same_seed(planner, model, ...):
 - 已优化的 agent 从 policies 采样（spec 06 §2.2 _sample_joint_action 内）
 - 未优化的从 prior policy 采样
 
-**关闭 coord descent**（cfg.train.use_coord_desc=False）时退化为固定顺序 `[0, 1, ..., N-1]`，用于 Pkg-08 ablation 2。
+**关闭 coord descent**（cfg.train.randomize_order=False）时退化为固定顺序 `[0, 1, ..., N-1]`，用于 Pkg-08 ablation 2。
 
 ### 3.4 planner 入口 set_context_objective 一次性调用
 
@@ -321,7 +321,7 @@ v4 显式参数 dict：
 | cap[k] shape ≠ (B, 4) | Pkg-04 model.set_context_subjective 入口 assert 抛（C11 修订 2/澄清 2）|
 | c_t shape ≠ (B,) | model.set_context_objective 入口校验 |
 | use_crn=False 时 crn_rng 仍 advance | 允许（CRN 关闭仅影响 Phase 1 采样行为）|
-| use_coord_desc=False 时 agent_order 固定 | OK，agent_order = [0, 1, ..., N-1] |
+| randomize_order=False 时 agent_order 固定 | OK，agent_order = [0, 1, ..., N-1] |
 | mve_samples=0 | Q 值为空，softmax 退化为 uniform（极端 cfg 不推荐）|
 | K_mve=0 | 仅终值估计，Q = γ⁰ · V(root_s) per agent |
 
@@ -490,7 +490,7 @@ def test_planner_cap_belief_shape(planner, model, cfg_medium):
         planner.sample_mve_plan(model, **inputs)
 
 
-# ====== use_crn / use_coord_desc 开关 ======
+# ====== use_crn / randomize_order 开关 ======
 
 def test_use_crn_disabled(planner, model, cfg_medium):
     """cfg.train.use_crn=False 时 planner 不用 CRN (Pkg-08 ablation 1)."""
@@ -503,10 +503,10 @@ def test_use_crn_disabled(planner, model, cfg_medium):
     assert out.shape == (1, cfg_no_crn.env.N, cfg_no_crn.env.A)
 
 
-def test_use_coord_desc_disabled(planner, model, cfg_medium):
-    """cfg.train.use_coord_desc=False 时 agent_order = [0,1,...,N-1] (Pkg-08 ablation 2)."""
+def test_randomize_order_disabled(planner, model, cfg_medium):
+    """cfg.train.randomize_order=False 时 agent_order = [0,1,...,N-1] (Pkg-08 ablation 2)."""
     from dataclasses import replace
-    cfg_no_cd = replace(cfg_medium, train=replace(cfg_medium.train, use_coord_desc=False))
+    cfg_no_cd = replace(cfg_medium, train=replace(cfg_medium.train, randomize_order=False))
     planner_no_cd = MVEPlanner(cfg_no_cd)
     
     inputs = _make_inputs(cfg_no_cd)
@@ -531,10 +531,10 @@ def test_use_coord_desc_disabled(planner, model, cfg_medium):
 | 维度 | v4.7 | v4 | 差异 |
 |------|------|----|------|
 | CRN 4 phase 算法 | 完整 | 完整保留 | 无变化 |
-| coord descent 随机顺序 | 已有 | 保留 + use_coord_desc 开关 | configurable |
+| coord descent 随机顺序 | 已有 | 保留 + randomize_order 开关 | configurable |
 | set_context 调用 | 4 处单参签名（L71/213/219/258）| 4 处两步分离 + planner 入口 set_context_objective | Pkg-04 spec 08 §3.1 迁移 |
 | sample_mve_plan 入口 | 内部从 env 拉 rule | 显式参数 cap / belief / c_t（D7）| 接口扩展 |
-| use_crn / use_coord_desc 开关 | hardcoded True | cfg.train.use_crn / use_coord_desc | configurable（Pkg-08 ablation 1+2 用）|
+| use_crn / randomize_order 开关 | hardcoded True | cfg.train.use_crn / randomize_order | configurable（Pkg-08 ablation 1+2 用）|
 | 单次 planning 性能 | ~50 ms | ~50 ms | 持平 |
 
 ---
@@ -547,7 +547,7 @@ def test_use_coord_desc_disabled(planner, model, cfg_medium):
 - Pkg-04 spec 02 §2.3 调用模板（planner 入口 set_context_objective + per agent set_context_subjective）
 - Pkg-04 spec 07 §2.1 档位 2 单 agent K-step unroll < 25 ms（与 planner 性能预算配合）
 - Pkg-04 spec 08 §3.1（v4.7 → v4 4 处行号迁移指引）
-- Pkg-01 spec 05 TrainConfig（mve_samples / mve_depth / mve_temperature / use_crn / use_coord_desc）
+- Pkg-01 spec 05 TrainConfig（mve_samples / mve_depth / mve_temperature / use_crn / randomize_order）
 - Pkg-08 ablation 1/2（CRN ✗ / coord_desc ✗ 对照实验）
 
 ---
@@ -563,12 +563,12 @@ sample_mve_plan(model, root_s, cap, belief, c_t, return_diagnostics=False)
 
 默认 False,对 worker/测试零影响;离线探针 `scripts/diagnose_mve.py` 是唯一预期调用方。
 
-### 2. `use_coord_desc=False` 语义勘正(复审 M8,重要)
+### 2. `randomize_order=False` 语义勘正(复审 M8,重要)
 
 本 spec 原文(§"关闭 coord descent")的"退化为固定顺序"描述**准确**,但其消融含义需勘正:该开关**仅**取消顺序随机化——坐标下降本体(逐 agent 求解、已优化 agent 按其 π_mve 行动的 `optimised` 集合机制)**无条件运行**。因此:
 - 它**不是** Ch6.7 原 2×2 的"Joint 联合枚举"格子;实测语义 = "顺序随机化 on/off" 对照;
 - Joint 联合枚举(A^N 枚举,仅 Easy N=2 可行)无代码路径,登记为 **Pkg-08 实现项**;
-- 建议(Q2 决议)后续将开关改名 `randomize_order` 以名实相符(改名属代码变更,不在本轮文档对齐范围);
+- 字段已由 `use_coord_desc` 改名为 `randomize_order`(Pkg-08 spec 06 §4 / 2026-06-22 audit-fix Block 5 落地;旧名通过 `@property` 别名 + `_use_coord_desc_compat` 同义构造支持一个 release 的过渡窗口,并发 `DeprecationWarning`);
 - `use_crn=False` 格子忠实(step-0 独立采样),可单独作为 −CRN 消融。
 
 消融 4 的三轴重定义见 Ch6.7 [v4-opt] 修订。
@@ -578,6 +578,7 @@ sample_mve_plan(model, root_s, cap, belief, c_t, return_diagnostics=False)
 | 日期 | 修订 | 依据 |
 |---|---|---|
 | 2026-06-10 | return_diagnostics API;use_coord_desc 消融语义勘正(非 Joint);Joint 枚举登记 Pkg-08 | 提交 bea3641;复审 §2.4 / M8、Q2 决议 |
+| 2026-06-22 | `use_coord_desc` → `randomize_order` 字段改名落地 + 同步本 spec 文本(`@property` 别名 + `_use_coord_desc_compat` synthetic field 由 Pkg-08 spec 06 §4 拥有) | 2026-06-22 audit-fix Block 5;Pkg-08 spec 06 §4.1 |
 
 ### 3. [v4-opt 2026-06b] z-score 噪声护栏(`mve_qstd_floor`)与诊断键扩充
 

@@ -24,6 +24,8 @@ Pkg-05 spec 06 changes vs the v4.7 top-level function:
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -81,7 +83,8 @@ class MVEPlanner:
         self.mve_qstd_floor = getattr(cfg.train, "mve_qstd_floor", 0.0)
         self.gamma = cfg.train.gamma
         self.use_crn = cfg.train.use_crn
-        self.use_coord_desc = cfg.train.use_coord_desc
+        # Planner-side coordinate-descent agent ordering (pkg-08 spec 06 §4).
+        self.randomize_order = cfg.train.randomize_order
 
         # CRN state — persists across episodes (review 修订 5); arbitrary seed.
         self.crn_rng = np.random.default_rng(seed=cfg.train.epsilon_decay_steps)
@@ -100,7 +103,9 @@ class MVEPlanner:
 
     @torch.no_grad()
     def sample_mve_plan(self, model, root_s, cap: dict, belief: dict, c_t,
-                        return_diagnostics: bool = False):
+                        return_diagnostics: bool = False,
+                        eval_use_crn: Optional[bool] = None,
+                        eval_randomize_order: Optional[bool] = None):
         """Per-agent coordinate-descent MVE planning with CRN.
 
         Args:
@@ -113,6 +118,15 @@ class MVEPlanner:
                 expected returns and their normalised scores (cheap — all tensors
                 are already computed; default False keeps the (B, N, A) return for
                 the worker/tests).
+            eval_use_crn: pkg-08 spec 03 §4.2 — per-call override of
+                ``self.use_crn``. ``None`` (default) preserves training-time
+                behaviour; ``True`` / ``False`` flip the flag for this single
+                call. Used by the unified evaluator's 4-mode dispatch
+                (``planner_no_crn`` mode forces ``False``).
+            eval_randomize_order: pkg-08 spec 03 §4.2 — per-call override of
+                ``self.randomize_order``. Same semantics as
+                ``eval_use_crn``; the ``planner_no_coord_desc`` mode forces
+                ``False``.
 
         Returns:
             pi_mve: (B, N, A) per-agent search policy.
@@ -150,6 +164,13 @@ class MVEPlanner:
         temperature = self.mve_temperature
         is_hyper = _is_hyper_model(model)
 
+        # [pkg-08 spec 03 §4.2] Resolve per-call eval-mode overrides. ``None``
+        # → fall back to the training-time flag stored on ``self``.
+        active_use_crn = self.use_crn if eval_use_crn is None else bool(eval_use_crn)
+        active_randomize_order = (
+            self.randomize_order if eval_randomize_order is None else bool(eval_randomize_order)
+        )
+
         spa = S // A          # scenarios per candidate action
         M = A * spa           # trajectories per batch element per agent
 
@@ -157,8 +178,8 @@ class MVEPlanner:
         gen = torch.Generator(device=device)
         gen.manual_seed(int(self.crn_rng.integers(0, 2**31 - 1)))
 
-        # Coordinate-descent agent ordering (use_coord_desc=False -> fixed order).
-        if self.use_coord_desc:
+        # Coordinate-descent agent ordering (randomize_order=False -> fixed order).
+        if active_randomize_order:
             agent_order = self.crn_rng.permutation(N).tolist()
         else:
             agent_order = list(range(N))
@@ -223,7 +244,7 @@ class MVEPlanner:
                 for i in range(N):
                     if step == 0 and i == j:
                         a_i = first_action_j                       # enumerated candidate
-                    elif step == 0 and i in step0_actions_expanded and self.use_crn:
+                    elif step == 0 and i in step0_actions_expanded and active_use_crn:
                         a_i = step0_actions_expanded[i]            # CRN: shared per scenario
                     else:
                         # step>0, or CRN disabled: independent sampling at BM granularity

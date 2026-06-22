@@ -121,8 +121,8 @@ def test_use_crn_disabled(model, cfg_medium):
     assert out.shape == (1, cfg.env.N, cfg.env.A)
 
 
-def test_use_coord_desc_disabled(model, cfg_medium):
-    cfg = replace(cfg_medium, train=replace(cfg_medium.train, use_coord_desc=False))
+def test_randomize_order_disabled(model, cfg_medium):
+    cfg = replace(cfg_medium, train=replace(cfg_medium.train, randomize_order=False))
     p = MVEPlanner(cfg)
     out = p.sample_mve_plan(model, **_make_inputs(cfg))
     assert out.shape == (1, cfg.env.N, cfg.env.A)

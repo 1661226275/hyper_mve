@@ -13,11 +13,21 @@ reuses :func:`pad_resource_block` / :func:`pad_neighbor_block` from Pkg-01
 
 Opponent types are inferred by Pkg-03 BeliefNet (Oracle-supervised at train
 time via ``info["types"]``).
+
+[pkg-08 spec 02 §5.1 / spec 08 §6.1 patch A.1] ``build_joint_observation``
+accepts an optional ``env_cfg`` kwarg; when ``env_cfg.c_visible is False``
+the c_t slot in each agent's ``global`` block is overwritten with
+``env_cfg.c_hidden_constant``. ``info["c_true"]`` is unaffected (Oracle
+field). The signature default ``None`` preserves backward compatibility for
+any caller that does not yet thread ``env_cfg``.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 
+from hyper_mve.configs.env_config import EnvConfig
 from hyper_mve.schemas import (
     AgentType,
     ObservationLayout,
@@ -68,13 +78,23 @@ def build_joint_observation(
     L: int,
     T_max: int,
     K: int,
+    env_cfg: Optional[EnvConfig] = None,
 ) -> np.ndarray:
-    """Construct all-agent joint observation, ``(N, obs_dim)`` float32."""
+    """Construct all-agent joint observation, ``(N, obs_dim)`` float32.
+
+    [pkg-08 spec 02 §5.1] When ``env_cfg.c_visible is False``, the ``c_t``
+    slot in each agent's ``global`` block is overwritten with
+    ``env_cfg.c_hidden_constant``; ``info["c_true"]`` (Oracle field, owned
+    by ``ResourceCommonsEnv._build_info``) is unaffected.
+    """
     N = state.agent_positions.shape[0]
     obs_dim = ObservationLayout.total_dim(N, K)
     joint = np.zeros((N, obs_dim), dtype=np.float32)
     for i in range(N):
         joint[i] = build_observation(state, i, L, T_max, K)
+    if env_cfg is not None and not env_cfg.c_visible:
+        c_slot = ObservationLayout.block_offset("global", N, K)[0]
+        joint[:, c_slot] = np.float32(env_cfg.c_hidden_constant)
     return joint
 
 

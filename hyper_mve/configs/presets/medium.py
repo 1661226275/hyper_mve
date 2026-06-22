@@ -102,7 +102,7 @@ def build_medium_config() -> V4Config:
         mve_temperature=1.0,
         # Defaults: all on (DPower)
         use_crn=True,
-        use_coord_desc=True,
+        randomize_order=True,
         stratified_sampling=True,
         stratified_min_per_type_frac=0.3,
     )

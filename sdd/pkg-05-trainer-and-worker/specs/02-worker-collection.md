@@ -61,7 +61,7 @@ class Worker:
             planner: MVEPlanner;
                 review 修订 5:
                     None 时 worker 默认 MVEPlanner(cfg).
-                    Pkg-08 ablation (use_crn=False / use_coord_desc=False) 时传自定义实例.
+                    Pkg-08 ablation (use_crn=False / randomize_order=False) 时传自定义实例.
                 worker 持有 (self.planner); CRN rng_state 跨 episode 持续 (R5-3 稳定性).
         """
         self.cfg = cfg

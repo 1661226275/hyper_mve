@@ -8,6 +8,7 @@ for the full Pkg-07 protocol.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -42,3 +43,17 @@ class EvalConfig:
     bell_curve_type_ratios: tuple[tuple[int, int], ...] = (
         (0, 4), (1, 3), (2, 2), (3, 1), (4, 0), (1, 3),
     )
+
+    # [pkg-08 spec 03 / design D7 + D10] Four-mode planner eval dispatch literal.
+    # Default ``planner_full`` reproduces legacy `eval_mode="planner"` semantics.
+    eval_planner_mode: Literal[
+        "direct_inference",
+        "planner_no_crn",
+        "planner_no_coord_desc",
+        "planner_full",
+    ] = "planner_full"
+
+    # [pkg-08 spec 03 / design D7] Mode short-circuit: when True the unified
+    # evaluator forces ``eval_planner_mode="direct_inference"`` regardless of
+    # the field above (CLI fast-toggle).
+    eval_use_planner_direct_inference: bool = False

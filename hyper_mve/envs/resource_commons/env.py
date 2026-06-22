@@ -198,11 +198,9 @@ class ResourceCommonsEnv(gym.Env):
         self._last_harvests = np.zeros(self.N, dtype=np.float32)
         self._last_deltas = np.zeros(self.N, dtype=np.float32)
 
-        obs = build_joint_observation(self._state, self.L, self.T_max, self.K)
-        # [v4-opt 2026-06c] P0.3: replace c_t slot with the configured constant when
-        # the env is in c_hidden mode. info["c_true"] is unaffected (Oracle field).
-        if not self.cfg.c_visible:
-            obs[:, self._c_obs_slot] = np.float32(self.cfg.c_hidden_constant)
+        obs = build_joint_observation(self._state, self.L, self.T_max, self.K, env_cfg=self.cfg)
+        # [pkg-08 spec 08 §6.2 A'.1] env_cfg threading is the c_visible
+        # consumption path; the mask itself lives inside build_joint_observation.
         info = self._build_info()
         return obs, info
 
@@ -291,11 +289,9 @@ class ResourceCommonsEnv(gym.Env):
         done = self._state.step_idx >= self.T_max
         self._state.done = bool(done)
 
-        obs = build_joint_observation(self._state, self.L, self.T_max, self.K)
-        # [v4-opt 2026-06c] P0.3: replace c_t slot with the configured constant when
-        # the env is in c_hidden mode. info["c_true"] is unaffected (Oracle field).
-        if not self.cfg.c_visible:
-            obs[:, self._c_obs_slot] = np.float32(self.cfg.c_hidden_constant)
+        obs = build_joint_observation(self._state, self.L, self.T_max, self.K, env_cfg=self.cfg)
+        # [pkg-08 spec 08 §6.2 A'.1] env_cfg threading is the c_visible
+        # consumption path; the mask itself lives inside build_joint_observation.
         info = self._build_info()
         return obs, reward, bool(done), False, info
 

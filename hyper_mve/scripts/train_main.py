@@ -1,4 +1,4 @@
-"""train_main.py — unified v4 training entry (Pkg-05 spec 08 §6, Q4).
+"""train_main.py — unified v4 training entry (Pkg-05 spec 08 §6, Q4; Pkg-07 spec 08 §7.1 ext).
 
 One entry point; variants are expressed via cfg overrides (Oracle/Infer are no longer
 model classes). Run from the repo root (D:\\RL\\hyper_mve) so ``hyper_mve`` imports.
@@ -7,9 +7,23 @@ model classes). Run from the repo root (D:\\RL\\hyper_mve) so ``hyper_mve`` impo
     python hyper_mve/scripts/train_main.py --preset medium --override "train.lr=3e-4" \
         --override "env.N=8" --seed 0
 
-K1 (spec 04): oracle_only / infer_only need curriculum fracs of 1.0 / 0.0 which
-TrainConfig rejects (0<s1<s2<1); those variants are wired in Pkg-08, not here.
-baseline_* / no_belief need the Pkg-06 model factory. Pkg-05 fully supports --variant hyper.
+CLI choices (pkg-07 spec 01 §2.1 + spec 08 §7.1) — 14 entries:
+
+    Curriculum-overrides (3): hyper / oracle_only / infer_only
+    Internal baselines (5):   baseline_input_wide / baseline_input_deep /
+                              baseline_ma_muzero / no_belief / rewardhead_explicit_type
+    External baselines (6):   external_mappo / external_qmix / external_ma_muzero_gh /
+                              external_mamba / external_marie / external_ga
+
+Internal baselines and external runners are constructed via
+``hyper_mve.baselines.create_baseline``; this entry point can train ``hyper``
+and the curriculum-overrides directly via the MuZeroTrainer path. For the
+internal baselines + external runners (which carry their own
+``.train()``/``.evaluate()``), the recommended driver is the pkg-08 sweep
+harness; this entry point delegates with a clear message.
+
+Stub variants (per pkg-07 design D9 + spec 06 §4.6) raise on
+construction; the CLI surfaces this via ``_DEFERRED_VARIANTS``.
 """
 from __future__ import annotations
 
@@ -19,6 +33,7 @@ import math
 import os
 import sys
 import time
+import warnings
 from collections import deque
 from dataclasses import replace
 
@@ -35,6 +50,7 @@ os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 import numpy as np
 import torch
 
+from hyper_mve.baselines import CLI_CHOICES, REGISTRY, cli_to_factory_arg, create_baseline
 from hyper_mve.configs import V4Config
 from hyper_mve.models import HyperMuZeroModel, Projector
 from hyper_mve.envs.resource_commons.env import ResourceCommonsEnv
@@ -42,13 +58,32 @@ from hyper_mve.schemas import AgentType
 from hyper_mve.training import EpisodeReplayBuffer, MuZeroTrainer, Worker, run_eval
 
 _SUB_CONFIGS = ("env", "model", "train", "mup", "eval", "legacy")
-_DEFERRED_VARIANTS = {
-    "oracle_only": "needs curriculum_stage_*_end_frac=1.0 (TrainConfig forbids); Pkg-08",
-    "infer_only": "needs curriculum_stage_*_end_frac=0.0 (TrainConfig forbids); Pkg-08",
-    "baseline_input_wide": "needs Pkg-06 shared_backbones model factory",
-    "baseline_input_deep": "needs Pkg-06 shared_backbones model factory",
-    "baseline_ma_muzero": "needs Pkg-06 shared_backbones model factory",
-    "no_belief": "needs Pkg-06 model factory (Ablation 7)",
+
+# pkg-07 spec 06 §4.6 + design D9: 3 stub-CLIs that raise on construction.
+# Other variants (baseline_*, no_belief, rewardhead_explicit_type, external_mappo,
+# external_qmix, external_ma_muzero_gh) are reachable but route through the
+# pkg-08 sweep harness — train_main.py prints a delegation message rather
+# than driving them through MuZeroTrainer.
+_STUB_VARIANTS: dict[str, str] = {
+    "external_mamba":  "Tier-2 stub (pkg-07 design D8); IS_SOURCED=False — see spec 06 §4.6.",
+    "external_marie":  "permanent stub (pkg-07 design D9); see spec 06 §5.",
+    "external_ga":     "permanent stub (pkg-07 design D9); see spec 06 §5.",
+}
+
+# Variants whose ``.train()`` / ``.evaluate()`` is owned by the runner itself
+# (pkg-08 spec 05 sweep harness drives them); train_main.py prints a delegation
+# message and exits gracefully.
+_RUNNER_OWNED_VARIANTS: frozenset[str] = frozenset({
+    "baseline_input_wide", "baseline_input_deep", "baseline_ma_muzero",
+    "no_belief", "rewardhead_explicit_type",
+    "external_mappo", "external_qmix", "external_ma_muzero_gh",
+})
+
+# Curriculum-override variants (Pkg-05 spec 04 K1): need TrainConfig overrides
+# only spec 08 fully wires; train_main.py supports `hyper` natively.
+_CURRICULUM_OVERRIDE_DEFERRED: dict[str, str] = {
+    "oracle_only": "needs curriculum_stage_*_end_frac=1.0 (TrainConfig forbids); pkg-08.",
+    "infer_only":  "needs curriculum_stage_*_end_frac=0.0 (TrainConfig forbids); pkg-08.",
 }
 
 
@@ -59,13 +94,25 @@ def parse_args(argv=None):
         "duo_film_lora", "duo_film_lora_fc2", "duo_base_lora",
         "medium_film_lora", "medium_film_lora_fc2", "medium_base_lora",
     ))
-    p.add_argument("--variant", default="hyper")
+    p.add_argument("--variant", default="hyper", choices=CLI_CHOICES)
     p.add_argument("--max_steps", type=int, default=None, help="override train.max_train_steps")
     p.add_argument("--override", action="append", default=[], help='"section.field=value" (repeatable)')
     p.add_argument("--resume_from", default=None)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--log_dir", default=None)
     p.add_argument("--ckpt_dir", default="checkpoints/v4")
+    # pkg-08 spec 06 §4 + design D10 — coordinate-descent agent ordering toggle.
+    # The legacy ``--use_coord_desc`` flag is preserved as a deprecation alias.
+    p.add_argument(
+        "--randomize_order", dest="randomize_order",
+        action=argparse.BooleanOptionalAction, default=None,
+        help="MVE planner coordinate-descent agent ordering on/off (pkg-08 spec 06 §4).",
+    )
+    p.add_argument(
+        "--use_coord_desc", dest="use_coord_desc",
+        action=argparse.BooleanOptionalAction, default=None,
+        help="DEPRECATED alias for --randomize_order; emits DeprecationWarning.",
+    )
     p.add_argument(
         "--no_collect_planner", action="store_true",
         help="disable the MVE planner during training collection (debug only; default ON). "
@@ -100,20 +147,64 @@ def apply_overrides(cfg: V4Config, overrides: list[str]) -> V4Config:
     return cfg
 
 
+def _resolve_randomize_order(args) -> bool | None:
+    """Resolve --randomize_order vs --use_coord_desc deprecation alias."""
+    if args.use_coord_desc is not None:
+        warnings.warn(
+            "--use_coord_desc is deprecated (pkg-08 spec 06 §4); use "
+            "--randomize_order / --no-randomize_order instead.",
+            DeprecationWarning, stacklevel=2,
+        )
+        if args.randomize_order is not None and args.randomize_order != args.use_coord_desc:
+            raise ValueError(
+                "--randomize_order and --use_coord_desc disagree; pass only one."
+            )
+        return bool(args.use_coord_desc)
+    return args.randomize_order
+
+
 def apply_variant(cfg: V4Config, variant: str) -> V4Config:
+    """Resolve --variant against the 14-CLI surface (pkg-07 spec 01 §2.1).
+
+    Raises NotImplementedError for stubs (pkg-07 design D9 + spec 06 §4.6)
+    and for curriculum-override variants that need TrainConfig invariants
+    only pkg-08 fully wires.
+
+    Returns the (possibly mutated) cfg for the directly-supported branches:
+    ``hyper`` and the runner-owned variants (which delegate to the
+    pkg-08 sweep harness — train_main.py exits gracefully).
+    """
     if variant == "hyper":
         return cfg
-    if variant in _DEFERRED_VARIANTS:
+    if variant in _STUB_VARIANTS:
         raise NotImplementedError(
-            f"--variant {variant!r} not supported in Pkg-05: {_DEFERRED_VARIANTS[variant]}."
+            f"--variant {variant!r}: {_STUB_VARIANTS[variant]}"
         )
+    if variant in _CURRICULUM_OVERRIDE_DEFERRED:
+        raise NotImplementedError(
+            f"--variant {variant!r}: {_CURRICULUM_OVERRIDE_DEFERRED[variant]}"
+        )
+    if variant in _RUNNER_OWNED_VARIANTS:
+        # Sanity-check: factory string is reachable.
+        _ = cli_to_factory_arg(variant)   # raises ValueError if unknown
+        return cfg
     raise ValueError(f"unknown --variant {variant!r}")
 
 
-def build_model(cfg: V4Config, variant: str) -> HyperMuZeroModel:
+def build_model(cfg: V4Config, variant: str):
+    """Construct the model for variants train_main.py drives directly.
+
+    ``hyper`` → ``HyperMuZeroModel(cfg)`` via the existing MuZeroTrainer path.
+    All other variants are runner-owned (or stubs / deferred) — see
+    :func:`apply_variant`.
+    """
     if variant == "hyper":
         return HyperMuZeroModel(cfg)
-    raise NotImplementedError(f"model factory for --variant {variant!r} lands in Pkg-06")
+    raise NotImplementedError(
+        f"--variant {variant!r} is not driven by train_main.py. "
+        "Internal baselines + external runners are owned by the pkg-08 "
+        "sweep harness (pkg-07 spec 08 §7.1)."
+    )
 
 
 def _epsilon(cfg: V4Config, step: int) -> float:
@@ -132,6 +223,28 @@ def main(argv=None) -> None:
     cfg = apply_variant(cfg, args.variant)
     if args.max_steps is not None:
         cfg = replace(cfg, train=replace(cfg.train, max_train_steps=args.max_steps))
+
+    randomize_order = _resolve_randomize_order(args)
+    if randomize_order is not None:
+        cfg = replace(cfg, train=replace(cfg.train, randomize_order=bool(randomize_order)))
+
+    # Runner-owned variants: train_main.py is not the driver. Print a
+    # delegation message and exit successfully (pkg-08 spec 05 owns the
+    # sweep harness call site).
+    if args.variant in _RUNNER_OWNED_VARIANTS:
+        factory_arg = cli_to_factory_arg(args.variant)
+        print(
+            f"[train_main] --variant {args.variant!r} is runner-owned. "
+            "Construct via hyper_mve.baselines.create_baseline + the "
+            "pkg-08 sweep harness:\n"
+            f"    >>> from hyper_mve.baselines import create_baseline\n"
+            f"    >>> runner = create_baseline(cfg, {factory_arg!r})\n"
+            f"    >>> runner.train(cfg, env_fn, total_env_steps=...)\n"
+            "(pkg-07 spec 08 §7.1 — train_main.py CLI surface preserved; "
+            "no MuZeroTrainer path for this variant.)",
+            flush=True,
+        )
+        return
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(cfg, args.variant)

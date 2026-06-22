@@ -13,6 +13,7 @@ typed function signatures in downstream packages.
 """
 from __future__ import annotations
 
+from .baselines_config import BaselinesConfig
 from .env_config import EnvConfig
 from .eval_config import EvalConfig
 from .legacy_config import LegacyConfig
@@ -22,6 +23,7 @@ from .train_config import TrainConfig
 from .v4_config import V4Config
 
 __all__ = [
+    "BaselinesConfig",
     "EnvConfig",
     "EvalConfig",
     "LegacyConfig",

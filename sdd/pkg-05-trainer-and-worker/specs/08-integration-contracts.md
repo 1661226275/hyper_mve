@@ -205,7 +205,7 @@ Pkg-08 ablation 实验通过 cfg overrides 控制（spec 08 §6 train_main.py �
 | Ablation # | flag / cfg override | 用途 |
 |------------|---------------------|------|
 | Ablation 1 | `--override "train.use_crn=False"` | 禁用 CRN（spec 06 § 3.2）|
-| Ablation 2 | `--override "train.use_coord_desc=False"` | 禁用 coord descent（spec 06 § 3.3）|
+| Ablation 2 | `--override "train.randomize_order=False"` | 禁用 coord descent（spec 06 § 3.3）|
 | Ablation 3 | `--variant alpha_only` 或 `--override "env.type_assignment=[0,0,0,0]"` | 全 α agent（type 扫描）|
 | Ablation 4 | `--override "train.curriculum_stage_1_end_frac=0.1"` 等 | 课程边界扫描（spec 04 D4 实例可替换）|
 | Ablation 5 | `--override "legacy.w_rew_diversity=0.01"` | reward_diversity_loss 开关（Pkg-04 spec 01 § 2.4）|

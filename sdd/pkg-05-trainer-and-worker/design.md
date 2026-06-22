@@ -628,7 +628,7 @@ Pkg-05 trainer / worker / buffer / curriculum / loss_composition 完整依赖以
 - ema_tau
 - epsilon_init, epsilon_min, epsilon_decay_steps
 - mve_samples, mve_depth, mve_temperature
-- use_crn, use_coord_desc
+- use_crn, randomize_order
 - stratified_sampling, stratified_min_per_type_frac
 
 **cfg.env.* (2 项)**:

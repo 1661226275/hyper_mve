@@ -249,7 +249,7 @@ python scripts/train_main.py \
 
 - Medium config 200K train_steps × 5 seeds × 4 variants（hyper / baseline × 3 + oracle）
 - 课程边界可配置：默认 0.3 / 0.7，Pkg-08 Ablation 4 测试不同边界
-- Pkg-08 2x2 ablation（CRN × coord_desc）通过 cfg.train.use_crn / use_coord_desc 切换
+- Pkg-08 2x2 ablation（CRN × coord_desc）通过 cfg.train.use_crn / randomize_order 切换
 
 ---
 
