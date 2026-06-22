@@ -1,0 +1,18 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Training / eval artifacts (reproducible outputs)
+runs/
+checkpoints/
+summary.json
+*.log
+
+# Local env
+.venv/
+.pytest_cache/
+
+# Stray workflow scratch scripts (auto-persisted elsewhere)
+.audit_*.js
+*_workflow.js
