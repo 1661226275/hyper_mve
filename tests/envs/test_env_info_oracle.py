@@ -6,12 +6,14 @@ tests pin the falsy-short-circuit bug that bit v3.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
 
 from hyper_mve.configs import V4Config
 from hyper_mve.envs.resource_commons import ResourceCommonsEnv
-from hyper_mve.schemas import AgentType
+from hyper_mve.schemas import AgentType, ObservationLayout
 
 
 # ---------- presence and types of Oracle fields ----------
@@ -129,6 +131,62 @@ def test_reset_options_none_falls_back_to_cfg():
     _, info_default = env.reset()
     _, info_none = env.reset(options=None)
     assert info_default["types"].tolist() == info_none["types"].tolist() == [0, 0, 1, 1]
+
+
+# ---------- c_t hidden mode wiring (Ch3.7.3) ----------
+
+def test_c_hidden_mode_masks_obs_but_keeps_oracle_label():
+    """c_visible=False masks the obs c slot; info['c_true'] stays the truth."""
+    cfg = dataclasses.replace(V4Config.from_preset("medium").env, c_visible=False)
+    env = ResourceCommonsEnv(cfg, seed=42)
+    obs, info = env.reset(options={"c": 0.9})
+    start, _ = ObservationLayout.block_offset("global", N=cfg.N, K=cfg.K)
+    assert np.allclose(obs[:, start], 0.5)
+    assert info["c_true"] == pytest.approx(0.9)
+
+    obs, _, _, _, info = env.step(np.zeros(cfg.N, dtype=np.int64))
+    assert np.allclose(obs[:, start], 0.5)
+    # only the c slot is masked: time_remaining must keep ticking
+    assert np.allclose(obs[:, start + 1], (cfg.T_max - 1) / cfg.T_max)
+    # static c_mode: oracle label still reports the true (unchanged) c_t
+    assert info["c_true"] == pytest.approx(0.9)
+
+
+def test_c_hidden_mode_affects_observations_only():
+    """Same seed, c_visible flipped: dynamics/rewards/info identical, obs
+    differ in at most the per-agent global c slot (evolving c via oscillate)."""
+    base = V4Config.from_preset("medium").env
+    cfg_vis = dataclasses.replace(base, c_mode="oscillate")
+    cfg_hid = dataclasses.replace(base, c_mode="oscillate", c_visible=False)
+    env_vis = ResourceCommonsEnv(cfg_vis, seed=7)
+    env_hid = ResourceCommonsEnv(cfg_hid, seed=7)
+    obs_v, info_v = env_vis.reset(seed=7)
+    obs_h, info_h = env_hid.reset(seed=7)
+    start, _ = ObservationLayout.block_offset("global", N=base.N, K=base.K)
+    non_c = np.ones(obs_v.shape[1], dtype=bool)
+    non_c[start] = False
+
+    rng = np.random.default_rng(0)
+    for _ in range(5):
+        action = rng.integers(0, base.A, size=base.N).astype(np.int64)
+        obs_v, rew_v, _, _, info_v = env_vis.step(action)
+        obs_h, rew_h, _, _, info_h = env_hid.step(action)
+        assert np.allclose(rew_v, rew_h)
+        assert info_v["c_true"] == pytest.approx(info_h["c_true"])
+        assert np.allclose(obs_v[:, non_c], obs_h[:, non_c])
+        assert np.allclose(obs_h[:, start], 0.5)
+        assert np.allclose(obs_v[:, start], info_v["c_true"])
+
+
+def test_c_visible_default_keeps_c_in_obs_regression():
+    """Default cfg (c_visible=True) still exposes c_t in the global block."""
+    cfg = V4Config.from_preset("medium").env
+    assert cfg.c_visible is True
+    env = ResourceCommonsEnv(cfg, seed=42)
+    obs, info = env.reset(options={"c": 0.9})
+    start, _ = ObservationLayout.block_offset("global", N=cfg.N, K=cfg.K)
+    assert np.allclose(obs[:, start], 0.9)
+    assert info["c_true"] == pytest.approx(0.9)
 
 
 # ---------- episode termination ----------

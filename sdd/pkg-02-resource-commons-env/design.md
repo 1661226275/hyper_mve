@@ -378,7 +378,7 @@ def step(self, action: np.ndarray) -> tuple[
 
 | 字段 | 类型 | 用途 | 谁可读 |
 |------|------|------|--------|
-| **`c_true`** | `float` (∈ [0, 1]) | **L_c Oracle 监督标签** (Ch4.5.1) | **仅 trainer**，不传给 model |
+| **`c_true`** | `float` (∈ [0, 1]) | **L_c Oracle 监督标签** (Ch4.5.1) | **仅 trainer**，不传给 model（`c_visible` 双档例外见下） |
 | **`types`** | `np.ndarray int8 shape=(N,)` | **L_opp Oracle 监督标签** (Ch4.5.2) | **仅 trainer**，不传给 model |
 | `caps` | `tuple[CapabilityVector, ...]` 长度 N | role_encoder cap_emb 输入 | model + trainer |
 | `deltas` | `np.ndarray float32 shape=(N,)` | TimeStepRecord.delta 字段 | trainer (buffer 写入) |
@@ -393,6 +393,12 @@ def step(self, action: np.ndarray) -> tuple[
 - **Eval only**: `hotspot_centers`, `resource_state`
 
 Pkg-05 trainer 必须严格遵守："Oracle 字段不传入 model forward"——否则违反 v4 Self-Info 原则（Ch3.7 + Ch4.2.2）。
+
+**[v4-opt] `c_true` 双档例外（Ch3.7.3 c_t 隐藏模式）**：`EnvConfig.c_visible=True`
+（默认可见档）下，真实 c_t 本就在 obs global 块第一分量，`c_true` 只是其 info 副本——
+作公共上下文进 `set_context_objective` 不构成额外泄漏，属允许用法；
+`c_visible=False`（隐藏档）下无例外，模型侧上下文须改用 BeliefNet ĉ（接线属 Pkg-07）。
+详见 spec 08 §2.3 双档叙事。`types` 不受 `c_visible` 影响，始终严格 Oracle-only。
 
 ### 6.4 env.reset 返回签名
 

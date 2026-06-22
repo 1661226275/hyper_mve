@@ -55,6 +55,11 @@ class EnvConfig:
     c_shock_prob: float = 0.2
     c_shock_range: float = 0.3
     
+    # Context 可观测性 (Ch3.7.3) [v4-opt]
+    # False = c_t 隐藏模式: obs global 块 c 槽位替换为常量 0.5。仅影响观测;
+    # dynamics / rewards / info["c_true"] 始终用真实 c_t。见 Pkg-02 spec 04 §3.4。
+    c_visible: bool = True
+    
     # 资源动力学 (Ch3.3 公式)
     Q_max: float = 10.0
     alpha_min: float = 0.02       # α(c_t) 下界

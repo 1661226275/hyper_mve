@@ -216,6 +216,10 @@ pytest tests/envs/ -v
   - [ ] **`test_other_agents_cap_does_not_leak_into_obs`** — 同上
 - [ ] FOV：`test_resource_outside_fov_is_zero_padded`、`test_neighbor_presence_flag_distinguishes_visible_from_padded`
 - [ ] `test_global_block_carries_c_t`
+- [ ] **c_t 隐藏模式**（Ch3.7.3, `c_visible=False`，env 级接线，实现走 env.py 端 post-hoc 掩码 + `cfg.c_hidden_constant`，详 spec 04 §3.4）：
+  - [ ] `test_env_info_oracle.py::test_c_hidden_mode_masks_obs_but_keeps_oracle_label` — 含 step 后 time 槽位推进 + `c_true` 值钉死
+  - [ ] `test_env_info_oracle.py::test_c_visible_default_keeps_c_in_obs_regression` — 可见档回归
+  - [ ] **差分测试** `test_env_info_oracle.py::test_c_hidden_mode_affects_observations_only` — 同 seed 双 env（oscillate c），rewards/info 全等，obs 仅差 global c 槽位
 
 ### 2.6 Spec 05 — Context Evolution（`test_context_evolution.py`）
 

@@ -32,6 +32,7 @@ class ResourceCommonsEnv(gym.Env):
         self.M = cfg.M
         self.T_max = cfg.T_max
         self.A = cfg.A
+        self.c_visible = bool(cfg.c_visible)   # Ch3.7.3 隐藏模式开关 (spec 04 §3.4)
         
         self._rng = np.random.default_rng(seed)
         self._context_evo = build_context_evolution(cfg.c_mode, cfg)
