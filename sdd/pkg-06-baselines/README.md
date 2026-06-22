@@ -1,5 +1,7 @@
 # Pkg-06: Baselines
 
+> ⛔ **SUPERSEDED BY [`pkg-07-baselines`](../pkg-07-baselines/README.md)** (2026-06-19) — pkg-07 absorbs the 5 internal variants spec'd here AND adds external paradigm baselines (MAPPO/QMIX/MA-MuZero + MAMBA-if-sourced). The factory `create_baseline_model` is renamed to `create_baseline` in pkg-07 (alias preserved with `DeprecationWarning`). This directory is kept for history; do not implement against pkg-06 specs directly.
+
 > **状态**：Draft — Day 1 三件套待用户审阅（design.md = HARD GATE）
 > **包 ID**：`pkg-06-baselines`
 > **工期**：1 周（5-7 天） · **GPU 算力**：~5 小时（5 variant 实例化 smoke + 单步 forward micro-benchmark） · **PR 体量**：1 工厂 + 1 共享后端 + 5 模型类 + 11 测试（纯新增，不改上游）
