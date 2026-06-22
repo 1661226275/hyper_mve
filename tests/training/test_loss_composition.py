@@ -95,6 +95,32 @@ def test_loss_composition_returns_full_dict(trainer, cfg_medium, model):
     } <= keys
 
 
+def test_loss_composition_internal_baseline_compatible(cfg_medium):
+    """The 5 internal baselines train through the SAME compose_total_loss as hyper.
+
+    They expose no ``current_subjective_thetas`` (no generated theta), so the
+    hypernet role-cosine / L2 diagnostics fall back to NaN — but the canonical
+    grad-carrying losses are finite and the dict is complete. This is the
+    compatibility contract the sweep worker relies on to train runner-owned
+    internal variants in-process (pkg-07 spec 08 §7.1).
+    """
+    from hyper_mve.baselines import create_baseline
+    model = create_baseline(cfg_medium, "input_wide")
+    trainer = MuZeroTrainer(cfg_medium, model)
+    losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, 100, cfg_medium)
+
+    missing = _REQUIRED_LOSS_KEYS - set(losses)
+    assert not missing, f"baseline dropped required keys: {sorted(missing)}"
+    for k in _REQUIRED_LOSS_KEYS:
+        v = losses[k]
+        if torch.is_tensor(v):
+            assert not torch.isnan(v).any(), f"NaN in canonical loss '{k}' (baseline)"
+    # No generated theta → the hypernet-only diagnostics are NaN (guarded path).
+    for k in ("diag_cos_pred_cross", "diag_cos_rew_cross",
+              "diag_l2_rew_cross", "diag_norm_rew_alpha"):
+        assert math.isnan(losses[k].item()), f"{k} should be NaN for a non-hypernet baseline"
+
+
 def test_loss_composition_no_nan(trainer, cfg_medium, model):
     losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, 100, cfg_medium)
     for k, v in losses.items():

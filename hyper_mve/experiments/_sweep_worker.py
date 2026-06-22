@@ -1,8 +1,18 @@
 """pkg-08 spec 05 §5.3 — sweep worker subprocess entry.
 
-One process per sweep row. Reads a SweepRow payload from stdin (JSON),
-constructs the train_main argv, calls ``train_main.main(argv)``, runs the
-unified evaluator, then writes ``EvalReport`` JSON to disk.
+One process per sweep row. Reads a SweepRow payload from stdin (JSON), builds a
+single ``V4Config`` (preset + overrides + ``eval_planner_mode`` + ``max_steps``),
+constructs the runner, **trains it in-process**, then evaluates the *same trained
+object* via the unified evaluator and writes ``EvalReport`` JSON.
+
+Training is wired per runner family (pkg-07 spec 08 §7.1):
+  * ``hyper`` + the 5 internal ``BaselineModel`` variants share the 7-API, so
+    they train through the shared ``train_main.run_training`` MuZeroTrainer loop.
+  * external runners own their algorithm loop and train via ``runner.train``.
+
+This closes the earlier gap where the worker called the (runner-owned no-op)
+``train_main`` and then evaluated a *freshly-initialised* model — every variant
+(``hyper`` included) was scored at random init.
 
 Exit codes:
   0   → row completed; EvalReport written
@@ -16,7 +26,7 @@ import json
 import os
 import pathlib
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 
@@ -72,24 +82,30 @@ def _apply_runtime_tuning() -> None:
             pass
 
 
-def _emit_argv(payload: dict[str, Any]) -> list[str]:
-    argv: list[str] = [
-        "--variant", payload["variant"],
-        "--seed", str(payload["seed"]),
-        "--preset", payload["preset"],
-        "--max_steps", str(payload["max_steps"]),
-        "--log_dir", payload["tensorboard_dir"],
-        "--ckpt_dir", str(pathlib.Path(payload["checkpoint_path"]).parent),
+def _build_cfg(payload: dict[str, Any]):
+    """One V4Config: preset + payload overrides + eval_planner_mode + max_steps.
+
+    Mirrors the argv that used to be handed to ``train_main`` but builds the cfg
+    directly so the *same* cfg drives training and eval. (The old eval path
+    rebuilt cfg from the bare preset and silently dropped the overrides +
+    ``eval_planner_mode``.)
+    """
+    from hyper_mve.configs import V4Config
+    from hyper_mve.scripts.train_main import apply_overrides
+
+    cfg = V4Config.from_preset(payload["preset"])
+    override_items = [
+        f"{k}={json.dumps(v)}" for k, v in (payload.get("overrides") or {}).items()
     ]
-    overrides = payload.get("overrides") or {}
-    for key, value in overrides.items():
-        argv += ["--override", f"{key}={json.dumps(value)}"]
-    # Inject eval_planner_mode (pkg-08 spec 03 — eval-time mode lives on cfg.eval).
-    argv += [
-        "--override",
-        f"eval.eval_planner_mode={json.dumps(payload['eval_planner_mode'])}",
-    ]
-    return argv
+    override_items.append(
+        f"eval.eval_planner_mode={json.dumps(payload['eval_planner_mode'])}"
+    )
+    cfg = apply_overrides(cfg, override_items)
+    if payload.get("max_steps"):
+        cfg = replace(
+            cfg, train=replace(cfg.train, max_train_steps=int(payload["max_steps"]))
+        )
+    return cfg
 
 
 def _write_eval_report(report: Any, out_path: pathlib.Path) -> None:
@@ -110,46 +126,84 @@ def _write_config_snapshot(cfg: Any, out_path: pathlib.Path) -> None:
     out_path.write_text(json.dumps(body, default=str, indent=2), encoding="utf-8")
 
 
+def _build_runner(cfg, variant: str):
+    """Construct the runner for a variant (hyper / internal baseline / external).
+
+    Stub / deferred variants raise ``NotImplementedError`` from construction; the
+    caller maps that to exit code 2 (SKIP).
+    """
+    from hyper_mve.baselines import REGISTRY, cli_to_factory_arg, create_baseline
+
+    if variant in {"hyper", "oracle_only", "infer_only"}:
+        # oracle_only / infer_only need curriculum overrides for their full
+        # semantics (deferred, pkg-08); they are not in the default sweep. Here
+        # they construct as plain hyper so the path stays total.
+        from hyper_mve.models.hyper_muzero_model import HyperMuZeroModel
+        return HyperMuZeroModel(cfg)
+    factory_arg = cli_to_factory_arg(variant) if variant not in REGISTRY else variant
+    return create_baseline(cfg, factory_arg)
+
+
+def _train_runner(cfg, runner, payload: dict[str, Any], seed: int) -> None:
+    """Train ``runner`` in-process: shared MuZeroTrainer loop for the 7-API models
+    (hyper + internal baselines), the runner's own loop for external baselines."""
+    from hyper_mve.baselines.external.base import ExternalBaselineRunner
+
+    if isinstance(runner, ExternalBaselineRunner):
+        from hyper_mve.envs.adapters.pettingzoo_wrapper import (
+            ResourceCommonsPettingZooEnv,
+        )
+
+        def env_fn() -> "ResourceCommonsPettingZooEnv":
+            return ResourceCommonsPettingZooEnv(
+                cfg.env, oracle_mode=False, eval_info_mode=False,
+            )
+
+        runner.train(
+            cfg, env_fn,
+            total_env_steps=int(cfg.train.max_train_steps),
+            seed=seed,
+        )
+        runner.save_checkpoint(pathlib.Path(payload["checkpoint_path"]))
+    else:
+        from hyper_mve.scripts.train_main import run_training
+
+        run_training(
+            cfg, runner,
+            seed=seed,
+            ckpt_dir=str(pathlib.Path(payload["checkpoint_path"]).parent),
+            log_dir=payload["tensorboard_dir"],
+            collect_planner=True,
+            preset=payload["preset"],
+            variant=payload["variant"],
+        )
+
+
 def main() -> None:
     _apply_runtime_tuning()
     payload = json.loads(sys.stdin.read())
-
-    argv = _emit_argv(payload)
-    try:
-        from hyper_mve.scripts.train_main import main as train_main
-    except ImportError as e:
-        print(f"FAIL: train_main import: {e}", file=sys.stderr, flush=True)
-        sys.exit(1)
+    variant = payload["variant"]
+    seed = int(payload["seed"])
 
     try:
-        train_main(argv)
-    except NotImplementedError as e:
-        print(f"SKIP: {e}", file=sys.stderr, flush=True)
-        sys.exit(2)
-    except SystemExit as e:
-        # train_main may sys.exit on success; treat 0 as completion, anything else as fail.
-        code = e.code if isinstance(e.code, int) else 1
-        if code == 0:
-            pass  # fall through to eval phase
-        else:
-            print(f"FAIL: train_main SystemExit({code})", file=sys.stderr, flush=True)
-            sys.exit(1)
-    except Exception as e:
-        print(f"FAIL: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-        sys.exit(1)
-
-    # Eval phase — runs the unified evaluator on the trained model.
-    try:
-        from hyper_mve.configs import V4Config
+        import numpy as np
+        import torch
         from hyper_mve.eval import evaluate
         from hyper_mve.envs.adapters.pettingzoo_wrapper import (
             ResourceCommonsPettingZooEnv,
         )
     except ImportError as e:
-        print(f"FAIL: eval phase imports: {e}", file=sys.stderr, flush=True)
+        print(f"FAIL: worker imports: {e}", file=sys.stderr, flush=True)
         sys.exit(1)
 
-    cfg = V4Config.from_preset(payload["preset"])
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    try:
+        cfg = _build_cfg(payload)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: cfg build: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
     _write_config_snapshot(cfg, pathlib.Path(payload["config_snapshot_path"]))
 
     def env_fn() -> ResourceCommonsPettingZooEnv:
@@ -165,24 +219,34 @@ def main() -> None:
             cfg.env, oracle_mode=False, eval_info_mode=False,
         )
 
-    # Worker-side runner reconstruction. Internal baselines + curriculum-overrides
-    # use the factory; external runners follow the same path. The key invariant
-    # is that ``evaluate`` accepts both BaselineModel and ExternalBaselineRunner.
+    # --- construct runner (stub/deferred variants → SKIP) ---
     try:
-        from hyper_mve.baselines import REGISTRY, cli_to_factory_arg, create_baseline
-        variant = payload["variant"]
-        if variant in {"hyper", "oracle_only", "infer_only"}:
-            from hyper_mve.models.hyper_muzero_model import HyperMuZeroModel
-            runner = HyperMuZeroModel(cfg)
-        else:
-            factory_arg = cli_to_factory_arg(variant) if variant not in REGISTRY else variant
-            runner = create_baseline(cfg, factory_arg)
+        runner = _build_runner(cfg, variant)
+    except NotImplementedError as e:
+        print(f"SKIP: {e}", file=sys.stderr, flush=True)
+        sys.exit(2)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: build runner: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
+
+    # --- TRAIN (the gap this closes: runner-owned variants were never trained) ---
+    try:
+        _train_runner(cfg, runner, payload, seed)
+    except NotImplementedError as e:
+        print(f"SKIP: {e}", file=sys.stderr, flush=True)
+        sys.exit(2)
+    except Exception as e:  # noqa: BLE001
+        print(f"FAIL: train: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
+
+    # --- EVAL the SAME trained object ---
+    try:
         report = evaluate(runner, env_fn, cfg)
         _write_eval_report(report, pathlib.Path(payload["eval_report_path"]))
     except NotImplementedError as e:
         print(f"SKIP: {e}", file=sys.stderr, flush=True)
         sys.exit(2)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"FAIL: eval: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
         sys.exit(1)
 

@@ -302,7 +302,15 @@ def compose_total_loss(
                 pi_mve_max_prob = pi_mve_max_prob + (pmve_row * planner_mask).sum() / n_planner
                 pi_pred_max_prob = pi_pred_max_prob + (ppred_row * planner_mask).sum() / n_planner
 
-            if k == 0:
+            if k == 0 and hasattr(model, "current_subjective_thetas"):
+                # Hypernet-only diagnostic: the role-cosine / L2 probes measure how
+                # the *generated* per-agent theta separates by role. The 5 internal
+                # BaselineModel variants (input/id-conditioned, or type-branched)
+                # expose no generated theta, so they skip it and the diagnostics
+                # below fall back to NaN (TB writer drops NaN). This keeps the
+                # shared trainer loop usable for both hyper and the baselines
+                # (pkg-07 spec 08 §7.1) without affecting the backward graph
+                # (these tensors are detached, logging-only).
                 th_rew, th_pred = model.current_subjective_thetas()
                 theta_rew_per_agent.append(th_rew.detach())
                 theta_pred_per_agent.append(th_pred.detach())
@@ -329,17 +337,23 @@ def compose_total_loss(
     else:
         H_pi_mve = torch.tensor(float("nan"), device=device)
     # hypernet role discrimination (k=0 generated params): cross-type vs same-type cosine.
-    cos_pred_cross, cos_pred_same = _role_cosine(theta_pred_per_agent, cfg.env.type_assignment)
-    cos_rew_cross, cos_rew_same = _role_cosine(theta_rew_per_agent, cfg.env.type_assignment)
-
-    # [v4-opt 2026-06c] P2.2: reward-hypernet L2 distance + per-type norms. Cosine
-    # alone cannot distinguish "same direction, different magnitude" (acceptable —
-    # shared head structurally OK with α/β reward magnitude offsets) from "genuine
-    # role collapse" (failure mode). L2 disambiguates.
-    l2_rew_cross, l2_rew_same = _role_l2(theta_rew_per_agent, cfg.env.type_assignment)
-    # AgentType.ALPHA = 0, AgentType.BETA = 1 (see schemas/_constants.py).
-    norm_rew_alpha = _per_type_norm(theta_rew_per_agent, cfg.env.type_assignment, 0)
-    norm_rew_beta = _per_type_norm(theta_rew_per_agent, cfg.env.type_assignment, 1)
+    # Empty for the non-hypernet baselines (theta lists never populated) → all NaN
+    # (the helpers index thetas[0].device, so they must not be called on []).
+    if theta_pred_per_agent:
+        cos_pred_cross, cos_pred_same = _role_cosine(theta_pred_per_agent, cfg.env.type_assignment)
+        cos_rew_cross, cos_rew_same = _role_cosine(theta_rew_per_agent, cfg.env.type_assignment)
+        # [v4-opt 2026-06c] P2.2: reward-hypernet L2 distance + per-type norms. Cosine
+        # alone cannot distinguish "same direction, different magnitude" (acceptable —
+        # shared head structurally OK with α/β reward magnitude offsets) from "genuine
+        # role collapse" (failure mode). L2 disambiguates.
+        l2_rew_cross, l2_rew_same = _role_l2(theta_rew_per_agent, cfg.env.type_assignment)
+        # AgentType.ALPHA = 0, AgentType.BETA = 1 (see schemas/_constants.py).
+        norm_rew_alpha = _per_type_norm(theta_rew_per_agent, cfg.env.type_assignment, 0)
+        norm_rew_beta = _per_type_norm(theta_rew_per_agent, cfg.env.type_assignment, 1)
+    else:
+        _nan = torch.tensor(float("nan"), device=device)
+        cos_pred_cross = cos_pred_same = cos_rew_cross = cos_rew_same = _nan
+        l2_rew_cross = l2_rew_same = norm_rew_alpha = norm_rew_beta = _nan
 
     # [v4-opt 2026-06c] P2.1: finalize distillation diagnostics (KN-mean).
     if float(planner_mask.sum()) > 0:

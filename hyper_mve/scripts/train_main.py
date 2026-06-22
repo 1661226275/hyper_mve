@@ -213,67 +213,58 @@ def _epsilon(cfg: V4Config, step: int) -> float:
     return float(t.epsilon_min + (t.epsilon_init - t.epsilon_min) * (1.0 - frac))
 
 
-def main(argv=None) -> None:
-    args = parse_args(argv)
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+def run_training(
+    cfg: V4Config,
+    model,
+    *,
+    seed: int = 0,
+    ckpt_dir: str = "checkpoints/v4",
+    log_dir: str | None = None,
+    resume_from: str | None = None,
+    collect_planner: bool = True,
+    preset: str = "?",
+    variant: str = "?",
+) -> int:
+    """Shared MuZeroTrainer training loop for any 7-API model.
 
-    cfg = V4Config.from_preset(args.preset)
-    cfg = apply_overrides(cfg, args.override)
-    cfg = apply_variant(cfg, args.variant)
-    if args.max_steps is not None:
-        cfg = replace(cfg, train=replace(cfg.train, max_train_steps=args.max_steps))
+    Drives ``hyper`` AND the 5 internal ``BaselineModel`` variants (input_wide /
+    input_deep / ma_muzero / no_belief / rewardhead_explicit_type) — they all
+    expose the same 7-API and the same shared backbones, so the unroll/loss/eval
+    machinery is identical. Extracted from :func:`main` so the pkg-08 sweep
+    worker can train the runner-owned *internal* baselines in-process and then
+    evaluate the *same trained object* (closes the "eval on a fresh model" gap;
+    pkg-07 spec 08 §7.1). External runners own their own ``.train()`` and never
+    use this path.
 
-    randomize_order = _resolve_randomize_order(args)
-    if randomize_order is not None:
-        cfg = replace(cfg, train=replace(cfg.train, randomize_order=bool(randomize_order)))
-
-    # Runner-owned variants: train_main.py is not the driver. Print a
-    # delegation message and exit successfully (pkg-08 spec 05 owns the
-    # sweep harness call site).
-    if args.variant in _RUNNER_OWNED_VARIANTS:
-        factory_arg = cli_to_factory_arg(args.variant)
-        print(
-            f"[train_main] --variant {args.variant!r} is runner-owned. "
-            "Construct via hyper_mve.baselines.create_baseline + the "
-            "pkg-08 sweep harness:\n"
-            f"    >>> from hyper_mve.baselines import create_baseline\n"
-            f"    >>> runner = create_baseline(cfg, {factory_arg!r})\n"
-            f"    >>> runner.train(cfg, env_fn, total_env_steps=...)\n"
-            "(pkg-07 spec 08 §7.1 — train_main.py CLI surface preserved; "
-            "no MuZeroTrainer path for this variant.)",
-            flush=True,
-        )
-        return
-
+    Returns the final ``global_step``.
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = build_model(cfg, args.variant)
     projector = Projector(cfg.model.latent_dim, cfg.model.proj_dim)
     # [v4-opt 2026-06] vectorized collection: episodes_per_iter envs stepped in
     # lockstep through the (already batched) MVE planner — the old B=1 path was
     # kernel-launch bound (~0.08 train-steps/s on GPU).
     n_envs = max(1, cfg.train.episodes_per_iter)
-    envs = [ResourceCommonsEnv(cfg.env, seed=args.seed * 1000 + i) for i in range(n_envs)]
+    envs = [ResourceCommonsEnv(cfg.env, seed=seed * 1000 + i) for i in range(n_envs)]
 
     trainer = MuZeroTrainer(cfg, model, projector=projector, device=device)
     worker = Worker(cfg, model, envs=envs)
     buffer = EpisodeReplayBuffer(cfg)
 
-    start_step = trainer.load_checkpoint(args.resume_from) if args.resume_from else 0
+    start_step = trainer.load_checkpoint(resume_from) if resume_from else 0
 
     writer = None
-    if args.log_dir:
+    if log_dir:
         try:
             from torch.utils.tensorboard import SummaryWriter
-            writer = SummaryWriter(args.log_dir)
+            writer = SummaryWriter(log_dir)
         except ImportError:
             print("[train_main] tensorboard unavailable; logging to stdout only.")
 
-    os.makedirs(args.ckpt_dir, exist_ok=True)
+    os.makedirs(ckpt_dir, exist_ok=True)
     max_steps = cfg.train.max_train_steps
     global_step = start_step
 
-    print(f"[train_main] preset={args.preset} variant={args.variant} device={device} "
+    print(f"[train_main] preset={preset} variant={variant} device={device} "
           f"max_steps={max_steps} | warming up buffer to "
           f"min_buffer_size={cfg.train.min_buffer_size} episodes "
           f"(T_max={cfg.env.T_max}; silent collection, can take a while)...", flush=True)
@@ -295,7 +286,6 @@ def main(argv=None) -> None:
     # buffer's pi_mve = the model's own prior, so the policy target is itself and the
     # uniform distribution is a zero-gradient fixed point (policy never learns). The
     # MVE plan is an *improved* target the prediction net can learn toward.
-    collect_planner = not args.no_collect_planner
     print(f"[train_main] warmup done; starting training loop "
           f"(collection planner={'ON' if collect_planner else 'OFF'}; "
           f"n_envs={n_envs}; eval every {cfg.eval.evaluate_freq} steps).", flush=True)
@@ -322,7 +312,7 @@ def main(argv=None) -> None:
         ref = planner_total if not math.isnan(planner_total) else prior_total
         if not math.isnan(ref) and ref > best_eval_return:
             best_eval_return = ref
-            trainer.save_checkpoint(os.path.join(args.ckpt_dir, "best.pt"))
+            trainer.save_checkpoint(os.path.join(ckpt_dir, "best.pt"))
 
     if cfg.eval.evaluate_freq > 0:
         _run_and_log_eval(global_step)   # post-warmup baseline
@@ -404,14 +394,62 @@ def main(argv=None) -> None:
             if cfg.eval.evaluate_freq > 0 and global_step % cfg.eval.evaluate_freq == 0:
                 _run_and_log_eval(global_step)
             if global_step % 10_000 == 0:
-                trainer.save_checkpoint(os.path.join(args.ckpt_dir, f"step_{global_step}.pt"))
+                trainer.save_checkpoint(os.path.join(ckpt_dir, f"step_{global_step}.pt"))
             if global_step >= max_steps:
                 break
         train_sec = time.perf_counter() - t1
 
-    trainer.save_checkpoint(os.path.join(args.ckpt_dir, f"step_{global_step}.pt"))
+    trainer.save_checkpoint(os.path.join(ckpt_dir, f"step_{global_step}.pt"))
     if writer is not None:
         writer.close()
+    return global_step
+
+
+def main(argv=None) -> None:
+    args = parse_args(argv)
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+
+    cfg = V4Config.from_preset(args.preset)
+    cfg = apply_overrides(cfg, args.override)
+    cfg = apply_variant(cfg, args.variant)
+    if args.max_steps is not None:
+        cfg = replace(cfg, train=replace(cfg.train, max_train_steps=args.max_steps))
+
+    randomize_order = _resolve_randomize_order(args)
+    if randomize_order is not None:
+        cfg = replace(cfg, train=replace(cfg.train, randomize_order=bool(randomize_order)))
+
+    # Runner-owned variants: train_main.py is not the driver. Print a
+    # delegation message and exit successfully (pkg-08 spec 05 owns the
+    # sweep harness call site — _sweep_worker.py trains them in-process via
+    # run_training (internal) or runner.train (external)).
+    if args.variant in _RUNNER_OWNED_VARIANTS:
+        factory_arg = cli_to_factory_arg(args.variant)
+        print(
+            f"[train_main] --variant {args.variant!r} is runner-owned. "
+            "Construct via hyper_mve.baselines.create_baseline + the "
+            "pkg-08 sweep harness:\n"
+            f"    >>> from hyper_mve.baselines import create_baseline\n"
+            f"    >>> runner = create_baseline(cfg, {factory_arg!r})\n"
+            f"    >>> runner.train(cfg, env_fn, total_env_steps=...)\n"
+            "(pkg-07 spec 08 §7.1 — train_main.py CLI surface preserved; "
+            "no MuZeroTrainer path for this variant.)",
+            flush=True,
+        )
+        return
+
+    model = build_model(cfg, args.variant)
+    run_training(
+        cfg, model,
+        seed=args.seed,
+        ckpt_dir=args.ckpt_dir,
+        log_dir=args.log_dir,
+        resume_from=args.resume_from,
+        collect_planner=not args.no_collect_planner,
+        preset=args.preset,
+        variant=args.variant,
+    )
 
 
 if __name__ == "__main__":
