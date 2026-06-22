@@ -5,21 +5,25 @@ Pkg-07 design §D10: `cfg.baselines.*` namespace (4 internal capacity knobs +
 ``external_smoke_max_env_steps``, ``external_qmix_mixer_hidden_dim``) live
 inside the runner module defaults — they are impl-internal, not cross-spec
 contract.
+
+Note on the LR-sweep grid type: stored as a plain ``dict`` (not
+``MappingProxyType``) because ``MappingProxyType`` is not picklable and
+breaks ``dataclasses.asdict(cfg)`` / ``copy.deepcopy(model)`` once
+``BaselinesConfig`` is embedded in ``V4Config``. The dataclass is
+``frozen``, so the field reference is still immutable.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from types import MappingProxyType
-from typing import Mapping
 
 
-def _default_external_lr_sweep_grid() -> Mapping[str, tuple[float, ...]]:
-    return MappingProxyType({
+def _default_external_lr_sweep_grid() -> dict[str, tuple[float, ...]]:
+    return {
         "external_mappo":         (1e-4, 3e-4, 1e-3),
         "external_qmix":          (1e-4, 3e-4, 1e-3),
         "external_ma_muzero_gh":  (1e-4, 3e-4, 1e-3),
         # external_mamba added at sourcing time; external_marie/ga not swept (stubs).
-    })
+    }
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,6 @@ class BaselinesConfig:
     internal_explicit_type_branches: int = 2          # α / β
 
     # External (1) — per-baseline LR sweep mapping (NOT a single shared tuple).
-    external_lr_sweep_grid: Mapping[str, tuple[float, ...]] = field(
+    external_lr_sweep_grid: dict[str, tuple[float, ...]] = field(
         default_factory=_default_external_lr_sweep_grid
     )

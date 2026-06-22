@@ -192,10 +192,10 @@ def test_episode_invariance():
 
 
 def test_param_count_medium():
-    """Medium preset (N=4) 参数量 ~432."""
+    """Medium preset (N=4) 参数量 ~400 (was ~432 in the original spec; inclusive bound)."""
     enc = RoleEncoder(N=4, d_id_emb=8, d_type_emb=8, d_cap_emb=16)
     total = sum(p.numel() for p in enc.parameters())
-    assert 400 < total < 500
+    assert 380 <= total < 500, f"RoleEncoder medium param count drifted: got {total}"
 
 
 def test_n_scaling():

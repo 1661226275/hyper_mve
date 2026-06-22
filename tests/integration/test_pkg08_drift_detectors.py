@@ -38,14 +38,22 @@ def test_registry_row_23_field_dataclass_lock():
 
 
 def test_registry_keys_equal_cli_choices_minus_curriculum():
-    """pkg-07 spec 01 §2 — REGISTRY keys ∪ curriculum-overrides == CLI_CHOICES."""
-    from hyper_mve.baselines import CLI_CHOICES, REGISTRY
+    """pkg-07 spec 01 §2 — every non-curriculum CLI choice resolves into REGISTRY.
+
+    The naive ``set(REGISTRY) | curriculum == set(CLI_CHOICES)`` invariant is FALSE
+    by design: per spec §2.2 the CLI uses ``baseline_*`` prefixes for internal
+    "with-shared-backbone" variants (``baseline_input_wide``) while REGISTRY uses
+    the bare factory arg (``input_wide``). The real invariant is that the bridge
+    function :func:`cli_to_factory_arg` is total over ``CLI_CHOICES - curriculum``
+    and lands in REGISTRY, with the cardinalities checked separately.
+    """
+    from hyper_mve.baselines import CLI_CHOICES, REGISTRY, cli_to_factory_arg
     curriculum = {"hyper", "oracle_only", "infer_only"}
-    expected = set(CLI_CHOICES)
-    assert set(REGISTRY) | curriculum == expected, (
-        f"REGISTRY ∪ curriculum drift vs CLI_CHOICES: "
-        f"extra={(set(REGISTRY) | curriculum) - expected}, "
-        f"missing={expected - (set(REGISTRY) | curriculum)}"
+    non_curriculum = set(CLI_CHOICES) - curriculum
+    resolved = {cli_to_factory_arg(c) for c in non_curriculum}
+    assert resolved == set(REGISTRY), (
+        f"CLI → factory drift: extra={resolved - set(REGISTRY)}, "
+        f"missing={set(REGISTRY) - resolved}"
     )
     assert len(REGISTRY) == 11
     assert len(CLI_CHOICES) == 14

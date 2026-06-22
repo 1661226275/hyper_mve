@@ -66,8 +66,15 @@ def test_crn_step0_deterministic_same_seed(planner, model, cfg_medium):
     assert torch.allclose(out1, out2, atol=1e-5)
 
 
-def test_crn_different_seed_different_output(planner, model, cfg_medium):
-    inputs = _make_inputs(cfg_medium)
+def test_crn_different_seed_different_output(cfg_medium, model):
+    # The default mve_qstd_floor noise guard collapses an untrained model's
+    # candidate-return std to ~0 → both seeds return the uniform fallback,
+    # which is identical regardless of CRN. Disable the guard for the
+    # determinism-vs-seed check; the noise guard itself is exercised
+    # elsewhere (worker.collect uniform_frac diagnostic).
+    cfg = replace(cfg_medium, train=replace(cfg_medium.train, mve_qstd_floor=0.0))
+    planner = MVEPlanner(cfg)
+    inputs = _make_inputs(cfg)
     planner.crn_rng = np.random.default_rng(42)
     out1 = planner.sample_mve_plan(model, **inputs)
     planner.crn_rng = np.random.default_rng(999)

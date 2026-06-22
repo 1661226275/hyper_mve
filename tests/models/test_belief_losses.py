@@ -218,9 +218,11 @@ def test_l_div_collapse_protection():
 def test_belief_loss_combination():
     """belief_loss 正确组合三 loss + 加权."""
     B, T, N = 2, 3, 4
-    c_hat = torch.rand(B, T, N)
-    z_hat = torch.softmax(torch.randn(B, T, N, N - 1, 2), dim=-1)
-    hidden = torch.randn(B, T, N, 128)
+    # belief_loss is a pure function; in production the model-output tensors
+    # already require grad, so we mark them here to verify gradient flow.
+    c_hat = torch.rand(B, T, N, requires_grad=True)
+    z_hat = torch.softmax(torch.randn(B, T, N, N - 1, 2, requires_grad=True), dim=-1)
+    hidden = torch.randn(B, T, N, 128, requires_grad=True)
     c_true = torch.rand(B, T)
     types_true = torch.randint(0, 2, (B, T, N))
 
@@ -247,9 +249,9 @@ def test_belief_loss_combination():
 def test_belief_loss_mask():
     """mask=True 的样本被纳入, mask=False 被忽略."""
     B, T, N = 2, 4, 4
-    c_hat = torch.rand(B, T, N)
-    z_hat = torch.softmax(torch.randn(B, T, N, N - 1, 2), dim=-1)
-    hidden = torch.randn(B, T, N, 128)
+    c_hat = torch.rand(B, T, N, requires_grad=True)
+    z_hat = torch.softmax(torch.randn(B, T, N, N - 1, 2, requires_grad=True), dim=-1)
+    hidden = torch.randn(B, T, N, 128, requires_grad=True)
     c_true = torch.rand(B, T)
     types_true = torch.randint(0, 2, (B, T, N))
 
