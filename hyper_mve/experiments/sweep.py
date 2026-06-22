@@ -345,6 +345,7 @@ def _spawn_row(
     if extra_env:
         env.update({str(k): str(v) for k, v in extra_env.items()})
     payload = _build_payload(row, sweep_cfg, run_dir)
+    payload_bytes = json.dumps(payload).encode("utf-8")
     proc = subprocess.Popen(
         [sys.executable, "-m", "hyper_mve.experiments._sweep_worker"],
         stdin=subprocess.PIPE,
@@ -353,10 +354,11 @@ def _spawn_row(
         env=env,
         cwd=str(repo_root),
     )
-    assert proc.stdin is not None
-    proc.stdin.write(json.dumps(payload).encode("utf-8"))
-    proc.stdin.close()
-    stdout, stderr = proc.communicate()
+    # Hand the payload to communicate(input=...) rather than manually
+    # write()+close()ing stdin: when all three streams are PIPEs, communicate()
+    # flushes stdin internally, and a pre-closed stdin raises
+    # "ValueError: flush of closed file" on POSIX.
+    stdout, stderr = proc.communicate(input=payload_bytes)
     return subprocess.CompletedProcess(
         args=proc.args, returncode=proc.returncode,
         stdout=stdout, stderr=stderr,
