@@ -5,7 +5,13 @@
       "Bash(ls:*)",
       "Bash(ls \"C:\\\\Users\\\\zhengwenbo01\\\\.claude\\\\plans\" 2>/dev/null || echo \"Plans dir may not exist\")",
       "Bash(mkdir -p \"/c/Users/zhengwenbo01/.claude/plans\" && ls \"/c/Users/zhengwenbo01/.claude/plans\")",
-      "Bash(ls \"D:\\\\RL\\\\docs\\\\\" | grep -i \"Chapter4\")"
+      "Bash(ls \"D:\\\\RL\\\\docs\\\\\" | grep -i \"Chapter4\")",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(py -3)",
+      "Read(//d/RL/lzj/MAPPO/**)",
+      "Read(//d/RL/lzj/MAPPO//**)"
     ]
   }
 }
