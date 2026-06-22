@@ -48,6 +48,7 @@ live as module defaults below per spec 06 §7.2 (NOT on ``cfg.baselines``).
 from __future__ import annotations
 
 import math
+import os
 import time
 from collections import deque
 from pathlib import Path
@@ -80,8 +81,17 @@ _VENDORED_FROM: str = "muzero-general @ 0825bd544fc172a2e2dcc96d43711123222c4a2f
 # ----------------------------------------------------------------- per-impl defaults
 # pkg-07 spec 06 §7.2 — module-level (NOT on cfg.baselines).
 
-_DEFAULT_NUM_SIMULATIONS: int = 25            # per env step, per agent
+_DEFAULT_NUM_SIMULATIONS: int = 8             # per env step, per agent [feasibility 2026-06]
 _DEFAULT_DISCOUNT: float = 0.997
+
+#: Env var the sweep launcher injects to dial MCTS depth per run without a code
+#: edit (``train_fast_sweep.py --mamz-num-simulations``). Cost is LINEAR in this
+#: count and MCTS runs at *every* agent-step in BOTH train and eval, so it is the
+#: dominant throughput lever — pkg-07 spec 06 §3.5 itself notes eval is ~50x
+#: slower than QMIX at the same value (matching the observed 62.8s→3784s smoke).
+#: Lowered from the spec's 25/50 to 8 so the 300K-step sweep is wall-clock
+#: feasible; the §3.10 "weak" baseline tolerates a shallow tree.
+_NUM_SIMULATIONS_ENV_VAR: str = "HYPER_MVE_MAMZ_NUM_SIMULATIONS"
 _DEFAULT_ROOT_DIRICHLET_ALPHA: float = 0.3
 _DEFAULT_ROOT_EXPLORATION_FRACTION: float = 0.25
 _DEFAULT_PB_C_INIT: float = 1.25
@@ -147,12 +157,29 @@ def _build_network_config(obs_dim: int, n_actions: int) -> SimpleNamespace:
     )
 
 
+def _resolve_num_simulations() -> int:
+    """MCTS simulations per agent-step: env override (clamped ≥1) else default.
+
+    The sweep launcher sets ``HYPER_MVE_MAMZ_NUM_SIMULATIONS`` so smokes can drop
+    to ~4 and the full sweep to ~8 without editing the module. Cost is linear in
+    this count (see ``_NUM_SIMULATIONS_ENV_VAR``); malformed values fall back to
+    the module default rather than crashing the worker.
+    """
+    raw = os.environ.get(_NUM_SIMULATIONS_ENV_VAR)
+    if raw is None:
+        return _DEFAULT_NUM_SIMULATIONS
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_NUM_SIMULATIONS
+
+
 def _build_mcts_config(n_actions: int) -> SimpleNamespace:
     """Build the namespace ``MCTS`` consumes (single-player game)."""
     return SimpleNamespace(
         support_size=_DEFAULT_SUPPORT_SIZE,
         action_space=list(range(n_actions)),
-        num_simulations=_DEFAULT_NUM_SIMULATIONS,
+        num_simulations=_resolve_num_simulations(),
         discount=_DEFAULT_DISCOUNT,
         root_dirichlet_alpha=_DEFAULT_ROOT_DIRICHLET_ALPHA,
         root_exploration_fraction=_DEFAULT_ROOT_EXPLORATION_FRACTION,

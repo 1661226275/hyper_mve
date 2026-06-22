@@ -71,13 +71,16 @@ class MAMuZeroBaselineModel(BaselineModel):
         self._id_onehot = torch.cat([agent_one_hot, type_one_hot], dim=-1)
 
     def _apply_trans(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        return self.trans_net(torch.cat([s, action, self._id_onehot], dim=-1))
+        idh = self._match_batch(self._id_onehot, s)
+        return self.trans_net(torch.cat([s, action, idh], dim=-1))
 
     def _apply_reward(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        return self.reward_head(torch.cat([s, action, self._id_onehot], dim=-1))
+        idh = self._match_batch(self._id_onehot, s)
+        return self.reward_head(torch.cat([s, action, idh], dim=-1))
 
     def _apply_pred(self, s: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.pred_net(torch.cat([s, self._id_onehot], dim=-1))
+        idh = self._match_batch(self._id_onehot, s)
+        return self.pred_net(torch.cat([s, idh], dim=-1))
 
 
 __all__ = ["MAMuZeroBaselineModel"]

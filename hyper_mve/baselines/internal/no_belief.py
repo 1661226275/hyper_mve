@@ -131,15 +131,16 @@ class NoBeliefBaselineModel(BaselineModel):
     def _apply_trans(self, s, action):
         # FunctionalStateTransNet emits s' (with internal residual). Base class
         # expects Δs (it adds another ``s + ``); subtract back to keep the
-        # contract.
-        s_next = self.state_trans_net(s, action, self._theta_state)
+        # contract. _match_batch tiles theta to the planner-expanded batch
+        # (functional_linear does per-sample bmm → batch must match s).
+        s_next = self.state_trans_net(s, action, self._match_batch(self._theta_state, s))
         return s_next - s
 
     def _apply_reward(self, s, action):
-        return self.reward_head(s, action, self._theta_rew)
+        return self.reward_head(s, action, self._match_batch(self._theta_rew, s))
 
     def _apply_pred(self, s):
-        return self.prediction_net(s, self._theta_pred)
+        return self.prediction_net(s, self._match_batch(self._theta_pred, s))
 
 
 __all__ = ["NoBeliefBaselineModel"]

@@ -173,6 +173,42 @@ class BaselineModel(nn.Module):
                 "set_context_subjective before transition/predict_reward/predict."
             )
 
+    @staticmethod
+    def _match_batch(cond: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
+        """Tile a per-call conditioning tensor along dim 0 to ``ref``'s batch.
+
+        The MVE planner (``planning/mve_planner.py``) grows the rollout batch by
+        ``repeat_interleave`` *between* ``set_context_subjective`` and the
+        Phase-3 ``transition``: the subjective context is built at ``B_spa``
+        (Phase 1 action sampling) while the rollout state is expanded to
+        ``B*M = B_spa * A`` (Phase 2), and the planner only refreshes the
+        subjective context again right before ``predict_reward`` / ``predict``.
+        So ``transition`` is handed a state at the larger batch while the cached
+        conditioning tensor (``_ctx_aug`` / ``θ`` / ``_id_onehot``) still sits at
+        the smaller one.
+
+        ``HyperMuZeroModel`` is immune because its ``set_context_objective``
+        regenerates ``θ_state`` at the expanded batch (hyper_muzero_model.py:170);
+        the five input/θ/id-conditioned baselines defer *all* conditioning to
+        ``set_context_subjective``, so they tile the cached tensor here. The
+        planner's expansion is a pure ``repeat_interleave`` and the per-scenario
+        context rows are identical within a batch element (same c_t / cap /
+        belief), so interleave-tiling reproduces the correct per-candidate
+        conditioning exactly. Returns ``cond`` untouched on the equal-batch path
+        (the training loss and the reward/predict planner calls), so this is a
+        no-op everywhere except the planner's transition step.
+        """
+        b_ref, b_cond = ref.shape[0], cond.shape[0]
+        if b_cond == b_ref:
+            return cond
+        if b_ref > b_cond and b_ref % b_cond == 0:
+            return cond.repeat_interleave(b_ref // b_cond, dim=0)
+        raise RuntimeError(
+            f"BaselineModel conditioning batch {b_cond} is not an integer "
+            f"divisor of operand batch {b_ref}; cannot tile to match. This "
+            "indicates an unexpected MVE-planner batch layout."
+        )
+
     # ---------------------------------------------------------------- evaluate
 
     def evaluate(

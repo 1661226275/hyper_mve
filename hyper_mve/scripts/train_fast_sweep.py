@@ -88,6 +88,7 @@ class LauncherConfig:
     ablation_cell_id: str
     cudnn_benchmark: bool
     matmul_precision: str | None
+    mamz_num_simulations: int
     extra_overrides: tuple[str, ...]
     retry_failed: bool
     dry_run: bool
@@ -142,6 +143,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                    choices=("highest", "high", "medium", "off"),
                    default="high",
                    help="torch.set_float32_matmul_precision in every child")
+    p.add_argument("--mamz-num-simulations", dest="mamz_num_simulations", type=int,
+                   default=8,
+                   help="MCTS simulations/agent-step for external_ma_muzero_gh "
+                        "(HYPER_MVE_MAMZ_NUM_SIMULATIONS). Cost is LINEAR in this "
+                        "count and it dominates that runner's wall-clock; module "
+                        "default 8, drop to ~4 for smokes. No effect on other variants.")
     p.add_argument("--extra-override", dest="extra_overrides",
                    action="append", default=[],
                    help="extra train_main override, repeatable, e.g. "
@@ -215,6 +222,7 @@ def build_launcher_config(args: argparse.Namespace) -> LauncherConfig:
         ablation_cell_id=args.ablation_cell_id,
         cudnn_benchmark=bool(args.cudnn_benchmark),
         matmul_precision=matmul_prec,
+        mamz_num_simulations=int(args.mamz_num_simulations),
         extra_overrides=tuple(args.extra_overrides),
         retry_failed=bool(args.retry_failed),
         dry_run=bool(args.dry_run),
@@ -261,6 +269,10 @@ def build_child_env(lc: LauncherConfig) -> dict[str, str]:
         env["HYPER_MVE_CUDNN_BENCHMARK"] = "1"
     if lc.matmul_precision:
         env["HYPER_MVE_MATMUL_PRECISION"] = lc.matmul_precision
+    if lc.mamz_num_simulations > 0:
+        # Consumed only by external_ma_muzero_gh (ma_muzero_gh._resolve_num_simulations);
+        # harmless env var for every other row.
+        env["HYPER_MVE_MAMZ_NUM_SIMULATIONS"] = str(int(lc.mamz_num_simulations))
     return env
 
 
@@ -312,6 +324,7 @@ def write_manifest(
         "mem_frac": lc.mem_frac,
         "cudnn_benchmark": lc.cudnn_benchmark,
         "matmul_precision": lc.matmul_precision,
+        "mamz_num_simulations": lc.mamz_num_simulations,
         "eval_planner_mode": lc.eval_planner_mode,
         "ablation_cell_id": lc.ablation_cell_id,
         "extra_overrides": list(lc.extra_overrides),

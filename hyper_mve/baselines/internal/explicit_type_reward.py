@@ -154,15 +154,16 @@ class ExplicitTypeRewardBaselineModel(BaselineModel):
         # base contract (``transition`` returns ``s + Δs``) we have
         # FunctionalStateTransNet emit Δs only — but the existing v4 net emits
         # s' directly (residual built in). We compute Δs = s' - s here.
-        s_next = self.state_trans_net(s, action, self._theta_state)
+        s_next = self.state_trans_net(s, action, self._match_batch(self._theta_state, s))
         return s_next - s
 
     def _apply_reward(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        # No theta consumed — pure type-branched MLP.
+        # No theta consumed — pure type-branched MLP. The cat operands share
+        # ``s``'s batch and ``branch`` is a scalar index, so no tiling needed.
         return self.reward_head(torch.cat([s, action], dim=-1), branch=self._own_type)
 
     def _apply_pred(self, s: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.prediction_net(s, self._theta_pred)
+        return self.prediction_net(s, self._match_batch(self._theta_pred, s))
 
 
 __all__ = ["ExplicitTypeRewardBaselineModel"]

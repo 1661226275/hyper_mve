@@ -96,13 +96,16 @@ class _InputConditionedBase(BaselineModel):
         self._ctx_aug = torch.cat([c_ctx, role, belief_vec], dim=-1)
 
     def _apply_trans(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        return self.trans_net(torch.cat([s, action, self._ctx_aug], dim=-1))
+        ctx = self._match_batch(self._ctx_aug, s)
+        return self.trans_net(torch.cat([s, action, ctx], dim=-1))
 
     def _apply_reward(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        return self.reward_head(torch.cat([s, action, self._ctx_aug], dim=-1))
+        ctx = self._match_batch(self._ctx_aug, s)
+        return self.reward_head(torch.cat([s, action, ctx], dim=-1))
 
     def _apply_pred(self, s: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.pred_net(torch.cat([s, self._ctx_aug], dim=-1))
+        ctx = self._match_batch(self._ctx_aug, s)
+        return self.pred_net(torch.cat([s, ctx], dim=-1))
 
 
 class InputWideBaselineModel(_InputConditionedBase):
