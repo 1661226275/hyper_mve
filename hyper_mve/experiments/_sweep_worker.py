@@ -153,8 +153,16 @@ def main() -> None:
     _write_config_snapshot(cfg, pathlib.Path(payload["config_snapshot_path"]))
 
     def env_fn() -> ResourceCommonsPettingZooEnv:
+        # eval_info_mode=False is the locked external-runner eval contract
+        # (tests/baselines/external/test_external_eval_contract.py:46-48). With
+        # eval_info_mode=True the env exposes the eval-only diagnostic fields
+        # ('resource_state', 'hotspot_centers'), which trip every external
+        # runner's per-step _assert_info_clean CTDE guard — and nothing in the
+        # current eval path consumes them (regret slots are 0.0 placeholders;
+        # the internal branch ignores env_fn entirely and run_eval builds its
+        # own envs). oracle_mode stays False so _verify_env_fn_flags passes.
         return ResourceCommonsPettingZooEnv(
-            cfg.env, oracle_mode=False, eval_info_mode=True,
+            cfg.env, oracle_mode=False, eval_info_mode=False,
         )
 
     # Worker-side runner reconstruction. Internal baselines + curriculum-overrides
