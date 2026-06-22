@@ -91,7 +91,14 @@ def test_duo_preset_two_agent_drift():
         medium.model, hyper_gen_scope="film_head",
         trans_output_scale_init=0.1, pred_output_scale_init=0.1,
     )
-    assert cfg.train == replace(medium.train, detach_pred_context=False)
+    # [v4-opt 2026-06c] duo family also tunes the training budget: belief gate
+    # never opens (N=2 trivial belief), halved buffer (target-age), sharper
+    # planner temperature. See presets/duo.py rationale.
+    assert cfg.train == replace(
+        medium.train, detach_pred_context=False,
+        belief_grad_gating_steps=1_000_000_000,
+        buffer_size=1500, mve_temperature=0.5,
+    )
 
 
 def test_duo_basegen_preset():
@@ -117,7 +124,12 @@ def test_duo_basegen_preset():
         medium.model, hyper_gen_scope="base_gen", share_subjective_trunk=True,
         trans_output_scale_init=0.1, pred_output_scale_init=0.1,
     )
-    assert cfg.train == replace(medium.train, detach_pred_context=False)
+    # [v4-opt 2026-06c] duo family train budget (see presets/duo.py).
+    assert cfg.train == replace(
+        medium.train, detach_pred_context=False,
+        belief_grad_gating_steps=1_000_000_000,
+        buffer_size=1500, mve_temperature=0.5,
+    )
 
 
 def test_duo_film_lora_preset():
@@ -140,7 +152,12 @@ def test_duo_film_lora_preset():
         medium.model, hyper_gen_scope="film_head", hyper_output_rank=32,
         trans_output_scale_init=0.1, pred_output_scale_init=0.1,
     )
-    assert cfg.train == replace(medium.train, detach_pred_context=False)
+    # [v4-opt 2026-06c] duo family train budget (see presets/duo.py).
+    assert cfg.train == replace(
+        medium.train, detach_pred_context=False,
+        belief_grad_gating_steps=1_000_000_000,
+        buffer_size=1500, mve_temperature=0.5,
+    )
 
 
 def test_duo_film_lora_fc2_preset():

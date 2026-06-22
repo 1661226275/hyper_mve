@@ -66,19 +66,33 @@ def _zero_belief_grads(model):
 
 # ====== dict structure / NaN ======
 
+# Canonical (non-diagnostic) loss keys that compose_total_loss must always emit.
+# diag_* keys are an open, append-only set (new probes are added across v4-opt
+# phases) — they are checked as a prefix family, not an exact lock.
+_REQUIRED_LOSS_KEYS = frozenset({
+    "total", "main", "belief", "lambda_b",
+    "policy", "value", "reward", "consist",
+    "belief_c", "belief_opp", "belief_div",
+    "L_policy_raw", "L_value_raw", "L_reward_raw", "L_consist_raw",
+})
+
+
 def test_loss_composition_returns_full_dict(trainer, cfg_medium, model):
     losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, 100, cfg_medium)
-    assert set(losses) == {
-        "total", "main", "belief", "lambda_b",
-        "policy", "value", "reward", "consist",
-        "belief_c", "belief_opp", "belief_div",
-        # raw (unweighted) loss magnitudes
-        "L_policy_raw", "L_value_raw", "L_reward_raw", "L_consist_raw",
-        # action-distribution + hypernet role-discrimination diagnostics
+    keys = set(losses)
+    missing = _REQUIRED_LOSS_KEYS - keys
+    assert not missing, f"compose_total_loss dropped required keys: {sorted(missing)}"
+    # Every non-canonical key must be a diagnostic (diag_* prefix), so an
+    # accidental typo'd or stray key is still caught.
+    extras = keys - _REQUIRED_LOSS_KEYS
+    non_diag = {k for k in extras if not k.startswith("diag_")}
+    assert not non_diag, f"unexpected non-diagnostic keys: {sorted(non_diag)}"
+    # The original canonical diagnostics must still be present.
+    assert {
         "diag_pi_mve_entropy", "diag_pi_pred_entropy",
         "diag_cos_pred_cross", "diag_cos_pred_same",
         "diag_cos_rew_cross", "diag_cos_rew_same",
-    }
+    } <= keys
 
 
 def test_loss_composition_no_nan(trainer, cfg_medium, model):
@@ -135,15 +149,11 @@ def test_loss_composition_film_head_full_dict_and_no_nan():
     model = HyperMuZeroModel(cfg)
     trainer = MuZeroTrainer(cfg, model)
     losses = compose_total_loss(model, _make_batch(cfg), trainer, 100, cfg)
-    assert set(losses) == {
-        "total", "main", "belief", "lambda_b",
-        "policy", "value", "reward", "consist",
-        "belief_c", "belief_opp", "belief_div",
-        "L_policy_raw", "L_value_raw", "L_reward_raw", "L_consist_raw",
-        "diag_pi_mve_entropy", "diag_pi_pred_entropy",
-        "diag_cos_pred_cross", "diag_cos_pred_same",
-        "diag_cos_rew_cross", "diag_cos_rew_same",
-    }
+    keys = set(losses)
+    missing = _REQUIRED_LOSS_KEYS - keys
+    assert not missing, f"film_head dropped required keys: {sorted(missing)}"
+    non_diag = {k for k in (keys - _REQUIRED_LOSS_KEYS) if not k.startswith("diag_")}
+    assert not non_diag, f"unexpected non-diagnostic keys (film_head): {sorted(non_diag)}"
     for k, v in losses.items():
         if torch.is_tensor(v):
             assert not torch.isnan(v).any(), f"NaN in loss['{k}'] (film_head)"
