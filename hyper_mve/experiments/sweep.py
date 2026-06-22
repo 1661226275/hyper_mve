@@ -330,6 +330,18 @@ def _build_payload(
     }
 
 
+def _tail_bytes(path: pathlib.Path, n_bytes: int = 8192) -> bytes:
+    """Return the last ``n_bytes`` of a file (for failure_reason extraction)."""
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            if size > n_bytes:
+                f.seek(size - n_bytes)
+            return f.read()
+    except OSError:
+        return b""
+
+
 def _spawn_row(
     row: SweepRow,
     sweep_cfg: SweepConfig,
@@ -340,28 +352,42 @@ def _spawn_row(
     extra_env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     env = os.environ.copy()
+    # Unbuffered child so its prints land in train.log promptly (tail -f works).
+    env.setdefault("PYTHONUNBUFFERED", "1")
     if gpu_id is not None:
         env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     if extra_env:
         env.update({str(k): str(v) for k, v in extra_env.items()})
     payload = _build_payload(row, sweep_cfg, run_dir)
     payload_bytes = json.dumps(payload).encode("utf-8")
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "hyper_mve.experiments._sweep_worker"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-        cwd=str(repo_root),
-    )
-    # Hand the payload to communicate(input=...) rather than manually
-    # write()+close()ing stdin: when all three streams are PIPEs, communicate()
-    # flushes stdin internally, and a pre-closed stdin raises
-    # "ValueError: flush of closed file" on POSIX.
-    stdout, stderr = proc.communicate(input=payload_bytes)
+    # Stream the child's combined stdout+stderr to a per-run train.log (mirrors
+    # the 2agent_06c layout) so a long run is observable via `tail -f`. The
+    # in-memory PIPE approach hid all progress and lost the log on success.
+    log_path = run_dir / "train.log"
+    header = (
+        f"# {row.variant} seed={row.seed} row={row.sweep_row_index} "
+        f"gpu={gpu_id} preset={sweep_cfg.preset} max_steps={sweep_cfg.max_steps}\n"
+    ).encode("utf-8")
+    with open(log_path, "wb") as logf:
+        logf.write(header)
+        logf.flush()
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "hyper_mve.experiments._sweep_worker"],
+            stdin=subprocess.PIPE,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            env=env,
+            cwd=str(repo_root),
+        )
+        # communicate(input=...) writes+closes stdin itself; stdout/stderr are
+        # redirected to the file (not PIPEs), so it returns (None, None) for
+        # them and just waits. Avoids the "flush of closed file" stdin bug.
+        proc.communicate(input=payload_bytes)
+    # Read the log tail for the registry failure_reason on non-zero exit.
+    stderr_tail = _tail_bytes(log_path, 8192)
     return subprocess.CompletedProcess(
         args=proc.args, returncode=proc.returncode,
-        stdout=stdout, stderr=stderr,
+        stdout=b"", stderr=stderr_tail,
     )
 
 
@@ -594,6 +620,11 @@ def run_sweep(
                 summary={"return_mean": None, "return_zero_shot_unseen": None, "regret_mean": None},
             )
             registry.append_row(pending_row)
+            print(
+                f"[start] row {row.sweep_row_index} ({row.variant}, seed={row.seed}) "
+                f"gpu={gpu_id} | tail -f {run_dir / 'train.log'}",
+                flush=True,
+            )
             t0 = datetime.now(timezone.utc)
             try:
                 proc = _spawn_row(
@@ -623,6 +654,16 @@ def run_sweep(
             registry.append_row(terminal_row)
             with final_lock:
                 final_rows.append(terminal_row)
+            ret_str = (
+                f" return_mean={summary['return_mean']:.3f}"
+                if summary.get("return_mean") is not None else ""
+            )
+            reason_str = f" | {failure_reason}" if status != "completed" and failure_reason else ""
+            print(
+                f"[done]  row {row.sweep_row_index} ({row.variant}, seed={row.seed}) "
+                f"{status} in {walltime:.1f}s{ret_str}{reason_str}",
+                flush=True,
+            )
             return terminal_row
         finally:
             sem.release(gpu_id)
