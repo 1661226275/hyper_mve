@@ -1,0 +1,19 @@
+# pkg-08 spec 06 §3.3 — Abl4 Joint exhaustive enum at Easy N=2.
+# 1 variant x 5 seeds x 1 cell = 5 rows.
+# HARD-PIN preset=easy per spec 06 Lock 3 — N=2 is the only preset where
+# 6**2=36 exhaustive joint enumeration is mathematically tractable.
+# Backs Theory Audit §2.4.
+variants:
+  - hyper
+seeds: [0, 1, 2, 3, 4]
+preset: easy
+overrides:
+  # Single override: enable joint enumeration; coord-descent + CRN unchanged
+  # at default True. Planner emits RuntimeWarning + falls through to
+  # coord-descent if used at N>2 (spec 06 Lock 3).
+  - {train.mve_joint_enumerate: true}
+max_steps: 100000
+eval_planner_mode: planner_full
+max_parallel: 1
+n_gpus: 1
+ablation_cell_id: abl4_joint_easy_n2

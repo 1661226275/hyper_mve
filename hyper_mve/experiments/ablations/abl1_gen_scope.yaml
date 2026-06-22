@@ -1,0 +1,27 @@
+# pkg-08 spec 06 §3.1 — Abl1 gen_scope: 7-cell generalisation grid
+# 6 variants x 5 seeds x 7 cells = 210 rows.
+# Backs Ch6.9 + Theory Audit §2.2 generalisation-scope claim.
+variants:
+  - hyper
+  - baseline_input_wide
+  - baseline_input_deep
+  - baseline_ma_muzero
+  - no_belief
+  - oracle_only
+seeds: [0, 1, 2, 3, 4]
+preset: medium
+overrides:
+  # 7 cells encoded as cfg-overrides; cfg.eval.zero_shot_* drives the c-grid
+  # per spec 02 Lock 2 (cfg-driven, no hardcoded c-values here).
+  - {legacy.ablation_cell_tag: "within_distribution",     env.c_visible: true}
+  - {legacy.ablation_cell_tag: "zs_interp",               env.c_visible: true}
+  - {legacy.ablation_cell_tag: "zs_extrap",               env.c_visible: true}
+  - {legacy.ablation_cell_tag: "c_hidden",                env.c_visible: false}
+  - {legacy.ablation_cell_tag: "type_ratio_shift_alpha",  env.c_visible: true,  eval.bell_curve_majority_type: "alpha"}
+  - {legacy.ablation_cell_tag: "type_ratio_shift_beta",   env.c_visible: true,  eval.bell_curve_majority_type: "beta"}
+  - {legacy.ablation_cell_tag: "both_axes_hidden",        env.c_visible: false, eval.bell_curve_majority_type: "alpha"}
+max_steps: 200000
+eval_planner_mode: planner_full
+max_parallel: 2
+n_gpus: 2
+ablation_cell_id: abl1_gen_scope

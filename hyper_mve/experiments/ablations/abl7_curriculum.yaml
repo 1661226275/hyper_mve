@@ -1,0 +1,18 @@
+# pkg-08 spec 06 §3.5 — Abl7 curriculum 3-cell sweep.
+# 3 variants x 5 seeds x 1 cell = 15 rows (empty-overrides edge case
+# collapses to single empty-dict per spec 05 §3.3).
+# Compares oracle_only / mixed (= hyper) / infer_only curriculum-override
+# variants per pkg-07 spec 01 §2.2.
+variants:
+  - oracle_only      # curriculum_stage_1_end_frac=1.0; oracle c throughout training
+  - hyper            # = "mixed"; default 0.3/0.7 curriculum
+  - infer_only       # curriculum_stage_2_end_frac=0.0; BeliefNet ĉ throughout
+seeds: [0, 1, 2, 3, 4]
+preset: medium
+overrides:
+  - {}               # single empty override; the variant is the cell axis
+max_steps: 200000
+eval_planner_mode: planner_full
+max_parallel: 2
+n_gpus: 2
+ablation_cell_id: abl7_curriculum

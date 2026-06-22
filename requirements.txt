@@ -1,0 +1,16 @@
+# Project-level dependency hints for pkg-07/08 baselines + eval pipeline.
+# (The hyper_mve workspace doesn't use a setup.py / pyproject.toml; this file
+# documents the additional runtime dependencies introduced when implementing
+# pkg-07 + pkg-08.)
+#
+# pkg-07 spec 04 — PettingZoo adapter for external baselines.
+pettingzoo>=1.24
+gymnasium>=0.29
+# pkg-08 spec 05 — sweep harness uses a cross-platform file lock (subprocess-per-row
+# + JSONL append-only ``runs/registry.jsonl``).
+filelock>=3.13
+# pkg-08 spec 07 — Welch t + Holm-Bonferroni stats; matplotlib for compare plots.
+scipy>=1.11
+matplotlib>=3.7
+# pkg-08 spec 06 — ablation CLI dispatches into canned YAML configs.
+PyYAML>=6.0
