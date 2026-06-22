@@ -50,7 +50,8 @@ class MAMuZeroBaselineModel(BaselineModel):
                 "Set cfg.baselines.internal_ma_muzero_share_pred_head=True."
             )
         self.pred_net = _PredHead(in_pred, hidden_dim, cfg.env.A, n_layers=2)
-        self._id_onehot: Optional[torch.Tensor] = None
+        self._id_onehot: Optional[torch.Tensor] = None       # subjective (reward/pred)
+        self._id_onehot_obj: Optional[torch.Tensor] = None   # objective (transition)
 
     def _build_conditioning_state(self, agent_id, cap_i, belief_gated):
         # belief is consumed by grad_gating.apply_raw (already done in base.
@@ -70,8 +71,18 @@ class MAMuZeroBaselineModel(BaselineModel):
         type_one_hot[:, own_type_idx] = 1.0
         self._id_onehot = torch.cat([agent_one_hot, type_one_hot], dim=-1)
 
+    def _build_objective_state(self, c_t):
+        # ma_muzero conditions only on agent identity (subjective) and has a
+        # shared/context-free world model — so the OBJECTIVE transition sees a
+        # zero id vector (no agent, no rule; ma_muzero's conditioning ignores
+        # c_t by design). Width = self._id_dim so trans_net's input is unchanged.
+        B = c_t.shape[0]
+        self._id_onehot_obj = torch.zeros(
+            (B, self._id_dim), dtype=torch.float32, device=c_t.device,
+        )
+
     def _apply_trans(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        idh = self._match_batch(self._id_onehot, s)
+        idh = self._match_batch(self._id_onehot_obj, s)
         return self.trans_net(torch.cat([s, action, idh], dim=-1))
 
     def _apply_reward(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:

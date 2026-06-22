@@ -65,7 +65,9 @@ class _InputConditionedBase(BaselineModel):
         self.trans_net = _mlp(in_trans, self._hidden_dim, latent_dim, self._n_layers)
         self.reward_head = _mlp(in_reward, self._hidden_dim, 1, self._n_layers)
         self.pred_net = _PredHead(in_pred, self._hidden_dim, cfg.env.A, self._n_layers)
-        self._ctx_aug: Optional[torch.Tensor] = None
+        self._ctx_aug: Optional[torch.Tensor] = None       # subjective (reward/pred)
+        self._ctx_aug_obj: Optional[torch.Tensor] = None   # objective (transition)
+        self._d_c: int = int(cfg.model.d_c)
 
     def _build_conditioning_state(self, agent_id, cap_i, belief_gated):
         # Build ctx_aug via TriContextEncoder's sub-encoders (single-agent path
@@ -95,8 +97,22 @@ class _InputConditionedBase(BaselineModel):
         belief_vec = tce.ln_belief(belief_vec).squeeze(1)
         self._ctx_aug = torch.cat([c_ctx, role, belief_vec], dim=-1)
 
+    def _build_objective_state(self, c_t):
+        # Objective transition conditioning: the same c_ctx slot the subjective
+        # ctx_aug carries, with the role + belief slots zeroed — transition is
+        # rule-only (role/belief are subjective and feed reward/pred). Width is
+        # d_ctx_aug so trans_net's input dim is unchanged.
+        tce = self.tri_context_encoder
+        c_ctx = tce.forward_c_ctx_only(c_t)                 # (B, d_c), already LN
+        B = c_ctx.shape[0]
+        pad = self.cfg.model.d_ctx_aug - self._d_c          # role + belief width
+        self._ctx_aug_obj = torch.cat(
+            [c_ctx, torch.zeros(B, pad, device=c_ctx.device, dtype=c_ctx.dtype)],
+            dim=-1,
+        )
+
     def _apply_trans(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        ctx = self._match_batch(self._ctx_aug, s)
+        ctx = self._match_batch(self._ctx_aug_obj, s)
         return self.trans_net(torch.cat([s, action, ctx], dim=-1))
 
     def _apply_reward(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:

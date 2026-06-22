@@ -123,10 +123,16 @@ class NoBeliefBaselineModel(BaselineModel):
             ctx_aug, self._step, belief_slice=self._belief_slice,
         )
 
-        # Generate theta_state (objective) from c_ctx alone, theta_rew/pred
-        # from the (zero-belief) ctx_aug.
-        self._theta_state = self.hyper_net.forward_trans(c_ctx)
+        # theta_rew/pred (subjective) from the (zero-belief) ctx_aug. theta_state
+        # (objective) is generated in _build_objective_state (set_context_objective)
+        # so transition() works before any per-agent set_context_subjective.
         self._theta_rew, self._theta_pred = self.hyper_net.forward_subjective(ctx_aug)
+
+    def _build_objective_state(self, c_t):
+        # Objective transition weights: generated from c_ctx (rule) alone —
+        # exactly what HyperMuZeroModel.set_context_objective does.
+        c_ctx = self.tri_context_encoder.forward_c_ctx_only(c_t)
+        self._theta_state = self.hyper_net.forward_trans(c_ctx)
 
     def _apply_trans(self, s, action):
         # FunctionalStateTransNet emits s' (with internal residual). Base class

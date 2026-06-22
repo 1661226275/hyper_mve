@@ -138,15 +138,21 @@ class ExplicitTypeRewardBaselineModel(BaselineModel):
             ctx_aug, self._step, belief_slice=self._belief_slice,
         )
 
-        # Generate theta_state (from c_ctx only) + theta_pred (from ctx_aug).
+        # theta_pred (subjective, from ctx_aug). theta_state (objective) is
+        # generated in _build_objective_state (set_context_objective) so
+        # transition() works before any per-agent set_context_subjective.
         # NOTE: pred-side context detach honours cfg.train.detach_pred_context
         # (pkg-04 spec 02 D5) just like HyperMuZeroModel.
-        self._theta_state = self.hyper_trans(c_ctx)
         if self.cfg.train.detach_pred_context:
             self._theta_pred = self.hyper_pred(ctx_aug.detach())
         else:
             self._theta_pred = self.hyper_pred(ctx_aug)
         self._own_type = int(self.cfg.env.type_assignment[int(agent_id)].value)
+
+    def _build_objective_state(self, c_t):
+        # Objective transition weights: generated from c_ctx (rule) alone.
+        c_ctx = self.tri_context_encoder.forward_c_ctx_only(c_t)
+        self._theta_state = self.hyper_trans(c_ctx)
 
     def _apply_trans(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         # FunctionalStateTransNet returns s' (= s + Δs internally per pkg-04

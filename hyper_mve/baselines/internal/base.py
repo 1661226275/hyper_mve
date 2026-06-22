@@ -103,6 +103,18 @@ class BaselineModel(nn.Module):
         # No-op default; concrete variants override.
         return None
 
+    def _build_objective_state(self, c_t: torch.Tensor) -> None:
+        """Build agent-agnostic *transition* conditioning from the rule ``c_t``.
+
+        Called from :meth:`set_context_objective`. Transition is objective (rule
+        only) — it must be well-defined after ``set_context_objective`` alone,
+        because the trainer/planner call ``transition`` once per step before any
+        ``set_context_subjective``. The input/id-conditioned variants build a
+        c_ctx-only conditioning (role/belief zeroed); the theta-based variants
+        generate ``theta_state`` from c_ctx here. Default no-op.
+        """
+        return None
+
     def _apply_trans(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         """Return Δs (the *delta* state). Base class wraps with residual."""
         raise NotImplementedError
@@ -122,6 +134,12 @@ class BaselineModel(nn.Module):
 
     def set_context_objective(self, c_t: torch.Tensor) -> None:  # pkg-04 spec 02 line 181
         self._ctx_obj = c_t
+        # Build the OBJECTIVE transition conditioning now (mirrors
+        # HyperMuZeroModel.set_context_objective regenerating theta_state). The
+        # trainer + planner call transition() once per step BEFORE any per-agent
+        # set_context_subjective, so the conditioning transition consumes must be
+        # established here, not in set_context_subjective.
+        self._build_objective_state(c_t)
 
     def set_context_subjective(
         self,
@@ -149,8 +167,15 @@ class BaselineModel(nn.Module):
         return self.rep_net(obs)
 
     def transition(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        """s + Δs (residual, pkg-04 spec 02 line 284)."""
-        self._assert_subjective_set("transition")
+        """s + Δs (residual, pkg-04 spec 02 line 284).
+
+        OBJECTIVE: depends on the rule only, so it requires
+        ``set_context_objective`` (NOT ``set_context_subjective``) — the
+        trainer/planner call it once per step before the per-agent subjective
+        loop, exactly as for ``HyperMuZeroModel`` (whose ``theta_state`` is
+        objective).
+        """
+        self._assert_objective_set("transition")
         return s + self._apply_trans(s, action)
 
     def predict_reward(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
@@ -170,7 +195,15 @@ class BaselineModel(nn.Module):
             raise AssertionError(
                 f"{method_name}() called before set_context_subjective(). "
                 "Pkg-04 spec 02 §3.4: must call set_context_objective then "
-                "set_context_subjective before transition/predict_reward/predict."
+                "set_context_subjective before predict_reward/predict."
+            )
+
+    def _assert_objective_set(self, method_name: str) -> None:
+        if self._ctx_obj is None:
+            raise AssertionError(
+                f"{method_name}() called before set_context_objective(). "
+                "Pkg-04 spec 02 §3.4: transition is objective — call "
+                "set_context_objective(c_t) first."
             )
 
     @staticmethod

@@ -75,6 +75,26 @@ def test_internal_baseline_survives_planner_batch_expansion(cfg, variant):
 
 
 @pytest.mark.parametrize("variant", _INTERNAL_VARIANTS)
+def test_transition_is_objective(cfg, variant):
+    """transition() must work after set_context_objective alone (no subjective).
+
+    The trainer (compose_total_loss) and planner both call transition once per
+    step BEFORE the per-agent set_context_subjective loop — transition is
+    objective (rule only), like HyperMuZeroModel's theta_state. Previously the
+    baselines asserted subjective context here and crashed in training.
+    """
+    model = create_baseline(cfg, variant)
+    model.eval()
+    B = 3
+    model.set_context_objective(torch.full((B,), 0.5))
+    s = torch.randn(B, cfg.model.latent_dim)
+    action = torch.zeros(B, cfg.env.N * cfg.env.A)
+    s_next = model.transition(s, action)  # must NOT raise (was AssertionError)
+    assert s_next.shape == (B, cfg.model.latent_dim)
+    assert torch.isfinite(s_next).all()
+
+
+@pytest.mark.parametrize("variant", _INTERNAL_VARIANTS)
 def test_internal_baseline_planner_diagnostics_shapes(cfg, variant):
     """The diagnostics path (worker/eval use it) also survives the expansion."""
     model = create_baseline(cfg, variant)
