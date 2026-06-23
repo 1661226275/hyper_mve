@@ -1,0 +1,38 @@
+# Thesis experiment suite manifest (pkg-08+ / Ch6 + Roadmap).
+#
+# Lists every cell in DECISION-GATE order. Paths resolve relative to THIS file's
+# directory (experiments/suite/), so they point at both the new cells/*.yaml and
+# the in-place ../ablations/*.yaml. `run_suite --list` prints status; `run_suite
+# --only <id>` runs a subset; cheap Easy gates precede the expensive Medium runs.
+#
+# tiers: must_have (必保) / degradable (可降级, 3 seeds) / cuttable (可砍, supplementary)
+cells:
+  # --- 决策门 0: gen_scope 选型 (先于决策点 1 固定 Hyper 形态) ---
+  - cells/lora_duo_film.yaml
+  - cells/lora_duo_film_fc2.yaml
+  - cells/lora_duo_base.yaml
+  - cells/lora_medium_film.yaml
+  - cells/lora_medium_film_fc2.yaml
+  - cells/lora_medium_base.yaml
+
+  # --- 决策点 1 (生死判官) + 决策点 2: Easy gates ---
+  - cells/abl3_easy_n2.yaml            # 断言 A, Easy N=2
+  - cells/abl1_easy.yaml               # 断言 B′, Easy N=2
+  - cells/zero_shot_easy.yaml
+  - cells/main_comparison_easy.yaml
+
+  # --- Medium headlines ---
+  - cells/abl3_type_heterogeneity.yaml # 消融3 钟形曲线 (Table 6.4 / Fig 6.4)
+  - ../ablations/abl1_gen_scope.yaml   # 消融1 条件化谱 + 泛化网格 (Table 6.2)
+  - cells/zero_shot_generalization.yaml# 零样本泛化 (Table 6.7 / Fig 6.5)
+  - cells/main_comparison.yaml         # 决策点 3 主对比 (Table 6.1 / Fig 6.1-3)
+
+  # --- 其余消融 ---
+  - ../ablations/abl4_crn_joint.yaml   # 消融4 CRN×CoordDesc (Table 6.5)
+  - ../ablations/abl4_joint_easy_n2.yaml
+  - ../ablations/abl6_fehr_schmidt.yaml# 消融5 Fehr-Schmidt 稳健性 (Table 6.6)
+  - ../ablations/abl7_curriculum.yaml  # 课程学习 (Fig 6.6)
+
+  # --- BLOCKED / supplementary ---
+  - cells/abl2_context_paths.yaml      # 消融2 (Table 6.3) — BLOCKED
+  - cells/lr_sweep.yaml                # μP LR sweep — supplementary

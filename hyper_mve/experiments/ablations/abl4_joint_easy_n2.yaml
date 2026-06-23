@@ -3,6 +3,15 @@
 # HARD-PIN preset=easy per spec 06 Lock 3 — N=2 is the only preset where
 # 6**2=36 exhaustive joint enumeration is mathematically tractable.
 # Backs Theory Audit §2.4.
+meta:
+  id: abl4_joint_easy_n2
+  title: "消融4 — Easy N=2 联合枚举对照 (断言 D)"
+  tier: degradable
+  size: easy
+  deliverables: ["Table 6.5"]
+  assertion: "D — N=2 下穷举联合动作作为坐标下降的对照"
+  runs_subdir: abl4_joint_easy_n2
+  blocked_on: []
 variants:
   - hyper
 seeds: [0, 1, 2, 3, 4]

@@ -1,0 +1,27 @@
+# 主对比 Easy 决策门 — Easy N=2 (1α+1β), 200K, 3 seeds, 7 methods.
+# Cheap early-signal gate before the ~210 GPU-hr Medium main comparison.
+# 7 variants × 3 seeds = 21 rows; 3 stubs auto-skip.
+meta:
+  id: main_comparison_easy
+  title: "主对比 Easy 门 — Hyper vs baselines (Easy N=2, 3 seeds, 200K)"
+  tier: must_have
+  size: easy
+  deliverables: ["Table 6.1 (Easy gate)"]
+  assertion: "整体性能（Easy 早期信号，先于 Medium）"
+  runs_subdir: main_comparison_easy
+  blocked_on: ["external_mamba", "external_marie", "external_ga"]
+variants:
+  - hyper
+  - external_ma_muzero_gh
+  - external_mamba
+  - external_marie
+  - external_ga
+  - external_mappo
+  - external_qmix
+seeds: [0, 1, 2]
+preset: easy
+max_steps: 200000
+eval_planner_mode: planner_full
+max_parallel: 2
+n_gpus: 2
+ablation_cell_id: main_comparison_easy

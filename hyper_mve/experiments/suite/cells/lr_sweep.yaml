@@ -1,0 +1,33 @@
+# μP LR sweep (Ch6.2.5) — Easy, 7 methods × 5 LRs × 3 seeds = 105 runs.
+# Establishes a fair per-method base LR before the main comparison. 3 external
+# stubs auto-skip. tier=cuttable (supplementary / fairness audit).
+meta:
+  id: lr_sweep
+  title: "μP LR sweep — 公平基线学习率 (Easy, 7 methods × 5 LR × 3 seeds)"
+  tier: cuttable
+  size: easy
+  deliverables: ["Table 6.1 (base LR column)"]
+  assertion: "公平性 — 所有 method 走同一 LR sweep 协议"
+  runs_subdir: lr_sweep
+  blocked_on: ["external_mamba", "external_marie", "external_ga"]
+variants:
+  - hyper
+  - external_ma_muzero_gh
+  - external_mamba
+  - external_marie
+  - external_ga
+  - external_mappo
+  - external_qmix
+seeds: [0, 1, 2]
+preset: easy
+overrides:
+  - {train.lr: 0.0001}
+  - {train.lr: 0.0003}
+  - {train.lr: 0.001}
+  - {train.lr: 0.003}
+  - {train.lr: 0.01}
+max_steps: 200000
+eval_planner_mode: planner_full
+max_parallel: 2
+n_gpus: 2
+ablation_cell_id: lr_sweep

@@ -47,6 +47,8 @@ __all__ = [
     "compute_config_hash",
     "enumerate_cartesian",
     "load_yaml",
+    "from_mapping",
+    "row_config_hash",
     "run_sweep",
 ]
 
@@ -114,20 +116,19 @@ class SweepRow:
 _LEGAL_KEYS = {f.name for f in dataclasses.fields(SweepConfig)}
 
 
-def load_yaml(path: pathlib.Path | str) -> SweepConfig:
-    """Load a SweepConfig YAML; strict-mode unknown-key rejection."""
-    try:
-        import yaml
-    except ImportError as e:  # pragma: no cover
-        raise ImportError("pyyaml is required for SweepConfig.from_yaml()") from e
-    p = pathlib.Path(path)
-    raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+def from_mapping(raw: Mapping[str, Any], *, source: str = "<mapping>") -> SweepConfig:
+    """Build a SweepConfig from an already-parsed mapping; strict unknown-key rejection.
+
+    Single source of strictness for both ``load_yaml`` (file path) and the suite
+    cell loader (which pops a non-SweepConfig ``meta:`` block first, then hands
+    the rest here). ``source`` is only used in error messages.
+    """
     if not isinstance(raw, dict):
-        raise ValueError(f"{p}: top-level YAML node must be a mapping; got {type(raw).__name__}")
+        raise ValueError(f"{source}: top-level node must be a mapping; got {type(raw).__name__}")
     extra = set(raw) - _LEGAL_KEYS
     if extra:
         raise ValueError(
-            f"{p}: unknown SweepConfig keys {sorted(extra)}; legal keys: {sorted(_LEGAL_KEYS)}"
+            f"{source}: unknown SweepConfig keys {sorted(extra)}; legal keys: {sorted(_LEGAL_KEYS)}"
         )
     variants = tuple(raw.get("variants", ()) or ())
     seeds = tuple(int(s) for s in (raw.get("seeds", ()) or ()))
@@ -144,6 +145,17 @@ def load_yaml(path: pathlib.Path | str) -> SweepConfig:
         if key in raw:
             kwargs[key] = raw[key]
     return SweepConfig(**kwargs)
+
+
+def load_yaml(path: pathlib.Path | str) -> SweepConfig:
+    """Load a SweepConfig YAML; strict-mode unknown-key rejection."""
+    try:
+        import yaml
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("pyyaml is required for SweepConfig.from_yaml()") from e
+    p = pathlib.Path(path)
+    raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    return from_mapping(raw, source=str(p))
 
 
 # ===== config_hash (spec 05 §3.5) ========================================
@@ -187,6 +199,36 @@ def enumerate_cartesian(sweep: SweepConfig) -> list[SweepRow]:
         )
         idx += 1
     return rows
+
+
+# ===== Per-row config hash (resume / --force key surrogate) ==============
+
+def _row_hash_input(sweep_cfg: SweepConfig, row: SweepRow) -> dict[str, Any]:
+    """Deterministic surrogate hashed into ``config_hash`` (no torch in the parent).
+
+    Mirrors the worker's full-config hash inputs closely enough for resume +
+    selective re-run: (variant, seed, preset, max_steps, eval_planner_mode,
+    overrides, ablation_cell_id, schema_version).
+    """
+    return {
+        "variant": row.variant,
+        "seed": row.seed,
+        "preset": sweep_cfg.preset,
+        "max_steps": sweep_cfg.max_steps,
+        "eval_planner_mode": sweep_cfg.eval_planner_mode,
+        "overrides": dict(row.overrides),
+        "ablation_cell_id": sweep_cfg.ablation_cell_id,
+        "schema_version": sweep_cfg.schema_version,
+    }
+
+
+def row_config_hash(sweep_cfg: SweepConfig, row: SweepRow) -> str:
+    """``config_hash`` for one row — the exact key ``run_sweep`` skips/resumes on.
+
+    Exposed so ``run_suite --force`` can recompute the same triple
+    ``(variant, seed, config_hash)`` it needs to invalidate.
+    """
+    return compute_config_hash(_row_hash_input(sweep_cfg, row))
 
 
 # ===== GpuSemaphore (spec 05 §7) =========================================
@@ -526,25 +568,13 @@ def run_sweep(
         return []
 
     # Compute config_hash + run_tag per row. The full V4Config materialisation
-    # for the hash is the worker's responsibility; we hash a deterministic
-    # surrogate built from (variant, seed, preset, max_steps, eval_planner_mode,
-    # overrides, ablation_cell_id) here so resume detection works without
-    # importing torch in the parent.
-    def _row_hash_input(row: SweepRow) -> dict[str, Any]:
-        return {
-            "variant": row.variant,
-            "seed": row.seed,
-            "preset": sweep_cfg.preset,
-            "max_steps": sweep_cfg.max_steps,
-            "eval_planner_mode": sweep_cfg.eval_planner_mode,
-            "overrides": dict(row.overrides),
-            "ablation_cell_id": sweep_cfg.ablation_cell_id,
-            "schema_version": sweep_cfg.schema_version,
-        }
+    # for the hash is the worker's responsibility; row_config_hash() hashes a
+    # deterministic surrogate so resume detection works without importing torch
+    # in the parent (and run_suite --force can recompute the same key).
     rows = [
         replace(
             row,
-            config_hash=compute_config_hash(_row_hash_input(row)),
+            config_hash=row_config_hash(sweep_cfg, row),
             run_id=uuid.uuid4().hex,
         )
         for row in rows

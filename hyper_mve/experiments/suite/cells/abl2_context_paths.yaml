@@ -1,0 +1,30 @@
+# 消融2 — Context 通路拆分 (Ch6.5, 断言 C). BLOCKED / deferred.
+# The thesis needs 5 variants {Full, No-belief, No-type, No-cap, Only-c}, but
+# no_type / no_cap / only_c do NOT exist as variants (no masking flags in the
+# model). Listing them would FAIL the row (worker exit 1), not skip — so this
+# cell ships with only the 2 variants that exist (hyper + no_belief) and is
+# marked blocked until the masking variants land.
+# Unblock: add masking flags + no_type/no_cap/only_c to CLI_CHOICES + _build_runner.
+meta:
+  id: abl2_context_paths
+  title: "消融2 — 三联通路必要性 (断言 C) [BLOCKED]"
+  tier: degradable
+  size: medium
+  deliverables: ["Table 6.3"]
+  assertion: "C — c_ctx / role / belief 缺一不可且互不冗余"
+  runs_subdir: abl2_context_paths
+  blocked_on: ["variant:no_type", "variant:no_cap", "variant:only_c"]
+  notes: "visible + hidden c 两模式; 待 masking variants 实现后补全 5 个 variant."
+variants:
+  - hyper
+  - no_belief
+seeds: [0, 1, 2]
+preset: medium
+overrides:
+  - {env.c_visible: true}    # visible-c
+  - {env.c_visible: false}   # hidden-c
+max_steps: 1000000
+eval_planner_mode: planner_full
+max_parallel: 2
+n_gpus: 2
+ablation_cell_id: abl2_context_paths

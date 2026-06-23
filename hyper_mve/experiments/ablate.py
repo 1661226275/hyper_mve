@@ -22,6 +22,7 @@ import sys
 import warnings
 from typing import Sequence
 
+from .suite.cell import load_cell
 from .sweep import SweepConfig, run_sweep
 
 
@@ -94,7 +95,9 @@ def materialise_sweep_config(args: argparse.Namespace) -> SweepConfig:
             f"Canned ablation YAML not found: {yaml_path}. "
             f"Expected file for --ablation={args.ablation}."
         )
-    sweep_cfg = SweepConfig.from_yaml(yaml_path)
+    # Ablation YAMLs are suite cells (carry a `meta:` block SweepConfig.from_yaml
+    # would reject); load via the cell loader and take its SweepConfig.
+    sweep_cfg = load_cell(yaml_path).sweep_config
 
     # Hard-pin guard (Lock 3).
     pinned = _HARDPIN_PRESET.get(args.ablation)

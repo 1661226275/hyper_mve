@@ -1,0 +1,28 @@
+# 主对比 (Ch6.3 / 决策点 3) — Medium, 1M steps, 5 seeds, 7 methods.
+# 7 variants × 5 seeds × 1 = 35 rows. MAMBA/MARIE/GA are stubs → auto-skip
+# (worker exit 2) until sourced; the other 4 methods + hyper run.
+meta:
+  id: main_comparison
+  title: "主对比 — Hyper vs 6 baselines (Medium, 5 seeds, 1M)"
+  tier: must_have
+  size: medium
+  deliverables: ["Table 6.1", "Fig 6.1", "Fig 6.2", "Fig 6.3"]
+  assertion: "整体性能 — Hyper-MuZero 优于 6 个 baseline"
+  runs_subdir: main_comparison
+  blocked_on: ["external_mamba", "external_marie", "external_ga"]
+  notes: "5 metrics需 §F eval 扩展; 3 个外部 stub 未 sourced 前自动 skip."
+variants:
+  - hyper                  # Hyper-MuZero
+  - external_ma_muzero_gh  # MA-MuZero (AAAI 2024)
+  - external_mamba         # MAMBA (AAMAS 2022) — STUB
+  - external_marie         # MARIE (ICML 2024) — STUB
+  - external_ga            # Conflict-Aware GA (NeurIPS 2025) — STUB
+  - external_mappo         # MAPPO
+  - external_qmix          # QMIX
+seeds: [0, 1, 2, 3, 4]
+preset: medium
+max_steps: 1000000
+eval_planner_mode: planner_full
+max_parallel: 2
+n_gpus: 2
+ablation_cell_id: main_comparison

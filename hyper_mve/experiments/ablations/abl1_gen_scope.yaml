@@ -1,6 +1,15 @@
 # pkg-08 spec 06 §3.1 — Abl1 gen_scope: 7-cell generalisation grid
 # 6 variants x 5 seeds x 7 cells = 210 rows.
 # Backs Ch6.9 + Theory Audit §2.2 generalisation-scope claim.
+meta:
+  id: abl1_gen_scope
+  title: "消融1 — 条件化谱 + 泛化网格 (断言 B′)"
+  tier: must_have
+  size: medium
+  deliverables: ["Table 6.2"]
+  assertion: "B′ — 生成范围谱上的容量分配（左端平均化 / 右端坍缩 / 内部峰值）"
+  runs_subdir: abl1_gen_scope
+  blocked_on: []
 variants:
   - hyper
   - baseline_input_wide

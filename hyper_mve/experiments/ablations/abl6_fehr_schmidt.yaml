@@ -2,6 +2,15 @@
 # 1 variant x 5 seeds x 9 cells = 45 rows.
 # Surfaces sensitivity of trained policy to inequality-aversion params;
 # backs Ch6 sensitivity claim.
+meta:
+  id: abl6_fehr_schmidt
+  title: "消融5 — Fehr-Schmidt α/β 3×3 稳健性扫描 (Table 6.6)"
+  tier: cuttable
+  size: medium
+  deliverables: ["Table 6.6"]
+  assertion: "稳健性 — 主结论不依赖 Fehr-Schmidt 参数取值"
+  runs_subdir: abl6_fehr_schmidt
+  blocked_on: []
 variants:
   - hyper
 seeds: [0, 1, 2, 3, 4]
