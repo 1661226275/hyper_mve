@@ -226,6 +226,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.gpus:
         gpu_ids = [int(g.strip()) for g in args.gpus.split(",") if g.strip()]
 
+    # When a GPU pool is given without an explicit --max-parallel, fill it:
+    # default concurrency = len(gpus) × slots_per_gpu (otherwise the cell's own
+    # max_parallel — typically 2 — would bottleneck a larger pool).
+    max_parallel = args.max_parallel
+    if max_parallel is None and gpu_ids is not None:
+        max_parallel = len(gpu_ids) * max(1, args.slots_per_gpu)
+
     n_failed_cells = 0
     for cell in selected:
         cfg, warn = _narrow(cell, args)
@@ -255,7 +262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             cfg,
             runs_root=runs_root_cell,
             registry_path=registry_path,
-            max_parallel=args.max_parallel,
+            max_parallel=max_parallel,
             n_gpus=(cfg.n_gpus if gpu_ids is None else None),
             gpu_ids=gpu_ids,
             slots_per_gpu=args.slots_per_gpu,
