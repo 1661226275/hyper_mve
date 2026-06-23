@@ -109,6 +109,8 @@ def _tier_2_paths() -> tuple[str, ...]:
         "tests/baselines/external/test_external_adapter_consumption.py",
         "tests/baselines/external/test_external_eval_contract.py",
         "tests/baselines/external/test_stub_external_baselines.py",
+        # migrated acceptance smokes (env / forward); @slow belief smoke runs in tier 3.
+        "tests/smoke/",
     )
 
 
@@ -117,6 +119,8 @@ def _tier_3_paths() -> tuple[str, ...]:
         "tests/baselines/external/test_mappo_smoke.py",
         "tests/baselines/external/test_qmix_smoke.py",
         "tests/baselines/external/test_ma_muzero_gh_smoke.py",
+        # @slow BeliefNet synthetic-training smoke (marker_expr="slow" selects it).
+        "tests/smoke/",
     )
 
 
