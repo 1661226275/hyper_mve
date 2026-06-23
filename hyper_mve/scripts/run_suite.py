@@ -210,30 +210,9 @@ def _print_list(cells: list[SuiteCell], args: argparse.Namespace) -> None:
 
 # ===== main ==============================================================
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv)
-    cells = load_manifest(args.manifest)
-    selected = _select_cells(cells, args)
-    if not selected:
-        print("[run_suite] no cells selected.")
-        return 0
-
-    if args.list_only:
-        _print_list(selected, args)
-        return 0
-
-    gpu_ids = None
-    if args.gpus:
-        gpu_ids = [int(g.strip()) for g in args.gpus.split(",") if g.strip()]
-
-    # When a GPU pool is given without an explicit --max-parallel, fill it:
-    # default concurrency = len(gpus) × slots_per_gpu (otherwise the cell's own
-    # max_parallel — typically 2 — would bottleneck a larger pool).
-    max_parallel = args.max_parallel
-    if max_parallel is None and gpu_ids is not None:
-        max_parallel = len(gpu_ids) * max(1, args.slots_per_gpu)
-
-    n_failed_cells = 0
+def _build_plan(selected, args) -> list[tuple]:
+    """Narrow each cell + prepare its runs_root/registry → [(cell, cfg, root, reg)]."""
+    plan: list[tuple] = []
     for cell in selected:
         cfg, warn = _narrow(cell, args)
         if warn:
@@ -242,43 +221,139 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not cfg.variants or not cfg.seeds:
             print(f"[run_suite] skip {cell.id}: no variants/seeds after narrowing", file=sys.stderr)
             continue
+        root = args.runs_root / cell.runs_subdir
+        root.mkdir(parents=True, exist_ok=True)
+        plan.append((cell, cfg, root, root / "registry.jsonl"))
+    return plan
 
-        runs_root_cell = args.runs_root / cell.runs_subdir
-        runs_root_cell.mkdir(parents=True, exist_ok=True)
-        registry_path = runs_root_cell / "registry.jsonl"
 
-        blocked_note = f"  [BLOCKED: {', '.join(cell.blocked_on)}]" if cell.blocked else ""
-        print(f"\n=== cell {cell.id} ({cell.tier}, {cell.size}){blocked_note} ===", flush=True)
+def _cell_summary(cell, rows) -> int:
+    """Print a cell's completed/failed/skipped tally; return the failed count."""
+    nf = sum(1 for r in rows if r.status == "failed")
+    nc = sum(1 for r in rows if r.status == "completed")
+    ns = sum(1 for r in rows if r.status == "skipped")
+    print(f"    cell {cell.id}: completed={nc} failed={nf} skipped={ns}", flush=True)
+    return nf
+
+
+def _run_sequential(plan, gpu_ids, args, child_env, retry_failed) -> int:
+    """One cell at a time (dry-run / single cell / no GPU pool)."""
+    max_parallel = args.max_parallel
+    if max_parallel is None and gpu_ids is not None:
+        max_parallel = len(gpu_ids) * max(1, args.slots_per_gpu)
+    n_failed = 0
+    for cell, cfg, root, reg in plan:
+        blocked = f"  [BLOCKED: {', '.join(cell.blocked_on)}]" if cell.blocked else ""
+        print(f"\n=== cell {cell.id} ({cell.tier}, {cell.size}){blocked} ===", flush=True)
         print(f"    variants={list(cfg.variants)} seeds={list(cfg.seeds)} "
-              f"preset={cfg.preset} max_steps={cfg.max_steps} → {runs_root_cell}", flush=True)
-
-        retry_failed = bool(args.retry_failed)
-        if args.force and not args.dry_run:
-            n_tomb = _force_invalidate(cfg, registry_path)
-            retry_failed = True
-            print(f"    [--force] wrote {n_tomb} failed-tombstone(s) → will re-run those rows", flush=True)
-
+              f"preset={cfg.preset} max_steps={cfg.max_steps} → {root}", flush=True)
         rows = sweep.run_sweep(
-            cfg,
-            runs_root=runs_root_cell,
-            registry_path=registry_path,
+            cfg, runs_root=root, registry_path=reg,
             max_parallel=max_parallel,
             n_gpus=(cfg.n_gpus if gpu_ids is None else None),
-            gpu_ids=gpu_ids,
-            slots_per_gpu=args.slots_per_gpu,
-            child_env=_child_env(args),
-            dry_run=args.dry_run,
-            retry_failed=retry_failed,
+            gpu_ids=gpu_ids, slots_per_gpu=args.slots_per_gpu,
+            child_env=child_env, dry_run=args.dry_run, retry_failed=retry_failed,
         )
-        if not args.dry_run:
-            nf = sum(1 for r in rows if r.status == "failed")
-            nc = sum(1 for r in rows if r.status == "completed")
-            ns = sum(1 for r in rows if r.status == "skipped")
-            print(f"    cell {cell.id}: completed={nc} failed={nf} skipped={ns}", flush=True)
-            if nf:
-                n_failed_cells += 1
+        if not args.dry_run and _cell_summary(cell, rows):
+            n_failed += 1
+    return 0 if n_failed == 0 else 1
 
-    return 0 if n_failed_cells == 0 else 1
+
+def _run_cross_cell(plan, gpu_ids, args, child_env, retry_failed) -> int:
+    """Pool rows from ALL selected cells through ONE shared GPU semaphore.
+
+    Every cell's run_sweep runs concurrently, sharing one
+    MultiSlotGpuSemaphore(len(gpus) × slots_per_gpu) — so the pool fills with rows
+    drawn ACROSS cells (e.g. six 3-row LoRA cells → 9 concurrent, not 3-at-a-time).
+    Per-cell registries stay isolated (separate runs_subdir).
+    """
+    import concurrent.futures
+
+    slots = max(1, args.slots_per_gpu)
+    shared_sem = sweep.MultiSlotGpuSemaphore(gpu_ids, slots_per_gpu=slots)
+    total_slots = shared_sem.n_gpus
+    total_rows = sum(len(sweep.enumerate_cartesian(cfg)) for _c, cfg, _r, _g in plan)
+    print(f"\n[run_suite] cross-cell pool: {len(plan)} cells, {total_rows} rows, "
+          f"{total_slots} concurrent ({len(gpu_ids)} GPUs × {slots} slots).", flush=True)
+    for cell, cfg, root, _reg in plan:
+        b = f"  [BLOCKED: {', '.join(cell.blocked_on)}]" if cell.blocked else ""
+        print(f"    {cell.id}: {len(sweep.enumerate_cartesian(cfg))} rows → {root}{b}", flush=True)
+
+    def _one(item):
+        cell, cfg, root, reg = item
+        rows = sweep.run_sweep(
+            cfg, runs_root=root, registry_path=reg,
+            max_parallel=total_slots, gpu_ids=gpu_ids, slots_per_gpu=slots,
+            shared_sem=shared_sem, child_env=child_env, retry_failed=retry_failed,
+        )
+        return cell, rows
+
+    n_failed = 0
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=len(plan), thread_name_prefix="suite-cell",
+    ) as pool:
+        futs = {pool.submit(_one, item): item[0] for item in plan}
+        for fut in concurrent.futures.as_completed(futs):
+            cell = futs[fut]
+            try:
+                _cell, rows = fut.result()
+            except Exception as e:  # noqa: BLE001 — one cell failing shouldn't sink the rest
+                print(f"[run_suite] cell {cell.id} raised {type(e).__name__}: {e}",
+                      file=sys.stderr, flush=True)
+                n_failed += 1
+                continue
+            if _cell_summary(cell, rows):
+                n_failed += 1
+    return 0 if n_failed == 0 else 1
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    cells = load_manifest(args.manifest)
+    selected = _select_cells(cells, args)
+    if not selected:
+        print("[run_suite] no cells selected.")
+        return 0
+    if args.list_only:
+        _print_list(selected, args)
+        return 0
+
+    gpu_ids = None
+    if args.gpus:
+        gpu_ids = [int(g.strip()) for g in args.gpus.split(",") if g.strip()]
+
+    plan = _build_plan(selected, args)
+    if not plan:
+        print("[run_suite] nothing to run after narrowing.")
+        return 0
+
+    child_env = _child_env(args)
+
+    # --force: append failed tombstones for every planned cell's (narrowed) rows,
+    # then run with retry_failed so only those rows re-execute.
+    if args.force and not args.dry_run:
+        for cell, cfg, _root, reg in plan:
+            n = _force_invalidate(cfg, reg)
+            print(f"[run_suite] --force {cell.id}: {n} tombstone(s)", flush=True)
+    retry_failed = bool(args.retry_failed or (args.force and not args.dry_run))
+
+    # Cross-cell pool when a GPU pool is given and >1 cell runs live; otherwise
+    # one cell at a time (single cell or no pool). Dry-run always enumerates
+    # per-cell, then advertises the cross-cell pool the live run would use.
+    cross = gpu_ids is not None and len(plan) > 1
+    if args.dry_run:
+        rc = _run_sequential(plan, gpu_ids, args, child_env, retry_failed)
+        if cross:
+            slots = max(1, args.slots_per_gpu)
+            total = len(gpu_ids) * slots
+            print(f"\n[run_suite] LIVE run pools all {len(plan)} cells through ONE "
+                  f"{total}-slot pool ({len(gpu_ids)} GPUs × {slots}) → up to {total} "
+                  f"concurrent ACROSS cells. (Per-cell 'max_parallel' above is the "
+                  f"within-cell cap, not the live total.)", flush=True)
+        return rc
+    if cross:
+        return _run_cross_cell(plan, gpu_ids, args, child_env, retry_failed)
+    return _run_sequential(plan, gpu_ids, args, child_env, retry_failed)
 
 
 if __name__ == "__main__":

@@ -534,6 +534,7 @@ def run_sweep(
     dry_run: bool = False,
     retry_failed: bool = False,
     repo_root: pathlib.Path | None = None,
+    shared_sem: "GpuSemaphore | MultiSlotGpuSemaphore | None" = None,
 ) -> list[RegistryRow]:
     """Schedule and run a sweep.
 
@@ -598,6 +599,12 @@ def run_sweep(
         n_gpus_resolved = max(1, int(n_gpus if n_gpus is not None else sweep_cfg.n_gpus))
         gpu_ids_tuple = tuple(range(n_gpus_resolved))
         n_total_slots = n_gpus_resolved * slots_per_gpu
+    if shared_sem is not None:
+        # A caller-supplied semaphore is the GLOBAL concurrency cap — e.g.
+        # run_suite cross-cell mode pools rows from many cells through ONE pool.
+        # Size this cell's view to the shared pool so its rows queue on the
+        # shared tokens (rather than each cell capping itself at its own slots).
+        n_total_slots = shared_sem.n_gpus
     max_parallel = max(1, int(max_parallel if max_parallel is not None else sweep_cfg.max_parallel))
     max_parallel = min(max_parallel, n_total_slots, len(rows))
 
@@ -611,8 +618,10 @@ def run_sweep(
     git_sha = _git_sha(repo_root)
     git_dirty = _git_dirty(repo_root)
 
-    if slots_per_gpu > 1 or gpu_ids is not None:
-        sem: GpuSemaphore | MultiSlotGpuSemaphore = MultiSlotGpuSemaphore(
+    if shared_sem is not None:
+        sem: GpuSemaphore | MultiSlotGpuSemaphore = shared_sem
+    elif slots_per_gpu > 1 or gpu_ids is not None:
+        sem = MultiSlotGpuSemaphore(
             gpu_ids_tuple, slots_per_gpu=slots_per_gpu,
         )
     else:
