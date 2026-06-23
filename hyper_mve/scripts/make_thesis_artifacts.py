@@ -71,7 +71,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     for deliv, dcells in by_deliv.items():
         tok = deliverable_token(deliv)
         renderer = exact_renderers.get(deliv) or token_renderers.get(tok)
-        out_dir = figs_dir if tok.startswith("Fig") else tables_dir
+        # Per-deliverable subdir: several exact strings (e.g. "Table 6.4" and
+        # "Table 6.4 (Easy gate)") map to the same renderer, which writes a fixed
+        # filename — isolate them so they don't overwrite each other.
+        safe = (deliv.replace(" ", "_").replace("(", "").replace(")", "")
+                .replace("/", "-").replace(".", "_"))
+        out_dir = (figs_dir if tok.startswith("Fig") else tables_dir) / safe
         if renderer is None:
             index.append(f"| {deliv} | no_renderer | — | "
                          f"{', '.join(c.id for c in dcells)} | (no renderer mapped) |")
