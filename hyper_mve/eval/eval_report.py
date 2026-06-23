@@ -1,8 +1,10 @@
-"""Frozen 32-field EvalReport — pkg-08 spec 01 §3.1 (mother-doc).
+"""Frozen 36-field (+1 sentinel) EvalReport — pkg-08 spec 01 §3.1 (mother-doc).
 
-Byte-faithful to the spec block. Any drift triggers
-``test_eval_report_schema_lock_matches_spec_08.py`` (pkg-08 spec 01 §10.8) and
-``test_eval_report_32_field_dataclass_lock`` (pkg-08 spec 08 §9.1).
+v2 [2026-06]: extended from 32→36 payload fields with the 4 thesis welfare
+metrics (welfare_physical / sustainability / fairness / tragedy_index;
+Ch3.8.3 / Table 6.1). The dataclass-field-count + sentinel lock lives in
+``tests/integration/test_pkg08_drift_detectors.py``
+(``test_eval_report_33_field_dataclass_lock`` → now 37 total).
 """
 from __future__ import annotations
 
@@ -76,8 +78,23 @@ class EvalReport:
     belief_c_mae: float | None = None
     belief_c_calibration: float | None = None
 
+    # === v4-thesis welfare metrics (4) — Ch3.8.3 / Table 6.1 ===
+    # ``return_mean`` is social TOTAL welfare (ΣR, the subjective Fehr-Schmidt
+    # reward). These add the complementary physical welfare (Σu, cross-type
+    # comparable), resource sustainability (S = Σ_k q_k,Tmax / (K·Q_max)),
+    # fairness (F = 1 − N·σ(W_i^phys)/Σ_i W_i^phys), and the tragedy indicator
+    # (T = 1[S < 0.2]). Default 0.0: external runners that don't surface them
+    # report a placeholder; the internal/hyper path populates them in
+    # ``unified_evaluator`` from the per-episode physical-harvest + final
+    # resource-stock signal threaded through ``run_eval`` / the worker.
+    welfare_physical_mean: float = 0.0
+    sustainability_mean: float = 0.0
+    fairness_mean: float = 0.0
+    tragedy_index_mean: float = 0.0
+
     # === Schema version sentinel (1) — for forward migration ===
-    schema_version: str = "pkg08-spec01-v1"
+    # v2 (2026-06): +4 welfare metrics above (was v1, 33 fields → now 37).
+    schema_version: str = "pkg08-spec01-v2"
 
     def to_dict(self) -> dict:
         """JSON-safe plain-dict view of the report.

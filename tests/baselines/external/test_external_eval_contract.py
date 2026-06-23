@@ -67,5 +67,10 @@ def test_evaluate_returns_evalreport_shape_conforms(variant):
     assert set(report.episodes_per_c) == set(c_grid)
     for c in c_grid:
         assert report.episodes_per_c[c] == 2
-    # Schema sentinel.
-    assert report.schema_version == "pkg08-spec01-v1"
+    # Schema sentinel (v2: +4 welfare metrics, 2026-06).
+    assert report.schema_version == "pkg08-spec01-v2"
+    # External runners don't surface the thesis welfare metrics → defaults.
+    assert report.welfare_physical_mean == 0.0
+    assert report.sustainability_mean == 0.0
+    assert report.fairness_mean == 0.0
+    assert report.tragedy_index_mean == 0.0

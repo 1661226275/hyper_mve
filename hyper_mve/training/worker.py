@@ -48,11 +48,17 @@ class CollectResult:
 
     records: list[TimeStepRecord]
     c_t_seq: torch.Tensor          # (T,) float32
-    returns: np.ndarray            # (N,) per-agent undiscounted episode return
+    returns: np.ndarray            # (N,) per-agent undiscounted episode return (ΣR, subjective)
     pi_entropy_mean: float         # mean entropy of the stored pi_mve targets
     q_std_mean: float              # planner candidate-return std (raw, pre-floor)
     q_gap_mean: float              # planner candidate-return max-min spread
     uniform_frac: float            # fraction of rows hit by the qstd noise guard
+    # [2026-06 thesis welfare] per-agent cumulative PHYSICAL harvest Σ_t u_{i,t}
+    # (from info['harvests']) and end-of-episode resource sustainability
+    # S = Σ_k q_{k,Tmax} / (K·Q_max). Optional/NaN defaults keep any other
+    # CollectResult construction valid; collect_episodes always populates them.
+    phys_returns: Optional[np.ndarray] = None   # (N,) float32 — social-physical-welfare signal
+    sustainability: float = float("nan")        # S ∈ [0, 1]; feeds fairness/tragedy too
 
 
 class Worker:
@@ -158,6 +164,10 @@ class Worker:
         records: list[list[TimeStepRecord]] = [[] for _ in range(B)]
         c_t_lists: list[list[float]] = [[] for _ in range(B)]
         returns = np.zeros((B, N), dtype=np.float64)
+        # [2026-06 thesis welfare] per-agent cumulative PHYSICAL harvest Σ_t u
+        # (info['harvests'] is the public per-step harvest, untouched by the
+        # Fehr-Schmidt φ·ψ term that makes `returns` subjective).
+        phys_returns = np.zeros((B, N), dtype=np.float64)
         ent_acc = torch.zeros(B, device=device)
         qstd_acc = torch.zeros(B, device=device)
         qgap_acc = torch.zeros(B, device=device)
@@ -250,6 +260,9 @@ class Worker:
                 next_obs, reward, done, _truncated, next_info = env.step(joint_actions[b])
                 reward = np.asarray(reward, dtype=np.float32)
                 returns[b] += reward
+                harv = next_info.get("harvests") if isinstance(next_info, dict) else None
+                if harv is not None:
+                    phys_returns[b] += np.asarray(harv, dtype=np.float64)
 
                 records[b].append(TimeStepRecord(
                     o=obs_np[b],
@@ -286,6 +299,20 @@ class Worker:
             qgap_mean = np.full(B, np.nan)
             uniform_mean = float("nan")
 
+        # [2026-06 thesis welfare] sustainability S = Σ_k q_{k,Tmax} / (K·Q_max)
+        # from the final info's resource_state (shape (K, 3) = [pos_x, pos_y,
+        # stock]); the stock is the last column. NaN if the env didn't surface it.
+        denom = int(self.cfg.env.K) * float(self.cfg.env.Q_max)
+        sustain = np.full(B, np.nan, dtype=np.float64)
+        if denom > 0:
+            for b in range(B):
+                res = infos[b].get("resource_state") if isinstance(infos[b], dict) else None
+                if res is None:
+                    continue
+                arr = np.asarray(res, dtype=np.float64)
+                stocks = arr[:, -1] if arr.ndim == 2 else arr
+                sustain[b] = float(stocks.sum()) / denom
+
         return [
             CollectResult(
                 records=records[b],
@@ -295,6 +322,8 @@ class Worker:
                 q_std_mean=float(qstd_mean[b]),
                 q_gap_mean=float(qgap_mean[b]),
                 uniform_frac=float(uniform_mean),
+                phys_returns=phys_returns[b].astype(np.float32),
+                sustainability=float(sustain[b]),
             )
             for b in range(B)
         ]

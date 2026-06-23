@@ -1,5 +1,5 @@
 """Unified evaluator (pkg-08 spec 01) — wraps ``run_eval`` per c-value and
-assembles the locked 32-field :class:`EvalReport`.
+assembles the locked 36-field :class:`EvalReport`.
 
 Responsibilities (pkg-08 spec 01 §1):
   * **Extend** ``training/evaluation.py:run_eval`` (do not modify it; Lock 1
@@ -40,7 +40,7 @@ def evaluate(
     env_fn: Callable[[], Any],
     cfg: V4Config,
 ) -> EvalReport:
-    """Run a unified evaluation pass and return the locked 32-field report.
+    """Run a unified evaluation pass and return the locked 36-field report.
 
     Args:
         runner: a :class:`hyper_mve.baselines.BaselineModel` / hyper model
@@ -104,7 +104,7 @@ def _evaluate_internal(
     info_gating_strict: bool,
 ) -> EvalReport:
     """Internal-runner eval (hyper or BaselineModel). Wraps ``run_eval`` per
-    c-value in the zero-shot grid; populates the 32 fields.
+    c-value in the zero-shot grid; populates the 36 fields.
     """
     # Late import: training.evaluation pulls torch + the full env stack.
     from hyper_mve.training.evaluation import run_eval
@@ -121,6 +121,11 @@ def _evaluate_internal(
     full_means: list[float] = []
     planner_prior_gap_sum = 0.0
     planner_prior_gap_n = 0
+    # [2026-06 thesis welfare] planner-mode welfare family per c (Table 6.1).
+    welfare_physical_per_c: dict[float, float] = {}
+    sustainability_per_c: dict[float, float] = {}
+    fairness_per_c: dict[float, float] = {}
+    tragedy_per_c: dict[float, float] = {}
 
     for c in c_grid:
         cfg_c = replace(cfg, eval=replace(cfg.eval, eval_c_grid=(c,)))
@@ -131,6 +136,11 @@ def _evaluate_internal(
         planner_val = float(results.get(planner_total_key, 0.0))
         prior_val = float(results.get(prior_total_key, 0.0))
         return_per_c[c] = planner_val
+        # Welfare family (planner mode, consistent with the headline return).
+        welfare_physical_per_c[c] = float(results.get(f"planner/welfare_physical_c{c:g}", 0.0))
+        sustainability_per_c[c] = float(results.get(f"planner/sustainability_c{c:g}", 0.0))
+        fairness_per_c[c] = float(results.get(f"planner/fairness_c{c:g}", 0.0))
+        tragedy_per_c[c] = float(results.get(f"planner/tragedy_c{c:g}", 0.0))
         # SEM is not surfaced by run_eval; the unified evaluator populates a
         # zero placeholder here. Spec 01 §4.3 documents the SEM-extraction
         # path as a pkg-08 follow-up; for now the report is schema-complete
@@ -146,6 +156,16 @@ def _evaluate_internal(
     # Headline aggregation.
     all_returns = list(return_per_c.values())
     return_mean = float(np.mean(all_returns)) if all_returns else 0.0
+
+    # Welfare family: mean over the c-grid (drop NaN c-cells).
+    def _mean_finite(d: dict[float, float]) -> float:
+        vals = [v for v in d.values() if v == v]  # NaN != NaN
+        return float(np.mean(vals)) if vals else 0.0
+
+    welfare_physical_mean = _mean_finite(welfare_physical_per_c)
+    sustainability_mean = _mean_finite(sustainability_per_c)
+    fairness_mean = _mean_finite(fairness_per_c)
+    tragedy_index_mean = _mean_finite(tragedy_per_c)
     return_sem = (
         float(np.std(all_returns) / max(np.sqrt(len(all_returns)), 1.0))
         if len(all_returns) > 1 else 0.0
@@ -222,6 +242,10 @@ def _evaluate_internal(
         set_context_subjective_oracle_leak=False,
         belief_c_mae=belief_c_mae,
         belief_c_calibration=belief_c_calibration,
+        welfare_physical_mean=welfare_physical_mean,
+        sustainability_mean=sustainability_mean,
+        fairness_mean=fairness_mean,
+        tragedy_index_mean=tragedy_index_mean,
     )
 
 

@@ -50,6 +50,27 @@ def _type_masks(type_assignment) -> tuple[np.ndarray, np.ndarray]:
     return types == int(AgentType.ALPHA), types == int(AgentType.BETA)
 
 
+# [2026-06 thesis welfare] commons-collapse threshold for the tragedy indicator
+# (Ch3.8.3: T = 1[S < 0.2]).
+_TRAGEDY_THRESHOLD = 0.2
+
+
+def _phys_fairness(w: np.ndarray) -> float:
+    """Thesis fairness ``F = 1 − N·σ(w)/Σ(w)`` on per-agent physical harvest ``w``.
+
+    Equals ``1 − coefficient_of_variation``; ``F ≤ 1`` (can go negative for
+    N ≥ 3 under extreme inequality). Degenerate ``Σ(w) ≈ 0`` or ``N ≤ 1`` → 1.0
+    (nothing to share / a single agent ⇒ trivially fair).
+    """
+    w = np.asarray(w, dtype=np.float64)
+    if w.ndim != 1 or w.size <= 1 or not np.all(np.isfinite(w)):
+        return 1.0 if (w.size <= 1) else float("nan")
+    total = float(w.sum())
+    if abs(total) < 1e-9:
+        return 1.0
+    return float(1.0 - w.size * float(w.std()) / total)
+
+
 @torch.no_grad()
 def run_eval(
     model,
@@ -102,17 +123,45 @@ def run_eval(
             tiebreak_rng=np.random.default_rng(_EVAL_TIEBREAK_SEED),
         )
 
-        rets = np.stack([o.returns for o in outs], axis=0)        # (B, N)
+        rets = np.stack([o.returns for o in outs], axis=0)        # (B, N) ΣR (subjective)
+        # [2026-06 thesis welfare] physical harvest Σu (B, N) + sustainability (B,).
+        phys = np.stack([
+            np.asarray(o.phys_returns, dtype=np.float64)
+            if getattr(o, "phys_returns", None) is not None else np.full(rets.shape[1], np.nan)
+            for o in outs
+        ], axis=0)                                                # (B, N)
+        sus = np.array([float(getattr(o, "sustainability", np.nan)) for o in outs], dtype=np.float64)
         for ci, c_val in enumerate(c_grid):
             block = rets[ci * n_eps:(ci + 1) * n_eps]             # (n_eps, N)
+            block_phys = phys[ci * n_eps:(ci + 1) * n_eps]        # (n_eps, N)
+            block_sus = sus[ci * n_eps:(ci + 1) * n_eps]          # (n_eps,)
             suffix = f"_c{c_val:g}"
             results[f"{mode}/return_total{suffix}"] = float(block.sum(axis=1).mean())
             if alpha_mask.any():
                 results[f"{mode}/return_alpha{suffix}"] = float(block[:, alpha_mask].sum(axis=1).mean())
             if beta_mask.any():
                 results[f"{mode}/return_beta{suffix}"] = float(block[:, beta_mask].sum(axis=1).mean())
+            # --- welfare metric family (Table 6.1) ---
+            results[f"{mode}/welfare_physical{suffix}"] = float(block_phys.sum(axis=1).mean())
+            fair = [_phys_fairness(block_phys[e]) for e in range(block_phys.shape[0])]
+            fair = [f for f in fair if np.isfinite(f)]
+            results[f"{mode}/fairness{suffix}"] = float(np.mean(fair)) if fair else float("nan")
+            valid_sus = block_sus[np.isfinite(block_sus)]
+            results[f"{mode}/sustainability{suffix}"] = (
+                float(valid_sus.mean()) if valid_sus.size else float("nan"))
+            results[f"{mode}/tragedy{suffix}"] = (
+                float((valid_sus < _TRAGEDY_THRESHOLD).mean()) if valid_sus.size else float("nan"))
 
         results[f"{mode}/return_total"] = float(rets.sum(axis=1).mean())
+        # overall welfare family (across all c) — also surfaced to TB.
+        results[f"{mode}/welfare_physical"] = float(phys.sum(axis=1).mean())
+        _fair_all = [_phys_fairness(phys[i]) for i in range(phys.shape[0])]
+        _fair_all = [f for f in _fair_all if np.isfinite(f)]
+        results[f"{mode}/fairness"] = float(np.mean(_fair_all)) if _fair_all else float("nan")
+        _valid_all = sus[np.isfinite(sus)]
+        if _valid_all.size:
+            results[f"{mode}/sustainability"] = float(_valid_all.mean())
+            results[f"{mode}/tragedy"] = float((_valid_all < _TRAGEDY_THRESHOLD).mean())
         if alpha_mask.any():
             results[f"{mode}/return_alpha"] = float(rets[:, alpha_mask].sum(axis=1).mean())
         if beta_mask.any():
