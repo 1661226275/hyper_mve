@@ -303,3 +303,60 @@ class HyperMuZeroModel(nn.Module):
             "current_subjective_thetas() called before set_context_subjective()."
         )
         return self._theta_rew, self._theta_pred
+
+    # ====================================================================
+    # Planner θ-cache fast path (非 7-API; 仅供 MVEPlanner 复用同一 context 的
+    # theta, 避免 K-step rollout 内每步重新跑 hypernet).
+    # ====================================================================
+    # 数值等价保证 (与 set_context_objective / set_context_subjective 逐位一致):
+    #   1. functional_nets 全程 per-row (bmm + per-sample LayerNorm/L2norm), 行间
+    #      互不耦合, 所以"先在 batch B 生成 theta 再 repeat_interleave 到 B*k"与
+    #      "先 repeat_interleave 上下文再生成 theta"输出逐位相同.
+    #   2. hypernet.forward_{trans,subjective} 在 eval 下为确定性映射 (无 dropout /
+    #      无 RNG); 同一输入恒得同一 theta.
+    #   3. MVEPlanner 的 batch 扩张是纯 repeat_interleave (B -> B*spa -> B*M),
+    #      所以 export 出的 base-batch theta 经 repeat_interleave 即为 set_context_*
+    #      在扩张 batch 上会生成的 theta. 详见 docs/Chapter5_Planner_Training_v4.md.
+
+    def current_objective_theta(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """返回最近一次 set_context_objective 缓存的 (theta_state, c_ctx).
+
+        供 MVEPlanner 一次性导出 base-batch theta_state 与 c_ctx 复用. 张量 shape
+        分别 (B, trans_param_count) 与 (B, d_c).
+        """
+        assert self._theta_state is not None and self._cached_c_ctx is not None, (
+            "current_objective_theta() called before set_context_objective()."
+        )
+        return self._theta_state, self._cached_c_ctx
+
+    def install_objective_theta(
+        self, theta_state: torch.Tensor, c_ctx: torch.Tensor
+    ) -> None:
+        """直接装载预生成的 theta_state / c_ctx, 不重跑 hyper_trans.
+
+        与 set_context_objective(c_t) 语义等价 (当 (theta_state, c_ctx) 正是它对
+        相同 (tiled) c_t 的输出时, 逐位一致). 同样清空 subjective 缓存以维持
+        "先 objective 后 subjective" 的调用契约.
+        """
+        self._theta_state = theta_state
+        self._cached_c_ctx = c_ctx
+        self._has_objective = True
+        self._theta_rew = None
+        self._theta_pred = None
+        self._current_agent_id = None
+
+    def install_subjective_theta(
+        self, agent_id: int, theta_rew: torch.Tensor, theta_pred: torch.Tensor
+    ) -> None:
+        """直接装载预生成的 theta_rew^i / theta_pred^i, 不重跑 hyper_rew/pred.
+
+        与 set_context_subjective(agent_id, cap_i, belief) 语义等价 (当传入的
+        theta 正是它对相同 (tiled) 上下文的输出时, 逐位一致). 需先 set/install
+        objective (顺序断言 D4).
+        """
+        assert self._has_objective, (
+            "install_subjective_theta() called before objective context set."
+        )
+        self._theta_rew = theta_rew
+        self._theta_pred = theta_pred
+        self._current_agent_id = agent_id

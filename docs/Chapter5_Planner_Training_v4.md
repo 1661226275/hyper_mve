@@ -291,6 +291,14 @@ $$\mathcal{O}_{\text{plan}} \;=\; N \cdot A \cdot \text{spa} \cdot K \cdot (\tex
 
 **空间复杂度**:协调下降的每个 agent 优化独立,中间状态可在 GPU 上一次性 batch 处理,峰值显存约 $N \cdot A \cdot \text{spa} \cdot |s|$,对基础配置约 $96 \cdot |s|$,远低于树状 MCTS 的 $A^N \cdot K$。
 
+> **[v4-opt 2026-06 实现勘正:θ 缓存]** 上述 5.5.2/5.5.3 的复杂度分析假设"$\theta_{\text{state}}$ / $\theta_{\text{rew}}^i$ / $\theta_{\text{pred}}^i$ 在 set_context 时一次性生成、不进入 $K$ 步展开内层"——这是**设计意图**,但 `planning/mve_planner.py` 的早期实现与之不符:它在每个 rollout step、且在扩张后的 $B\cdot M$ 批上重复调用 `set_context_subjective`(进而重跑 hyper_rew/hyper_pred),并在每个 agent 的协调下降迭代里重复生成 $\theta_{\text{state}}$。由于超网络前向(生成上千个 functional-net 权重)才是规划器的主导开销,这一冗余使每次 planner 调用的超网络生成量约为理论值的 **$\sim K \times$ 乃至更高**(实测口径:medium 配置下约 $100$ 次生成 vs 必要的 $2N{+}1=9$ 次)。
+>
+> **优化**:在 `sample_mve_plan` 入口处,以基批 $B$ 一次性生成 $1$ 个 $\theta_{\text{state}}$ 与 $N$ 组 $(\theta_{\text{rew}}^i,\theta_{\text{pred}}^i)$,缓存后在各调用点用 `repeat_interleave` 平铺到 $B\cdot\text{spa}$ / $B\cdot M$。**数值等价性**由三点保证:(1) functional nets 全程 per-row(`bmm` + 逐样本 LayerNorm/L2-norm),"先平铺上下文再生成 θ"与"先生成 θ 再平铺"逐位相同;(2) 超网络前向在 eval 下为确定性映射(无 dropout / 无 RNG);(3) 规划器的批扩张是纯 `repeat_interleave`($B\to B\cdot\text{spa}\to B\cdot M$),且 θ 缓存不消耗任何 RNG,故 CRN 的 `crn_rng` / torch `Generator` 抽样顺序不变 → 采样决策不变。实数运算下精确相等、CPU 上逐位一致;CUDA 上因 GEMM 批大小从 $B\cdot M$ 降为 $B$、cuBLAS 可能选用不同 kernel,差异在 $\sim 10^{-6}$ 相对量级,远低于规划器自身的噪声地板(z-score 归一 + `mve_qstd_floor` 守卫)。C5-P1 确定性测试比较的是"同一缓存路径在固定批大小下对自身"的复现,故仍精确可复现。
+>
+> 该优化仅作用于 `HyperMuZeroModel`(以其独有的 `install_subjective_theta` 方法做门控);5 个内部 baseline 虽同样通过 `_is_hyper_model` 判定,但不持有 $\theta$ 槽位,故回落到原 `set_context_subjective` 路径,行为不变。
+>
+> **后续(质量实验,Easy N=2)**:CRN 的 `spa = S/\!/A`(medium: $50/\!/6=8$)与对手 step-0 联合动作空间 $A^{N-1}$ 脱钩——N=2 时对手空间只有 $A=6$,8 次 i.i.d. 采样必然重复且覆盖不均;N=4 时 $A^3=216$ 又远超 8 而欠覆盖。一个独立的待验证改进是:小 N 时**枚举**全部 $A^{N-1}$ 个对手 step-0 动作并按精确策略概率加权(对已优化 agent 用 $\pi_{\text{mve}}$ 加权),即 CRN 估计量的 Rao-Blackwell 化——它在 N=2 下同时更便宜($M$: $48\to36$)且 step-0 方差归零。此改动会改变 $\pi_{\text{mve}}$ 数值与 RNG 消耗(非逐位兼容,需更新 C5-P1 口径),故列为 Tier-2 opt-in 的质量实验,不在本次 θ 缓存(数值等价)提交范围内。
+
 ### 5.5.3 与第四章双路超网络的对接(v4 三联输入版)
 
 算法 5.1 的关键调用 `model.set_context(c_t, τ_i, cap_i, b_i)`(伪代码第 03 行)是本章规划器与第四章架构对接的核心:
