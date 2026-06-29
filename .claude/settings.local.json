@@ -25,7 +25,23 @@
       "Bash(cd /d/RL/hyper_mve)",
       "Bash(node --check .audit_reverify_workflow.js)",
       "Bash(git -C D:/RL/hyper_mve status --short)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(git push *)",
+      "Bash(cd \"D:/RL/hyper_mve\" *)",
+      "Bash(git ls-tree *)",
+      "Bash(grep -iE '\\\\.\\(png|pdf|svg|csv\\)$|figure|results/')",
+      "Read(//c/Users/zhengwenbo01/.claude/**)",
+      "Read(//c/Users/zhengwenbo01/**)",
+      "Read(//c/Users/zhengwenbo01/.claude/projects/**)",
+      "Read(//c/Users/zhengwenbo01/.claude/plugins/**)",
+      "Bash(git config *)",
+      "WebSearch",
+      "Bash(xargs grep -l \"determinism\\\\|crn\\\\|CRN\\\\|C5-P1\")",
+      "Bash(python -c ' *)",
+      "Bash(py -3 -c ' *)",
+      "Read(//d/RL/**)",
+      "Bash(unzip -l docs/claude_plan.zip)",
+      "Bash(git status *)"
     ]
   }
 }
