@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# PyTorch checkpoints & weights
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+
+# TensorBoard runs (large, generated)
+runs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Claude settings (tool config, not code)
+.claude/settings.local.json
