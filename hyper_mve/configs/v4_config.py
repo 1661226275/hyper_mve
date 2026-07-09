@@ -15,6 +15,7 @@ from .train_config import TrainConfig
 
 
 _PRESET_NAMES: tuple[str, ...] = (
+    "rel_duo", "rel_duo_holdout",
     "easy", "medium", "hard", "duo", "duo_basegen",
     "duo_film_lora", "duo_film_lora_fc2", "duo_base_lora",
     "medium_film_lora", "medium_film_lora_fc2", "medium_base_lora",
@@ -42,7 +43,13 @@ class V4Config:
 
     @classmethod
     def from_preset(cls, name: str) -> "V4Config":
-        """Load one of the Ch3.9 reference configurations."""
+        """Load one of the reference configurations."""
+        if name == "rel_duo":
+            from .presets.rel_duo import build_rel_duo_config
+            return build_rel_duo_config()
+        if name == "rel_duo_holdout":
+            from .presets.rel_duo import build_rel_duo_holdout_config
+            return build_rel_duo_holdout_config()
         if name == "easy":
             from .presets.easy import build_easy_config
             return build_easy_config()

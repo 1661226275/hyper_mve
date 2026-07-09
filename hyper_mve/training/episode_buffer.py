@@ -1,16 +1,14 @@
-"""EpisodeReplayBuffer — v4 TimeStepRecord container (Pkg-05 spec 03, Ch5.6).
+"""EpisodeReplayBuffer — v5 TimeStepRecord container (Pkg-09; base: Pkg-05 spec 03).
 
-Rewrite of the v4.7 ``EpisodeData`` buffer (6 fields) into a container for the
-v4 ``TimeStepRecord`` (12 fields, Pkg-01 spec 04). Episodes are stored on CPU as
-``dict[str, np.ndarray]`` stacked over the time axis; ``sample_batch`` slices
-``(B, K+1, ...)`` windows and ``torch.from_numpy``s them.
+Episodes are stored on CPU as ``dict[str, np.ndarray]`` stacked over the time
+axis; ``sample_batch`` slices ``(B, K+1, ...)`` windows and
+``torch.from_numpy``s them.
 
-review 修订 4: ``store_episode`` takes an explicit parallel ``c_t_seq`` (T,) so the
-buffer can return a ``c_t`` field without modifying the TimeStepRecord schema (NG7).
-
-Sampling (D9, inlined): uniform or type-stratified (Ch5.6.5). Stratified keeps at
-least ``stratified_min_per_type_frac`` of the batch from each of the alpha-heavy /
-beta-heavy episode buckets so the reward head sees both types every step.
+v5 changes: the parallel ``c_t_seq`` is gone (c_t removed); the per-step
+oracle regime id ``g`` is stacked from the records themselves. Stratified
+sampling buckets episodes by their **initial regime** ``g_0`` (v4 bucketed by
+type composition) so the subjective heads see every relationship regime in
+every batch.
 """
 from __future__ import annotations
 
@@ -21,15 +19,15 @@ import numpy as np
 import torch
 
 from hyper_mve.configs import V4Config
-from hyper_mve.schemas import AgentType, TimeStepRecord
+from hyper_mve.schemas import TimeStepRecord
 
 
-# Fields stacked over the time axis (Pkg-01 spec 04 TimeStepRecord 10 data fields).
-_DATA_FIELDS = ("o", "a", "r", "delta", "pi_mve", "v", "tau", "cap", "c_hat", "z_hat")
+# Fields stacked over the time axis (v5 TimeStepRecord data fields).
+_DATA_FIELDS = ("o", "a", "r", "pi_mve", "v", "row", "g_hat")
 
 
 class EpisodeReplayBuffer:
-    """FIFO replay buffer of whole episodes (v4 TimeStepRecord container)."""
+    """FIFO replay buffer of whole episodes (v5 TimeStepRecord container)."""
 
     def __init__(self, cfg: V4Config):
         self.cfg = cfg
@@ -39,7 +37,6 @@ class EpisodeReplayBuffer:
         self.min_buffer_size: int = cfg.train.min_buffer_size
 
         self._episodes: "deque[dict[str, np.ndarray]]" = deque(maxlen=self.max_episodes)
-        self._c_t_seqs: "deque[np.ndarray]" = deque(maxlen=self.max_episodes)
         # [v4-opt 2026-06] parallel per-episode metadata (same FIFO discipline):
         # planner_on=False marks self-distillation pi_mve targets (warmup / debug
         # collection) so the policy loss can mask them; collected_at_step feeds the
@@ -55,25 +52,19 @@ class EpisodeReplayBuffer:
     def store_episode(
         self,
         records: list[TimeStepRecord],
-        c_t_seq: torch.Tensor,
         planner_on: bool = True,
         collected_at_step: int = 0,
     ) -> None:
         """Store one episode.
 
         Args:
-            records: T ``TimeStepRecord`` (Pkg-01 spec 04).
-            c_t_seq: (T,) float32 — parallel c_t scalar series (worker collects it
-                from ``env.info['c_true']`` per step).
+            records: T ``TimeStepRecord`` (v5).
             planner_on: False when the episode's pi_mve came from the model's own
                 prior (warmup / --no_collect_planner) — those targets are
                 self-distillation and the policy loss masks them [v4-opt 2026-06].
             collected_at_step: global_step at collection time (staleness probe).
         """
         T = len(records)
-        assert T == len(c_t_seq), (
-            f"records len {T} != c_t_seq len {len(c_t_seq)}"
-        )
         assert T > self.unroll_K + self.n_step, (
             f"episode too short: T={T} <= unroll_K+n_step={self.unroll_K + self.n_step}"
         )
@@ -82,25 +73,22 @@ class EpisodeReplayBuffer:
             "o":      np.stack([r.o for r in records], axis=0),       # (T, N, obs_dim)
             "a":      np.stack([r.a for r in records], axis=0),       # (T, N)
             "r":      np.stack([r.r for r in records], axis=0),       # (T, N)
-            "delta":  np.stack([r.delta for r in records], axis=0),   # (T, N)
             "pi_mve": np.stack([r.pi_mve for r in records], axis=0),  # (T, N, A)
             "v":      np.stack([r.v for r in records], axis=0),       # (T, N)
-            "tau":    np.stack([r.tau for r in records], axis=0),     # (T, N) int8
-            "cap":    np.stack([r.cap for r in records], axis=0),     # (T, N, 4)
-            "c_hat":  np.stack([r.c_hat for r in records], axis=0),   # (T, N)
-            "z_hat":  np.stack([r.z_hat for r in records], axis=0),   # (T, N, N-1, 2)
+            "row":    np.stack([r.row for r in records], axis=0),     # (T, N, N-1)
+            "g_hat":  np.stack([r.g_hat for r in records], axis=0),   # (T, N, |G|)
+            "g":      np.array([r.g for r in records], dtype=np.int64),     # (T,)
             "t":      np.array([r.t for r in records], dtype=np.int32),     # (T,)
             "done":   np.array([r.done for r in records], dtype=np.bool_),  # (T,)
         }
         self._episodes.append(episode)
-        self._c_t_seqs.append(np.asarray(c_t_seq.detach().cpu().numpy(), dtype=np.float32))
         self._planner_on.append(bool(planner_on))
         self._collected_at.append(int(collected_at_step))
 
     # ------------------------------------------------------------ sample
 
     def sample_batch(self, batch_size: int, unroll_K: Optional[int] = None) -> dict[str, torch.Tensor]:
-        """Sample a (B, K+1, ...) batch dict (see module / spec 03 §2.2)."""
+        """Sample a (B, K+1, ...) batch dict (see module docstring)."""
         K = self.unroll_K if unroll_K is None else unroll_K
         assert len(self._episodes) > 0, "Buffer is empty; collect episodes first."
 
@@ -133,23 +121,22 @@ class EpisodeReplayBuffer:
         return ep_indices, start_indices
 
     def _stratified_sample(self, B: int, K: int) -> tuple[list[int], list[int]]:
-        """Type-stratified sampling (D9, C5-B2).
+        """Regime-stratified sampling (v5).
 
-        Bucket episodes by the first-step type assignment (fixed within an episode,
-        Pkg-02 spec 03): alpha-heavy (>=50% ALPHA) vs beta-heavy. Draw at least
-        ``B * stratified_min_per_type_frac`` from each non-empty bucket, fill the
-        rest uniformly, then shuffle to avoid intra-batch ordering bias.
+        Bucket episodes by their initial regime ``g_0`` (static within an
+        episode under p=0; under p>0 the initial regime is still the
+        representative stratum). Draw at least
+        ``max(1, B · stratified_min_per_type_frac / n_buckets)`` from each
+        non-empty bucket, fill the rest uniformly, then shuffle.
         """
-        alpha_heavy: list[int] = []
-        beta_heavy: list[int] = []
+        buckets: dict[int, list[int]] = {}
         for i, ep in enumerate(self._episodes):
-            taus = ep["tau"][0]  # (N,) first-step types
-            alpha_frac = (taus == int(AgentType.ALPHA)).sum() / len(taus)
-            (alpha_heavy if alpha_frac >= 0.5 else beta_heavy).append(i)
+            buckets.setdefault(int(ep["g"][0]), []).append(i)
 
         ep_indices: list[int] = []
         start_indices: list[int] = []
-        min_per_type = int(B * self.stratified_min_frac)
+        n_buckets = max(1, len(buckets))
+        min_per_bucket = max(1, int(B * self.stratified_min_frac / n_buckets))
 
         def _draw_from(bucket: list[int]) -> None:
             ep_idx = int(np.random.choice(bucket))
@@ -157,11 +144,9 @@ class EpisodeReplayBuffer:
             ep_indices.append(ep_idx)
             start_indices.append(start)
 
-        for _ in range(min_per_type):
-            if alpha_heavy:
-                _draw_from(alpha_heavy)
-            if beta_heavy:
-                _draw_from(beta_heavy)
+        for bucket in buckets.values():
+            for _ in range(min_per_bucket):
+                _draw_from(bucket)
 
         remaining = B - len(ep_indices)
         if remaining > 0:
@@ -169,7 +154,7 @@ class EpisodeReplayBuffer:
             ep_indices.extend(ep_u)
             start_indices.extend(start_u)
         elif remaining < 0:
-            # Both buckets present and 2*min_per_type > B: trim to B.
+            # Many buckets and min_per_bucket · n_buckets > B: trim to B.
             ep_indices = ep_indices[:B]
             start_indices = start_indices[:B]
 
@@ -181,7 +166,7 @@ class EpisodeReplayBuffer:
     def _slice_batch(self, ep_indices: list[int], start_indices: list[int], K: int) -> dict[str, torch.Tensor]:
         out: dict[str, torch.Tensor] = {}
 
-        for key in (*_DATA_FIELDS, "t", "done"):
+        for key in (*_DATA_FIELDS, "g", "t", "done"):
             slices = [
                 self._episodes[ep_idx][key][start:start + K + 1]
                 for ep_idx, start in zip(ep_indices, start_indices)
@@ -193,13 +178,6 @@ class EpisodeReplayBuffer:
         out["actions"] = out.pop("a")
         out["rewards"] = out.pop("r")
         out["dones"] = out.pop("done")
-
-        # c_t: parallel slice from _c_t_seqs (review 修订 4).
-        c_t_slices = [
-            self._c_t_seqs[ep_idx][start:start + K + 1]
-            for ep_idx, start in zip(ep_indices, start_indices)
-        ]
-        out["c_t"] = torch.from_numpy(np.stack(c_t_slices, axis=0))  # (B, K+1)
 
         # [v4-opt 2026-06] per-episode metadata: policy-loss mask + staleness probe.
         out["planner_on"] = torch.tensor(

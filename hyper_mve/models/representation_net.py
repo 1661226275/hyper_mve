@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from hyper_mve.schemas import ObservationLayout
+from hyper_mve.schemas import RelationObservationLayout
 from hyper_mve.utils.utils import orthogonal_init
 
 
@@ -30,8 +30,8 @@ class RepresentationNet(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.N = cfg.env.N
-        # Per-agent observation dim (Pkg-02 ObservationLayout).
-        self.obs_dim = ObservationLayout.total_dim(cfg.env.N, cfg.env.K)
+        # Per-agent observation dim (v5 RelationObservationLayout, Pkg-09).
+        self.obs_dim = RelationObservationLayout.total_dim(cfg.env.N, cfg.env.K)
         self.joint_obs_dim = self.N * self.obs_dim
         self.latent_dim = cfg.model.latent_dim
         self.hidden_dim = hidden_dim

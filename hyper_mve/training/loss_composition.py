@@ -1,30 +1,31 @@
-"""compose_total_loss — main + L_belief double-path assembly (Pkg-05 spec 05, Ch5.6/5.8).
+"""compose_total_loss — main + L_belief double-path assembly (v5 Pkg-09; base Pkg-05 spec 05).
 
 D5: loss assembly lives outside the model (Pkg-04 clarification 1: the model exposes
 no ``compute_losses``) and outside the trainer (kept small). Two autograd paths share
 one BeliefNet forward:
 
-    BeliefNet.forward(obs)  ->  (hidden, c_hat_pred, z_hat_pred)   [grad]
+    BeliefNet.forward(obs)  ->  (hidden, g_hat_pred)   [grad]
         |                              |
         |  path A: L_belief            |  path B: main loss
-        |  (always trains BeliefNet)   |  set_context_subjective(belief)
+        |  (always trains BeliefNet)   |  set_context_subjective(row, g_main)
         v                              v  -> model.grad_gating detaches when
     belief_loss(predicted)             v     step < belief_grad_gating_steps
                                        v  -> hyper_rew / hyper_pred -> heads
 
-Key reconciliations with the *real* Pkg-03 API (SDD pseudo-code differed):
-  * ``BeliefNet.forward`` returns ``(hidden, c_hat, z_hat)`` (hidden first) and has
-    **no** ``oracle_mixing_weight`` arg — giving ``oracle_z_seq`` fully replaces z.
-    So we forward **without** oracle (predicted z, with grad) for L_belief, and do
-    the Stage-2 soft anneal here:  ``z_main = w*oracle_z + (1-w)*z_pred`` (convex on
-    the simplex). L_belief always uses the *predicted* z so head_opp keeps training
+v5 changes (Pkg-09):
+  * BeliefNet emits a |G|-way regime posterior; the Stage-2 soft anneal is
+    ``g_main = w · onehot(g_true) + (1 − w) · g_hat_pred`` (convex on the simplex).
+    L_belief always uses the *predicted* posterior so head_regime keeps training
     even in Stage 1 (Oracle).
-  * ``belief_loss`` returns ``(total, breakdown)`` and takes a ``weights`` tuple.
-  * RewardHead / value head output **scaled** space (MuZero ``scalar_transform``);
-    targets are scaled before MSE.
+  * ``set_context_objective`` is gone (c_t removed; transition is a plain shared
+    module) — the unroll calls ``model.transition`` directly.
+  * Conditioning per (step, agent) is ``(row[:, k, agent], g_main[:, k, agent])``.
+  * The type-based θ diagnostics (cross/same by type_assignment) are replaced by
+    plain pairwise probes — roles are continuous rows now, not two classes.
 
-The v4 path trains **all N agents every step** (set_context_subjective per agent),
-unlike v4.7 which sampled one perspective per batch element.
+The v5 path trains **all N agents every step** (set_context_subjective per agent).
+RewardHead / value head output **scaled** space (MuZero ``scalar_transform``);
+targets are scaled before MSE.
 """
 from __future__ import annotations
 
@@ -43,70 +44,43 @@ if TYPE_CHECKING:  # avoid import cycle (trainer imports this module)
     from hyper_mve.training.muzero_trainer import MuZeroTrainer
 
 
-def _role_cosine(thetas, type_assignment):
-    """Mean pairwise cosine of per-agent hypernet-generated params, by role pairing.
+def _pairwise_cosine(thetas):
+    """Mean pairwise cosine of per-agent hypernet-generated params.
 
-    Diagnostic for "can the hypernet distinguish roles?": low cross-type cosine ⇒
-    α/β get well-separated parameters; cross ≈ same ≈ 1 ⇒ role collapse.
+    Diagnostic for "can the hypernet distinguish roles?": low pairwise cosine ⇒
+    agents get well-separated parameters; ≈ 1 ⇒ role collapse. (v5: roles are
+    continuous rows, so there is no type-based cross/same split — per-regime
+    separation belongs to analysis-stage figures, not per-step scalars.)
 
-    Args:
-        thetas: list of N tensors (B, P) — generated params per agent (detached).
-        type_assignment: length-N sequence of AgentType/int; agents with equal value
-            form 'same-type' pairs, others 'cross-type'.
-    Returns:
-        (cross, same): scalar tensors (mean cosine over pairs then over batch). NaN
-        when a category has no pairs (e.g. duo N=2 has no same-type pair).
+    NaN when N < 2 (no pair).
     """
     N = len(thetas)
     nan = torch.tensor(float("nan"), device=thetas[0].device)
-    cross, same = [], []
-    for i in range(N):
-        for j in range(i + 1, N):
-            cs = F.cosine_similarity(thetas[i], thetas[j], dim=-1).mean()
-            (same if type_assignment[i] == type_assignment[j] else cross).append(cs)
-    cross_v = torch.stack(cross).mean() if cross else nan
-    same_v = torch.stack(same).mean() if same else nan
-    return cross_v, same_v
-
-
-def _role_l2(thetas, type_assignment):
-    """[v4-opt 2026-06c] P2.2: pairwise L2 distance of per-agent hypernet params.
-
-    Disambiguates 'rising cos_rew_cross' (which can mean either 'genuine direction
-    convergence = role collapse' or 'same direction with growing magnitude offsets')
-    by exposing the raw L2 norm of the difference. Combined with the cross-type
-    cosine: high cosine + rising L2 = different magnitudes, same direction (head
-    sharing structurally OK); high cosine + flat L2 = role collapse.
-
-    Same NaN semantics as :func:`_role_cosine` (NaN when a category has no pairs).
-    """
-    N = len(thetas)
-    nan = torch.tensor(float("nan"), device=thetas[0].device)
-    cross, same = [], []
-    for i in range(N):
-        for j in range(i + 1, N):
-            d = (thetas[i] - thetas[j]).norm(dim=-1).mean()
-            (same if type_assignment[i] == type_assignment[j] else cross).append(d)
-    cross_v = torch.stack(cross).mean() if cross else nan
-    same_v = torch.stack(same).mean() if same else nan
-    return cross_v, same_v
-
-
-def _per_type_norm(thetas, type_assignment, target_type_int: int):
-    """[v4-opt 2026-06c] P2.2: mean L2 norm of generated params over agents of one type.
-
-    Returns a scalar tensor (mean over matching agents then over batch) or NaN if
-    no agent matches ``target_type_int`` (e.g. an all-ALPHA configuration probed
-    for BETA).
-    """
-    matching = [
-        thetas[i].norm(dim=-1).mean()
-        for i in range(len(thetas))
-        if int(type_assignment[i]) == target_type_int
+    pairs = [
+        F.cosine_similarity(thetas[i], thetas[j], dim=-1).mean()
+        for i in range(N) for j in range(i + 1, N)
     ]
-    if not matching:
-        return torch.tensor(float("nan"), device=thetas[0].device)
-    return torch.stack(matching).mean()
+    return torch.stack(pairs).mean() if pairs else nan
+
+
+def _pairwise_l2(thetas):
+    """Mean pairwise L2 distance of per-agent hypernet params.
+
+    Disambiguates 'rising pairwise cosine' (direction convergence = collapse)
+    from 'same direction with magnitude offsets' (structurally OK).
+    """
+    N = len(thetas)
+    nan = torch.tensor(float("nan"), device=thetas[0].device)
+    pairs = [
+        (thetas[i] - thetas[j]).norm(dim=-1).mean()
+        for i in range(N) for j in range(i + 1, N)
+    ]
+    return torch.stack(pairs).mean() if pairs else nan
+
+
+def _mean_norm(thetas):
+    """Mean L2 norm of generated params over all agents (scale probe)."""
+    return torch.stack([t.norm(dim=-1).mean() for t in thetas]).mean()
 
 
 def compose_total_loss(
@@ -122,8 +96,8 @@ def compose_total_loss(
         model: online HyperMuZeroModel.
         batch: from ``EpisodeReplayBuffer.sample_batch`` (already moved to device by
             the trainer). Shapes: obs (B,K+1,N,obs_dim), actions/rewards/v (B,K+1,N),
-            cap (B,K+1,N,4), pi_mve (B,K+1,N,A), c_t (B,K+1), tau (B,K+1,N) int8,
-            dones (B,K+1) bool.
+            row (B,K+1,N,N-1), g_hat (B,K+1,N,|G|), pi_mve (B,K+1,N,A),
+            g (B,K+1) int64, dones (B,K+1) bool.
         trainer: provides ``.scheduler`` / ``.target_model`` / ``.projector`` /
             ``.compute_n_step_return``.
         global_step: for curriculum + gating.
@@ -148,10 +122,9 @@ def compose_total_loss(
     obs = batch["obs"]                       # (B, K+1, N, obs_dim)
     actions = batch["actions"]               # (B, K+1, N) int64
     rewards = batch["rewards"]               # (B, K+1, N)
-    cap = batch["cap"]                       # (B, K+1, N, 4)
+    row = batch["row"]                       # (B, K+1, N, N-1)
     pi_mve = batch["pi_mve"]                 # (B, K+1, N, A)
-    c_t = batch["c_t"]                       # (B, K+1)
-    types_true = batch["tau"].long()         # (B, K+1, N) int64
+    g_true = batch["g"].long()               # (B, K+1) int64 oracle regime ids
     dones = batch["dones"]                   # (B, K+1) bool
 
     # [v4-opt 2026-06] policy-target mask: planner_on=False episodes carry
@@ -167,48 +140,41 @@ def compose_total_loss(
     n_planner = planner_mask.sum().clamp(min=1.0)
 
     # ================================================================
-    # Step 1: one BeliefNet forward (no oracle) -> predicted c_hat / z_hat (grad)
+    # Step 1: one BeliefNet forward -> predicted regime posterior (grad)
     # ================================================================
-    hidden_seq, c_hat_pred, z_hat_pred = model.belief_net(obs)
-    # hidden_seq (B,K+1,N,128), c_hat_pred (B,K+1,N), z_hat_pred (B,K+1,N,N-1,2)
+    hidden_seq, g_hat_pred = model.belief_net(obs)
+    # hidden_seq (B,K+1,N,128), g_hat_pred (B,K+1,N,|G|)
 
     # ================================================================
     # Step 2: L_belief from the *predicted* tensors (original graph, no detach)
     # ================================================================
     L_belief, belief_breakdown = belief_loss(
-        c_hat_pred, z_hat_pred, hidden_seq,
-        c_true_seq=c_t,
-        types_true=types_true,
-        weights=(cfg.train.w_belief_c, cfg.train.w_belief_opp, cfg.train.w_belief_div),
+        g_hat_pred, hidden_seq,
+        g_true_seq=g_true,
+        weights=(cfg.train.w_belief_regime, cfg.train.w_belief_div),
         div_target_std=cfg.train.belief_div_target_std,
     )
 
     # ================================================================
     # Step 3: oracle blend for the main path (Stage 2 soft anneal done here)
     # ================================================================
-    mixing_w = sched.oracle_z_mixing_weight(global_step)
+    mixing_w = sched.oracle_g_mixing_weight(global_step)
     if mixing_w > 0.0:
-        oracle_z = sched.build_oracle_z_seq(types_true)          # (B,K+1,N,N-1,2)
-        z_main = mixing_w * oracle_z + (1.0 - mixing_w) * z_hat_pred
+        oracle_g = sched.build_oracle_g_seq(g_true)              # (B,K+1,N,|G|)
+        g_main = mixing_w * oracle_g + (1.0 - mixing_w) * g_hat_pred
     else:
-        z_main = z_hat_pred
-    c_main = c_hat_pred  # c never oracle-injected (head_c is MSE-supervised by L_c)
+        g_main = g_hat_pred
 
     # ================================================================
     # Step 3.5: target-model V bootstrap (no_grad) for all (step, agent)
     # ================================================================
-    c_root = c_t[:, 0]
-    model.set_context_objective(c_root)
-    target_model.set_context_objective(c_root)
-
     v_target = torch.zeros(obs.shape[0], K + 1, N, device=device)
     with torch.no_grad():
         for kk in range(K + 1):
             s_tgt = target_model.encode(obs[:, kk])
             for agent in range(N):
                 target_model.set_context_subjective(
-                    agent, cap[:, kk, agent],
-                    (c_main[:, kk, agent].detach(), z_main[:, kk, agent].detach()),
+                    agent, row[:, kk, agent], g_main[:, kk, agent].detach(),
                 )
                 _, v_s = target_model.predict(s_tgt)             # (B, 1) scaled
                 v_target[:, kk, agent] = inverse_scalar_transform(v_s).squeeze(-1)
@@ -235,10 +201,7 @@ def compose_total_loss(
     # direction the policy CE loss already minimises — plus argmax match rate and
     # separate sharpness probes for both distributions). All masked by planner_on
     # for consistency with the policy loss; NaN if the batch contains no planner-on
-    # sample.  These pin down whether pi_mve's entropy plateau is a *target* problem
-    # (mve_max_prob low) or a *prior* problem (mve_max_prob high but pred fails to
-    # follow), and whether stalled KL is "two equally soft distributions" (kl ≈ const
-    # but mve_max_prob low) or "real distillation".
+    # sample.
     KL_mve_to_pred = torch.zeros((), device=device)
     mode_match = torch.zeros((), device=device)
     pi_mve_max_prob = torch.zeros((), device=device)
@@ -246,7 +209,7 @@ def compose_total_loss(
 
     for k in range(K):
         action_onehot = actions_to_one_hot(actions[:, k], A)     # (B, N*A)
-        s_next = model.transition(s_pred, action_onehot)         # objective (theta_state)
+        s_next = model.transition(s_pred, action_onehot)         # objective (shared SGD net)
 
         # consistency (objective, once per step): BYOL negative cosine similarity
         if projector is not None:
@@ -256,11 +219,10 @@ def compose_total_loss(
             L_consist = L_consist + negative_cosine_similarity(proj_pred, proj_target)
 
         for agent in range(N):
-            # main path belief: predicted c + blended z (grad); model internally
+            # main path belief: blended regime posterior (grad); model internally
             # detaches when global_step < belief_grad_gating_steps (Pkg-04 spec 04).
             model.set_context_subjective(
-                agent, cap[:, k, agent],
-                (c_main[:, k, agent], z_main[:, k, agent]),
+                agent, row[:, k, agent], g_main[:, k, agent],
             )
             p_k, v_k = model.predict(s_pred)                     # (B, A), (B, 1) scaled
             r_k = model.predict_reward(s_pred, action_onehot)    # (B, 1) scaled
@@ -281,16 +243,11 @@ def compose_total_loss(
             H_pi_pred = H_pi_pred + -(probs_pred * torch.log(probs_pred + 1e-9)).sum(-1).mean()
 
             # [v4-opt 2026-06c] P2.1: per-(k, agent) distillation diagnostics, masked
-            # to planner_on rows so warmup self-distillation entries (target_pi == pred)
-            # don't bias the KL/mode-match estimate. Direction: KL(π_mve ‖ π_pred) —
-            # the same direction the policy CE loss gradient walks (L_policy =
-            # H(π_mve) + KL(π_mve ‖ π_pred); falls to 0 iff π_pred == π_mve). This
-            # also matches the candidate distillation auxiliary in P3.2, so a future
-            # KL-loss experiment can read its own loss off this scalar.
+            # to planner_on rows so warmup self-distillation entries don't bias the
+            # KL/mode-match estimate. Direction: KL(π_mve ‖ π_pred) — the same
+            # direction the policy CE loss gradient walks.
             with torch.no_grad():
                 pi_mve_detached = target_pi.detach()
-                # add tiny floors before log to avoid -inf where either distribution
-                # has a perfectly zero entry (rare in practice).
                 log_mve = (pi_mve_detached + 1e-9).log()
                 log_pred = probs_pred.clamp_min(1e-9).log()
                 kl_row = (pi_mve_detached * (log_mve - log_pred)).sum(-1)  # (B,)
@@ -303,14 +260,9 @@ def compose_total_loss(
                 pi_pred_max_prob = pi_pred_max_prob + (ppred_row * planner_mask).sum() / n_planner
 
             if k == 0 and hasattr(model, "current_subjective_thetas"):
-                # Hypernet-only diagnostic: the role-cosine / L2 probes measure how
-                # the *generated* per-agent theta separates by role. The 5 internal
-                # BaselineModel variants (input/id-conditioned, or type-branched)
-                # expose no generated theta, so they skip it and the diagnostics
-                # below fall back to NaN (TB writer drops NaN). This keeps the
-                # shared trainer loop usable for both hyper and the baselines
-                # (pkg-07 spec 08 §7.1) without affecting the backward graph
-                # (these tensors are detached, logging-only).
+                # Hypernet-only diagnostic: pairwise θ probes measure how the
+                # *generated* per-agent theta separates by role. Baselines
+                # without generated theta skip it (NaN downstream).
                 th_rew, th_pred = model.current_subjective_thetas()
                 theta_rew_per_agent.append(th_rew.detach())
                 theta_pred_per_agent.append(th_pred.detach())
@@ -328,32 +280,21 @@ def compose_total_loss(
     H_pi_pred = (H_pi_pred / KN).detach()
     # planner (pi_mve) entropy over the unrolled window (data target; no grad).
     # ≈ ln(A) ⇒ planner not differentiating; lower ⇒ it favours specific actions.
-    # [v4-opt 2026-06] masked to planner-on samples (warmup priors would skew it);
-    # NaN when the batch holds no planner-on sample (TB writer skips NaN).
     pim = pi_mve[:, :K].clamp_min(1e-9)                          # (B, K, N, A)
     H_per_sample = -(pim * pim.log()).sum(-1).mean(dim=(1, 2))   # (B,)
     if float(planner_mask.sum()) > 0:
         H_pi_mve = ((H_per_sample * planner_mask).sum() / planner_mask.sum()).detach()
     else:
         H_pi_mve = torch.tensor(float("nan"), device=device)
-    # hypernet role discrimination (k=0 generated params): cross-type vs same-type cosine.
-    # Empty for the non-hypernet baselines (theta lists never populated) → all NaN
-    # (the helpers index thetas[0].device, so they must not be called on []).
+    # hypernet role discrimination (k=0 generated params): pairwise probes.
     if theta_pred_per_agent:
-        cos_pred_cross, cos_pred_same = _role_cosine(theta_pred_per_agent, cfg.env.type_assignment)
-        cos_rew_cross, cos_rew_same = _role_cosine(theta_rew_per_agent, cfg.env.type_assignment)
-        # [v4-opt 2026-06c] P2.2: reward-hypernet L2 distance + per-type norms. Cosine
-        # alone cannot distinguish "same direction, different magnitude" (acceptable —
-        # shared head structurally OK with α/β reward magnitude offsets) from "genuine
-        # role collapse" (failure mode). L2 disambiguates.
-        l2_rew_cross, l2_rew_same = _role_l2(theta_rew_per_agent, cfg.env.type_assignment)
-        # AgentType.ALPHA = 0, AgentType.BETA = 1 (see schemas/_constants.py).
-        norm_rew_alpha = _per_type_norm(theta_rew_per_agent, cfg.env.type_assignment, 0)
-        norm_rew_beta = _per_type_norm(theta_rew_per_agent, cfg.env.type_assignment, 1)
+        cos_pred_pair = _pairwise_cosine(theta_pred_per_agent)
+        cos_rew_pair = _pairwise_cosine(theta_rew_per_agent)
+        l2_rew_pair = _pairwise_l2(theta_rew_per_agent)
+        norm_rew = _mean_norm(theta_rew_per_agent)
     else:
         _nan = torch.tensor(float("nan"), device=device)
-        cos_pred_cross = cos_pred_same = cos_rew_cross = cos_rew_same = _nan
-        l2_rew_cross = l2_rew_same = norm_rew_alpha = norm_rew_beta = _nan
+        cos_pred_pair = cos_rew_pair = l2_rew_pair = norm_rew = _nan
 
     # [v4-opt 2026-06c] P2.1: finalize distillation diagnostics (KN-mean).
     if float(planner_mask.sum()) > 0:
@@ -390,8 +331,7 @@ def compose_total_loss(
         "value": (cfg.train.w_value * L_value).detach(),
         "reward": (cfg.train.w_reward * L_reward).detach(),
         "consist": (cfg.train.w_consist * L_consist).detach(),
-        "belief_c": belief_breakdown["l_c"],
-        "belief_opp": belief_breakdown["l_opp"],
+        "belief_regime": belief_breakdown["l_regime"],
         "belief_div": belief_breakdown["l_div"],
         # --- raw (unweighted) loss magnitudes (the above are pre-multiplied by w_*) ---
         "L_policy_raw": L_policy.detach(),
@@ -401,23 +341,12 @@ def compose_total_loss(
         # --- action-distribution diagnostics ---
         "diag_pi_mve_entropy": H_pi_mve,        # planner differentiation (target ≈ ln A ⇒ uniform)
         "diag_pi_pred_entropy": H_pi_pred,      # predict-net sharpness
-        # --- hypernet role-discrimination cosine (lower cross ⇒ roles separated) ---
-        "diag_cos_pred_cross": cos_pred_cross,
-        "diag_cos_pred_same": cos_pred_same,
-        "diag_cos_rew_cross": cos_rew_cross,
-        "diag_cos_rew_same": cos_rew_same,
-        # [v4-opt 2026-06c] P2.2: reward-hypernet L2 + per-type norms — disambiguates
-        # 'same direction, different magnitude' (acceptable) from genuine role
-        # collapse (failure). NaN when a type has no agent or only one (e.g. duo).
-        "diag_l2_rew_cross": l2_rew_cross,
-        "diag_l2_rew_same": l2_rew_same,
-        "diag_norm_rew_alpha": norm_rew_alpha,
-        "diag_norm_rew_beta": norm_rew_beta,
-        # [v4-opt 2026-06c] P2.1: distillation health — KL(π_mve ‖ π_pred) (the
-        # direction the policy CE loss minimises), argmax match rate, and *separate*
-        # mode-mass (max prob) probes for both distributions so a stalled KL can be
-        # disambiguated as either 'two equally soft distributions' (both max-probs
-        # low) or 'real distillation closing' (mode-match high, max-probs both rise).
+        # --- hypernet role-discrimination (pairwise; lower cos ⇒ roles separated) ---
+        "diag_cos_pred_pair": cos_pred_pair,
+        "diag_cos_rew_pair": cos_rew_pair,
+        "diag_l2_rew_pair": l2_rew_pair,
+        "diag_norm_rew": norm_rew,
+        # [v4-opt 2026-06c] P2.1: distillation health.
         "diag_kl_mve_to_pred": diag_kl_mve_to_pred,
         "diag_mode_match_pred_mve": diag_mode_match,
         "diag_pi_mve_max_prob": diag_pi_mve_max_prob,

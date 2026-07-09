@@ -1,17 +1,16 @@
-"""train_main.py — unified v4 training entry (Pkg-05 spec 08 §6, Q4; Pkg-07 spec 08 §7.1 ext).
+"""train_main.py — unified v5 training entry (Pkg-09; base Pkg-05 spec 08 §6).
 
-One entry point; variants are expressed via cfg overrides (Oracle/Infer are no longer
-model classes). Run from the repo root (D:\\RL\\hyper_mve) so ``hyper_mve`` imports.
+One entry point; variants are expressed via cfg overrides. Run from the repo
+root so ``hyper_mve`` imports.
 
-    python hyper_mve/scripts/train_main.py --preset medium --variant hyper --max_steps 1000
-    python hyper_mve/scripts/train_main.py --preset medium --override "train.lr=3e-4" \
-        --override "env.N=8" --seed 0
+    python hyper_mve/scripts/train_main.py --preset rel_duo --variant hyper --max_steps 1000
+    python hyper_mve/scripts/train_main.py --preset rel_duo --override "train.lr=3e-4" --seed 0
 
-CLI choices (pkg-07 spec 01 §2.1 + spec 08 §7.1) — 14 entries:
+CLI choices (pkg-07 spec 01 §2.1, v5) — 13 entries:
 
     Curriculum-overrides (3): hyper / oracle_only / infer_only
-    Internal baselines (5):   baseline_input_wide / baseline_input_deep /
-                              baseline_ma_muzero / no_belief / rewardhead_explicit_type
+    Internal baselines (4):   baseline_input_wide / baseline_input_deep /
+                              baseline_ma_muzero / no_belief
     External baselines (6):   external_mappo / external_qmix / external_ma_muzero_gh /
                               external_mamba / external_marie / external_ga
 
@@ -53,8 +52,7 @@ import torch
 from hyper_mve.baselines import CLI_CHOICES, REGISTRY, cli_to_factory_arg, create_baseline
 from hyper_mve.configs import V4Config
 from hyper_mve.models import HyperMuZeroModel, Projector
-from hyper_mve.envs.resource_commons.env import ResourceCommonsEnv
-from hyper_mve.schemas import AgentType
+from hyper_mve.envs.relation_commons import RelationCommonsEnv
 from hyper_mve.training import EpisodeReplayBuffer, MuZeroTrainer, Worker, run_eval
 
 _SUB_CONFIGS = ("env", "model", "train", "mup", "eval", "legacy")
@@ -75,7 +73,7 @@ _STUB_VARIANTS: dict[str, str] = {
 # message and exits gracefully.
 _RUNNER_OWNED_VARIANTS: frozenset[str] = frozenset({
     "baseline_input_wide", "baseline_input_deep", "baseline_ma_muzero",
-    "no_belief", "rewardhead_explicit_type",
+    "no_belief",
     "external_mappo", "external_qmix", "external_ma_muzero_gh",
 })
 
@@ -88,8 +86,9 @@ _CURRICULUM_OVERRIDE_DEFERRED: dict[str, str] = {
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Hyper-MuZero v4 unified trainer")
-    p.add_argument("--preset", default="medium", choices=(
+    p = argparse.ArgumentParser(description="Hyper-MuZero v5 unified trainer")
+    p.add_argument("--preset", default="rel_duo", choices=(
+        "rel_duo", "rel_duo_holdout",
         "easy", "medium", "hard", "duo", "duo_basegen",
         "duo_film_lora", "duo_film_lora_fc2", "duo_base_lora",
         "medium_film_lora", "medium_film_lora_fc2", "medium_base_lora",
@@ -140,8 +139,6 @@ def apply_overrides(cfg: V4Config, overrides: list[str]) -> V4Config:
         if section not in _SUB_CONFIGS:
             raise ValueError(f"unknown config section {section!r} (valid: {_SUB_CONFIGS})")
         value = _parse_value(raw)
-        if section == "env" and field == "type_assignment":
-            value = tuple(AgentType(int(x)) for x in value)
         sub = getattr(cfg, section)
         cfg = replace(cfg, **{section: replace(sub, **{field: value})})
     return cfg
@@ -164,7 +161,7 @@ def _resolve_randomize_order(args) -> bool | None:
 
 
 def apply_variant(cfg: V4Config, variant: str) -> V4Config:
-    """Resolve --variant against the 14-CLI surface (pkg-07 spec 01 §2.1).
+    """Resolve --variant against the 13-CLI surface (pkg-07 spec 01 §2.1, v5).
 
     Raises NotImplementedError for stubs (pkg-07 design D9 + spec 06 §4.6)
     and for curriculum-override variants that need TrainConfig invariants
@@ -225,11 +222,11 @@ def run_training(
     preset: str = "?",
     variant: str = "?",
 ) -> int:
-    """Shared MuZeroTrainer training loop for any 7-API model.
+    """Shared MuZeroTrainer training loop for any v5 6-API model.
 
-    Drives ``hyper`` AND the 5 internal ``BaselineModel`` variants (input_wide /
-    input_deep / ma_muzero / no_belief / rewardhead_explicit_type) — they all
-    expose the same 7-API and the same shared backbones, so the unroll/loss/eval
+    Drives ``hyper`` AND the 4 internal ``BaselineModel`` variants (input_wide /
+    input_deep / ma_muzero / no_belief) — they all
+    expose the same 6-API and the same shared backbones, so the unroll/loss/eval
     machinery is identical. Extracted from :func:`main` so the pkg-08 sweep
     worker can train the runner-owned *internal* baselines in-process and then
     evaluate the *same trained object* (closes the "eval on a fresh model" gap;
@@ -244,7 +241,7 @@ def run_training(
     # lockstep through the (already batched) MVE planner — the old B=1 path was
     # kernel-launch bound (~0.08 train-steps/s on GPU).
     n_envs = max(1, cfg.train.episodes_per_iter)
-    envs = [ResourceCommonsEnv(cfg.env, seed=seed * 1000 + i) for i in range(n_envs)]
+    envs = [RelationCommonsEnv(cfg.env, seed=seed * 1000 + i) for i in range(n_envs)]
 
     trainer = MuZeroTrainer(cfg, model, projector=projector, device=device)
     worker = Worker(cfg, model, envs=envs)
@@ -276,7 +273,7 @@ def run_training(
     last_logged = 0
     while len(buffer) < cfg.train.min_buffer_size:
         for res in worker.collect_episodes(epsilon=1.0, use_planner=False):
-            buffer.store_episode(res.records, res.c_t_seq,
+            buffer.store_episode(res.records,
                                  planner_on=False, collected_at_step=start_step)
         if len(buffer) - last_logged >= log_every:
             last_logged = len(buffer)
@@ -290,10 +287,7 @@ def run_training(
           f"(collection planner={'ON' if collect_planner else 'OFF'}; "
           f"n_envs={n_envs}; eval every {cfg.eval.evaluate_freq} steps).", flush=True)
 
-    # --- [v4-opt 2026-06] periodic deterministic evaluation (dual mode + c-grid) ---
-    types_np = np.array([int(t) for t in cfg.env.type_assignment])
-    alpha_mask = types_np == int(AgentType.ALPHA)
-    beta_mask = types_np == int(AgentType.BETA)
+    # --- periodic deterministic evaluation (dual mode + regime grid, v5) ---
     best_eval_return = -float("inf")
 
     def _run_and_log_eval(step: int) -> None:
@@ -325,7 +319,7 @@ def run_training(
         t0 = time.perf_counter()
         results = worker.collect_episodes(epsilon=eps, use_planner=collect_planner)
         for res in results:
-            buffer.store_episode(res.records, res.c_t_seq,
+            buffer.store_episode(res.records,
                                  planner_on=collect_planner, collected_at_step=global_step)
             collect_window.append(res)
         collect_sec = time.perf_counter() - t0
@@ -347,7 +341,7 @@ def run_training(
                     f"r={losses['reward']:.4f} cons={losses['consist']:.4f} "
                     f"belief={losses['belief']:.4f} | "
                     f"H_pi_mve={losses['diag_pi_mve_entropy']:.3f} "
-                    f"cos_pred_cross={losses['diag_cos_pred_cross']:.3f} "
+                    f"cos_pred_pair={losses['diag_cos_pred_pair']:.3f} "
                     f"ret={ret_total:.2f} eps={eps:.2f} "
                     f"lr={losses['lr']:.2e}"
                 )
@@ -367,12 +361,9 @@ def run_training(
                         writer.add_scalar(tag, v, global_step)
                     # --- collect/* observability [v4-opt 2026-06] ---
                     writer.add_scalar("collect/return_total", ret_total, global_step)
-                    if alpha_mask.any():
-                        writer.add_scalar("collect/return_alpha",
-                                          float(rets[:, alpha_mask].sum(axis=1).mean()), global_step)
-                    if beta_mask.any():
-                        writer.add_scalar("collect/return_beta",
-                                          float(rets[:, beta_mask].sum(axis=1).mean()), global_step)
+                    for agent_i in range(rets.shape[1]):
+                        writer.add_scalar(f"collect/return_agent{agent_i}",
+                                          float(rets[:, agent_i].mean()), global_step)
                     writer.add_scalar("collect/epsilon", eps, global_step)
                     writer.add_scalar("collect/H_pi_mve_fresh",
                                       float(np.mean([r.pi_entropy_mean for r in collect_window])),

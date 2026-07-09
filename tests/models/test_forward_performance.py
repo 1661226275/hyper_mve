@@ -1,6 +1,6 @@
-"""Pkg-04 spec 07 acceptance tests: forward performance budget (3 档).
+"""Pkg-04 spec 07 acceptance tests: forward performance budget (3 tiers, v5 API).
 
-GPU-gated: 在无 CUDA 环境自动 skip. CPU 上仅 import/构造 sanity.
+GPU-gated: auto-skips without CUDA. CPU gets import/construct sanity only.
 """
 import time
 
@@ -10,14 +10,22 @@ import torch
 from hyper_mve.configs import V4Config
 from hyper_mve.models import HyperMuZeroModel
 
+_G = 5
 
-# ====== 档位 1: 单 forward call < 5ms ======
+
+def _subjective_inputs(B, N, device):
+    row = torch.rand(B, N - 1, device=device) * 2 - 1
+    g_hat = torch.softmax(torch.randn(B, _G, device=device), dim=-1)
+    return row, g_hat
+
+
+# ====== tier 1: single forward call < 5ms ======
 
 @pytest.mark.gpu
 def test_single_call_under_5ms():
     if not torch.cuda.is_available():
         pytest.skip("GPU required")
-    cfg = V4Config.from_preset("medium")
+    cfg = V4Config.from_preset("rel_duo")
     model = HyperMuZeroModel(cfg).cuda().eval()
     B, N = 256, cfg.env.N
     obs_dim = model.rep_net.obs_dim
@@ -25,11 +33,8 @@ def test_single_call_under_5ms():
     obs = torch.randn(B, N, obs_dim, device='cuda')
     s = model.encode(obs)
     model.update_step(0)
-    model.set_context_objective(torch.full((B,), 0.5, device='cuda'))
-    cap = torch.rand(B, 4, device='cuda')
-    belief = (torch.rand(B, device='cuda'),
-              torch.softmax(torch.randn(B, N - 1, 2, device='cuda'), dim=-1))
-    model.set_context_subjective(0, cap, belief)
+    row, g_hat = _subjective_inputs(B, N, 'cuda')
+    model.set_context_subjective(0, row, g_hat)
     action = torch.zeros(B, N * cfg.env.A, device='cuda')
     action[:, 0] = 1.0
 
@@ -50,26 +55,23 @@ def test_single_call_under_5ms():
         assert time_call(lambda: model.transition(s, action)) < 5.0
         assert time_call(lambda: model.predict_reward(s, action)) < 5.0
         assert time_call(lambda: model.predict(s)) < 5.0
-        assert time_call(lambda: model.set_context_objective(torch.full((B,), 0.5, device='cuda'))) < 5.0
-        assert time_call(lambda: model.set_context_subjective(0, cap, belief)) < 5.0
+        assert time_call(lambda: model.set_context_subjective(0, row, g_hat)) < 5.0
 
 
-# ====== 档位 2: 单 agent K=5 step unroll < 25ms ======
+# ====== tier 2: single-agent K=5 unroll < 25ms ======
 
 @pytest.mark.gpu
 def test_single_agent_unroll_under_25ms():
     if not torch.cuda.is_available():
         pytest.skip("GPU required")
-    cfg = V4Config.from_preset("medium")
+    cfg = V4Config.from_preset("rel_duo")
     model = HyperMuZeroModel(cfg).cuda().eval()
     B, N = 256, cfg.env.N
     obs_dim = model.rep_net.obs_dim
     K = 5
 
     obs = torch.randn(B, N, obs_dim, device='cuda')
-    cap = torch.rand(B, 4, device='cuda')
-    belief = (torch.rand(B, device='cuda'),
-              torch.softmax(torch.randn(B, N - 1, 2, device='cuda'), dim=-1))
+    row, g_hat = _subjective_inputs(B, N, 'cuda')
     action = torch.zeros(B, N * cfg.env.A, device='cuda')
     action[:, 0] = 1.0
 
@@ -77,8 +79,7 @@ def test_single_agent_unroll_under_25ms():
         for _ in range(10):
             s = model.encode(obs)
             model.update_step(0)
-            model.set_context_objective(torch.full((B,), 0.5, device='cuda'))
-            model.set_context_subjective(0, cap, belief)
+            model.set_context_subjective(0, row, g_hat)
             for _ in range(K):
                 s = model.transition(s, action)
                 _ = model.predict_reward(s, action)
@@ -89,10 +90,9 @@ def test_single_agent_unroll_under_25ms():
         for _ in range(30):
             s = model.encode(obs)
             model.update_step(0)
-            model.set_context_objective(torch.full((B,), 0.5, device='cuda'))
 
             t0 = time.perf_counter()
-            model.set_context_subjective(0, cap, belief)
+            model.set_context_subjective(0, row, g_hat)
             for _ in range(K):
                 s = model.transition(s, action)
                 _ = model.predict_reward(s, action)
@@ -104,15 +104,13 @@ def test_single_agent_unroll_under_25ms():
     assert mean_ms < 25.0, f"Single agent K-step unroll {mean_ms:.2f}ms > 25ms"
 
 
-# ====== 档位 3: N=4 agents x K=5 step unroll < 100ms ======
+# ====== tier 3: N agents x K=5 unroll < 100ms ======
 
-def _full_step(model, obs, caps, c_hats, z_hats, action, N, K):
-    B = obs.shape[0]
+def _full_step(model, obs, rows, g_hats, action, N, K):
     s = model.encode(obs)
     model.update_step(0)
-    model.set_context_objective(torch.full((B,), 0.5, device=obs.device))
     for k in range(N):
-        model.set_context_subjective(k, caps[:, k], (c_hats[:, k], z_hats[:, k]))
+        model.set_context_subjective(k, rows[:, k], g_hats[:, k])
         s_k = s
         for _ in range(K):
             s_k = model.transition(s_k, action)
@@ -125,28 +123,27 @@ def _full_step(model, obs, caps, c_hats, z_hats, action, N, K):
 def test_full_step_under_100ms():
     if not torch.cuda.is_available():
         pytest.skip("GPU required")
-    cfg = V4Config.from_preset("medium")
+    cfg = V4Config.from_preset("rel_duo")
     model = HyperMuZeroModel(cfg).cuda().eval()
     B, N = 256, cfg.env.N
     obs_dim = model.rep_net.obs_dim
     K = 5
 
     obs = torch.randn(B, N, obs_dim, device='cuda')
-    caps = torch.rand(B, N, 4, device='cuda')
-    c_hats = torch.rand(B, N, device='cuda')
-    z_hats = torch.softmax(torch.randn(B, N, N - 1, 2, device='cuda'), dim=-1)
+    rows = torch.rand(B, N, N - 1, device='cuda') * 2 - 1
+    g_hats = torch.softmax(torch.randn(B, N, _G, device='cuda'), dim=-1)
     action = torch.zeros(B, N * cfg.env.A, device='cuda')
     action[:, 0] = 1.0
 
     with torch.no_grad():
         for _ in range(10):
-            _ = _full_step(model, obs, caps, c_hats, z_hats, action, N, K)
+            _ = _full_step(model, obs, rows, g_hats, action, N, K)
         torch.cuda.synchronize()
 
         times = []
         for _ in range(30):
             t0 = time.perf_counter()
-            _ = _full_step(model, obs, caps, c_hats, z_hats, action, N, K)
+            _ = _full_step(model, obs, rows, g_hats, action, N, K)
             torch.cuda.synchronize()
             times.append((time.perf_counter() - t0) * 1000)
 
@@ -155,7 +152,7 @@ def test_full_step_under_100ms():
 
 
 def test_forward_smoke_under_15ms():
-    """旧名兼容: 实际由 test_full_step_under_100ms 覆盖 (review 修订 4)."""
+    """Legacy-name shim: covered by test_full_step_under_100ms (review 修订 4)."""
     test_full_step_under_100ms()
 
 

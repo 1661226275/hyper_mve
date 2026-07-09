@@ -1,18 +1,20 @@
-"""BaselineModel — 7-API base class shared by the 5 internal variants (pkg-07 spec 03 §3).
+"""BaselineModel — v5 6-API base class shared by the internal variants (pkg-07 spec 03 §3).
 
-All 5 internal model classes subclass ``BaselineModel`` and override two hooks:
+All internal model classes subclass ``BaselineModel`` and override hooks:
 
   * ``_build_conditioning_subsystem(cfg)`` — called from ``__init__``;
-    constructs the functional nets, hypernet generator (when present),
-    RewardHead, and any per-variant capacity knobs.
+    constructs the nets, hypernet generator (when present), RewardHead, and
+    any per-variant capacity knobs.
 
-  * ``_build_conditioning_state(agent_id, cap_i, belief_gated)`` — called
+  * ``_build_conditioning_state(agent_id, row_i, belief_gated)`` — called
     from ``set_context_subjective``; computes per-call conditioning state
     (``ctx_aug`` for input-conditioned variants, ``id_onehot`` for ma_muzero,
-    generated ``θ`` for no_belief / rewardhead_explicit_type).
+    generated ``θ`` for no_belief).
 
   * ``_apply_trans(s, action) -> Δs`` — returns the *delta* state (the base
-    class adds the residual ``s + Δs``).
+    class adds the residual ``s + Δs``). v5: transition is objective and
+    UNCONDITIONED (c_t removed) — variants must not consume subjective state
+    here.
 
   * ``_apply_reward(s, action) -> (B, 1)`` — subjective reward for the
     last-set ``agent_id``.
@@ -20,9 +22,10 @@ All 5 internal model classes subclass ``BaselineModel`` and override two hooks:
   * ``_apply_pred(s) -> (policy_logits, value)`` — subjective policy + value
     for the last-set ``agent_id``.
 
-The base class itself enforces the call-order contract, the Self-Info strict
-``cap_i.shape[-1] == 4`` assertion, and the
-:class:`hyper_mve.models.BeliefGradGating` apply hook (pkg-04 spec 04).
+The base class itself enforces the Self-Info strict ``row_i.shape ==
+(B, N-1)`` assertion and the :class:`hyper_mve.models.BeliefGradGating`
+apply hook (pkg-04 spec 04). v5 (Pkg-09): ``set_context_objective`` is
+deleted from the API — see the amendment note in ``hyper_muzero_model.py``.
 """
 from __future__ import annotations
 
@@ -70,13 +73,11 @@ class BaselineModel(nn.Module):
         # Per-variant conditioning subsystem (hook).
         self._build_conditioning_subsystem(cfg)
 
-        # Stateful caches (pkg-07 spec 03 §4.1) — five public field names that
-        # every variant must keep.
+        # Stateful caches (pkg-07 spec 03 §4.1, v5 field set).
         self._step: int = 0
-        self._ctx_obj: Optional[torch.Tensor] = None
         self._agent_id: Optional[int] = None
-        self._cap_i: Optional[torch.Tensor] = None
-        self._belief_gated: Optional[tuple[torch.Tensor, torch.Tensor]] = None
+        self._row_i: Optional[torch.Tensor] = None
+        self._belief_gated: Optional[torch.Tensor] = None
 
     # ---------------------------------------------------------------- hooks
 
@@ -90,8 +91,8 @@ class BaselineModel(nn.Module):
     def _build_conditioning_state(
         self,
         agent_id: int,
-        cap_i: torch.Tensor,
-        belief_gated: tuple[torch.Tensor, torch.Tensor],
+        row_i: torch.Tensor,
+        belief_gated: torch.Tensor,
     ) -> None:
         """Compute per-call conditioning state from the latest subjective inputs.
 
@@ -103,20 +104,11 @@ class BaselineModel(nn.Module):
         # No-op default; concrete variants override.
         return None
 
-    def _build_objective_state(self, c_t: torch.Tensor) -> None:
-        """Build agent-agnostic *transition* conditioning from the rule ``c_t``.
-
-        Called from :meth:`set_context_objective`. Transition is objective (rule
-        only) — it must be well-defined after ``set_context_objective`` alone,
-        because the trainer/planner call ``transition`` once per step before any
-        ``set_context_subjective``. The input/id-conditioned variants build a
-        c_ctx-only conditioning (role/belief zeroed); the theta-based variants
-        generate ``theta_state`` from c_ctx here. Default no-op.
-        """
-        return None
-
     def _apply_trans(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        """Return Δs (the *delta* state). Base class wraps with residual."""
+        """Return Δs (the *delta* state). Base class wraps with residual.
+
+        v5: transition is objective and unconditioned — no context input.
+        """
         raise NotImplementedError
 
     def _apply_reward(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
@@ -127,41 +119,32 @@ class BaselineModel(nn.Module):
         """Return ``(policy_logits (B, A), value (B, 1))``."""
         raise NotImplementedError
 
-    # ---------------------------------------------------------------- 7-API
+    # ---------------------------------------------------------------- 6-API (v5)
 
     def update_step(self, global_step: int) -> None:  # pkg-04 spec 02 line 169
         self._step = int(global_step)
 
-    def set_context_objective(self, c_t: torch.Tensor) -> None:  # pkg-04 spec 02 line 181
-        self._ctx_obj = c_t
-        # Build the OBJECTIVE transition conditioning now (mirrors
-        # HyperMuZeroModel.set_context_objective regenerating theta_state). The
-        # trainer + planner call transition() once per step BEFORE any per-agent
-        # set_context_subjective, so the conditioning transition consumes must be
-        # established here, not in set_context_subjective.
-        self._build_objective_state(c_t)
-
     def set_context_subjective(
         self,
         agent_id: int,
-        cap_i: torch.Tensor,
-        belief: tuple[torch.Tensor, torch.Tensor],
+        row_i: torch.Tensor,
+        belief: torch.Tensor,
     ) -> None:
-        """Cache (agent_id, cap_i, belief) for the next ``transition`` /
-        ``predict_reward`` / ``predict`` call (pkg-04 spec 02 line 202)."""
-        # Self-Info strict (C7-INT-SELF1).
-        assert cap_i.dim() == 2 and cap_i.shape[-1] == 4, (
-            "Self-Info strict: cap_i must be (B, 4) RAW CapabilityVector; "
-            "forbidden to concat opponent oracle types etc. into cap_i "
-            f"(C7-INT-SELF1). Got shape {tuple(cap_i.shape)}."
+        """Cache (agent_id, row_i, belief) for the next ``predict_reward`` /
+        ``predict`` call (v5 amendment of pkg-04 spec 02 line 202)."""
+        # Self-Info strict (C7-INT-SELF1, v5 form).
+        N = self.cfg.env.N
+        assert row_i.dim() == 2 and row_i.shape[-1] == N - 1, (
+            f"Self-Info strict: row_i must be (B, {N - 1}) — agent's OWN "
+            "diagonal-free relationship row only (C7-INT-SELF1). "
+            f"Got shape {tuple(row_i.shape)}."
         )
-        c_hat, z_hat = belief
         # BeliefGradGating apply (C7-INT-GRAD1 — pre-5K detach, post-5K passthrough).
-        c_hat_g, z_hat_g = self.grad_gating.apply_raw(c_hat, z_hat, self._step)
+        g_hat_g = self.grad_gating.apply_raw(belief, self._step)
         self._agent_id = int(agent_id)
-        self._cap_i = cap_i
-        self._belief_gated = (c_hat_g, z_hat_g)
-        self._build_conditioning_state(self._agent_id, cap_i, (c_hat_g, z_hat_g))
+        self._row_i = row_i
+        self._belief_gated = g_hat_g
+        self._build_conditioning_state(self._agent_id, row_i, g_hat_g)
 
     def encode(self, obs: torch.Tensor) -> torch.Tensor:  # pkg-04 spec 02 line 277
         return self.rep_net(obs)
@@ -169,13 +152,10 @@ class BaselineModel(nn.Module):
     def transition(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         """s + Δs (residual, pkg-04 spec 02 line 284).
 
-        OBJECTIVE: depends on the rule only, so it requires
-        ``set_context_objective`` (NOT ``set_context_subjective``) — the
-        trainer/planner call it once per step before the per-agent subjective
-        loop, exactly as for ``HyperMuZeroModel`` (whose ``theta_state`` is
-        objective).
+        v5: OBJECTIVE and unconditioned — callable at any time, no
+        set_context_* prerequisite (mirrors HyperMuZeroModel's plain
+        TransitionNet).
         """
-        self._assert_objective_set("transition")
         return s + self._apply_trans(s, action)
 
     def predict_reward(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
@@ -194,16 +174,8 @@ class BaselineModel(nn.Module):
         if self._agent_id is None:
             raise AssertionError(
                 f"{method_name}() called before set_context_subjective(). "
-                "Pkg-04 spec 02 §3.4: must call set_context_objective then "
-                "set_context_subjective before predict_reward/predict."
-            )
-
-    def _assert_objective_set(self, method_name: str) -> None:
-        if self._ctx_obj is None:
-            raise AssertionError(
-                f"{method_name}() called before set_context_objective(). "
-                "Pkg-04 spec 02 §3.4: transition is objective — call "
-                "set_context_objective(c_t) first."
+                "v5 API: must call set_context_subjective before "
+                "predict_reward/predict."
             )
 
     @staticmethod

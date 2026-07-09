@@ -1,16 +1,19 @@
-"""Belief gradient gating helper (Pkg-04 spec 04, v4 新增防线 5, Ch4.6.5).
+"""Belief gradient gating helper (Pkg-04 spec 04, defence line 5, Ch4.6.5; v5 form).
 
-前 ``num_warmup_steps`` 步 (默认 5000) 切断主任务 loss 反向到 BeliefNet 与
-BeliefEncoder 的梯度路径, 让二者仅由独立的 L_belief loss (Pkg-03 belief_loss)
-驱动训练, 避免 "chicken-and-egg" 噪声反馈循环.
+For the first ``num_warmup_steps`` steps (default 5000) the main-task loss is
+cut off from BeliefNet / BeliefEncoder gradients, so both train only from the
+independent L_belief loss (Pkg-09 belief_loss), avoiding the
+chicken-and-egg noise feedback loop.
 
-双层 detach (review 修订 3):
-    切断 1 (apply_raw): raw heads (c_hat, z_hat) -> 阻 main loss 反向到 BeliefNet GRU/heads
-    切断 2 (apply_ctx): ctx_aug 内 belief 子段 [48:80] -> 阻 main loss 反向到 BeliefEncoder
+Two-layer detach (review revision 3, v5 shapes):
+    cut 1 (apply_raw): raw regime posterior ``g_hat`` -> blocks main-loss
+        backprop into the BeliefNet GRU/head.
+    cut 2 (apply_ctx): the belief sub-segment of ctx_aug (v5: [32:64]) ->
+        blocks main-loss backprop into the BeliefEncoder projection.
 
-L_belief loss 独立路径不受 gating 影响 (trainer 直接对 belief_net 参数 backward).
-
-设计要点 (D3): 用显式 .detach() 而非 nn.Hook (前向可读可调试, 与计算图语义直接对应).
+The independent L_belief path is unaffected by gating (the trainer backprops
+belief_net parameters directly). D3: explicit ``.detach()`` rather than
+nn.Hook (readable/debuggable, maps directly to graph semantics).
 """
 from __future__ import annotations
 
@@ -18,52 +21,50 @@ import torch
 
 
 class BeliefGradGating:
-    """Belief gradient gating helper (无可学参数, model.forward 内部 helper)."""
+    """Belief gradient gating helper (no learnable params; model-internal)."""
 
     def __init__(self, num_warmup_steps: int = 5000):
         """
         Args:
-            num_warmup_steps: 前多少步切断 belief 梯度.
-                从 cfg.train.belief_grad_gating_steps 读取 (默认 5000).
+            num_warmup_steps: number of initial steps to cut belief gradients.
+                Read from cfg.train.belief_grad_gating_steps (default 5000).
         """
         self.num_warmup_steps = num_warmup_steps
 
     def apply_raw(
         self,
-        c_hat: torch.Tensor,
-        z_hat: torch.Tensor,
+        g_hat: torch.Tensor,
         step: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """切断 1: raw heads (c_hat, z_hat) -> 阻 main loss 反向到 BeliefNet GRU/heads.
+    ) -> torch.Tensor:
+        """Cut 1: raw regime posterior -> blocks main loss into BeliefNet.
 
         Args:
-            c_hat: (B,) or (B, N) sigmoid 输出
-            z_hat: (B, N-1, 2) or (B, N, N-1, 2) softmax 输出
-            step:  当前 global_step (由 HyperMuZeroModel.update_step 提供)
+            g_hat: (B, |G|) or (B, N, |G|) softmax regime posterior
+            step:  current global_step (from ``update_step``)
         Returns:
-            (c_hat_out, z_hat_out): step < num_warmup_steps 时 .detach(), 否则透传.
+            g_hat detached when ``step < num_warmup_steps``, else passthrough.
         """
         if step < self.num_warmup_steps:
-            return c_hat.detach(), z_hat.detach()
-        return c_hat, z_hat
+            return g_hat.detach()
+        return g_hat
 
     def apply_ctx(
         self,
         ctx_aug: torch.Tensor,
         step: int,
-        belief_slice: tuple[int, int] = (48, 80),
+        belief_slice: tuple[int, int] = (32, 64),
     ) -> torch.Tensor:
-        """切断 2: ctx_aug 内 belief 子段 -> 阻 main loss 反向到 BeliefEncoder.
+        """Cut 2: ctx_aug belief sub-segment -> blocks main loss into BeliefEncoder.
 
-        ctx_aug 内部结构: [c_ctx (0:16), role (16:48), belief_vec (48:80)].
-        仅对 [48:80] 子段 .detach(), 保留 c_ctx + role 路径梯度.
+        v5 ctx_aug structure: [role (0:32), belief_vec (32:64)].
+        Only the belief segment is detached; the role path keeps gradients.
 
         Args:
-            ctx_aug:      (..., 80) ctx_aug 张量
-            step:         当前 global_step
-            belief_slice: (start, end) 默认 (48, 80) 对应 belief_vec 段
+            ctx_aug:      (..., 64) ctx_aug tensor
+            step:         current global_step
+            belief_slice: (start, end), default (32, 64) = belief_vec segment
         Returns:
-            ctx_aug_gated: 同 shape; step < num_warmup_steps 时 belief 子段已 .detach()
+            ctx_aug_gated: same shape; belief segment detached during warmup.
         """
         if step >= self.num_warmup_steps:
             return ctx_aug
@@ -75,10 +76,10 @@ class BeliefGradGating:
             ctx_aug[..., end:],
         ], dim=-1)
 
-    # 兼容旧调用名 (spec 02 §2.2 内调用 .apply 仍可用, 等价于 apply_raw)
+    # Legacy call-name compatibility (``.apply`` == ``apply_raw``).
     apply = apply_raw
 
     @property
     def is_gating_active(self) -> bool:
-        """便于 debug; 是否生效由 apply(step) 决定 (本类不持有 step 状态)."""
+        """Debug helper; whether gating applies is decided by ``apply(step)``."""
         return True

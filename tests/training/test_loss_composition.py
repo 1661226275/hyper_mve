@@ -1,53 +1,54 @@
-"""Pkg-05 spec 05 acceptance: compose_total_loss double-path (C5-L1/L2).
+"""Pkg-05 spec 05 acceptance: compose_total_loss double-path (C5-L1/L2, v5 Pkg-09).
 
-The two gradient-isolation tests monkeypatch ``oracle_z_mixing_weight -> 0`` so the
-main-path belief input is the *predicted* z (carrying grad). This isolates the
-mechanism under test — the belief gradient GATING threshold (cfg.train.belief_grad_gating_steps,
-default 5000) — from the (separate) curriculum stage boundary. This is the
-real-API reconciliation noted in the plan (R2): BeliefNet.forward has no mixing arg.
+The two gradient-isolation tests monkeypatch ``oracle_g_mixing_weight -> 0`` so the
+main-path belief input is the *predicted* posterior (carrying grad). This isolates
+the mechanism under test — the belief gradient GATING threshold
+(cfg.train.belief_grad_gating_steps) — from the (separate) curriculum stage boundary.
 """
 import math
+from dataclasses import replace
 
 import pytest
 import torch
 
 from hyper_mve.configs import V4Config
 from hyper_mve.models import HyperMuZeroModel
-from hyper_mve.schemas import ObservationLayout
+from hyper_mve.schemas import RelationObservationLayout
 from hyper_mve.training import MuZeroTrainer
 from hyper_mve.training.loss_composition import compose_total_loss
 
-
-@pytest.fixture
-def cfg_medium():
-    return V4Config.from_preset("medium")
+_G = 5
 
 
 @pytest.fixture
-def model(cfg_medium):
-    return HyperMuZeroModel(cfg_medium)
+def cfg_duo():
+    cfg = V4Config.from_preset("rel_duo")
+    # the gating tests need the pred path detached (rel_duo default is False)
+    return replace(cfg, train=replace(cfg.train, detach_pred_context=True))
 
 
 @pytest.fixture
-def trainer(cfg_medium, model):
-    return MuZeroTrainer(cfg_medium, model)
+def model(cfg_duo):
+    return HyperMuZeroModel(cfg_duo)
+
+
+@pytest.fixture
+def trainer(cfg_duo, model):
+    return MuZeroTrainer(cfg_duo, model, device=torch.device("cpu"))
 
 
 def _make_batch(cfg, B=4, device="cpu"):
     N, A, K = cfg.env.N, cfg.env.A, cfg.train.unroll_K
-    obs_dim = ObservationLayout.total_dim(N, cfg.env.K)
+    obs_dim = RelationObservationLayout.total_dim(N, cfg.env.K)
     return {
         "obs": torch.randn(B, K + 1, N, obs_dim, device=device),
         "actions": torch.randint(0, A, (B, K + 1, N), device=device),
         "rewards": torch.randn(B, K + 1, N, device=device),
-        "c_t": torch.rand(B, K + 1, device=device),
-        "cap": torch.rand(B, K + 1, N, 4, device=device),
-        "c_hat": torch.rand(B, K + 1, N, device=device),
-        "z_hat": torch.softmax(torch.randn(B, K + 1, N, N - 1, 2, device=device), dim=-1),
-        "tau": torch.randint(0, 2, (B, K + 1, N), dtype=torch.int8, device=device),
+        "row": torch.rand(B, K + 1, N, N - 1, device=device) * 2 - 1,
+        "g_hat": torch.softmax(torch.randn(B, K + 1, N, _G, device=device), dim=-1),
+        "g": torch.randint(0, _G, (B, K + 1), device=device),
         "pi_mve": torch.softmax(torch.randn(B, K + 1, N, A, device=device), dim=-1),
         "v": torch.randn(B, K + 1, N, device=device),
-        "delta": torch.randn(B, K + 1, N, device=device),
         "dones": torch.zeros(B, K + 1, dtype=torch.bool, device=device),
     }
 
@@ -67,47 +68,41 @@ def _zero_belief_grads(model):
 # ====== dict structure / NaN ======
 
 # Canonical (non-diagnostic) loss keys that compose_total_loss must always emit.
-# diag_* keys are an open, append-only set (new probes are added across v4-opt
-# phases) — they are checked as a prefix family, not an exact lock.
+# diag_* keys are an open, append-only set — checked as a prefix family.
 _REQUIRED_LOSS_KEYS = frozenset({
     "total", "main", "belief", "lambda_b",
     "policy", "value", "reward", "consist",
-    "belief_c", "belief_opp", "belief_div",
+    "belief_regime", "belief_div",
     "L_policy_raw", "L_value_raw", "L_reward_raw", "L_consist_raw",
 })
 
 
-def test_loss_composition_returns_full_dict(trainer, cfg_medium, model):
-    losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, 100, cfg_medium)
+def test_loss_composition_returns_full_dict(trainer, cfg_duo, model):
+    losses = compose_total_loss(model, _make_batch(cfg_duo), trainer, 100, cfg_duo)
     keys = set(losses)
     missing = _REQUIRED_LOSS_KEYS - keys
     assert not missing, f"compose_total_loss dropped required keys: {sorted(missing)}"
-    # Every non-canonical key must be a diagnostic (diag_* prefix), so an
-    # accidental typo'd or stray key is still caught.
     extras = keys - _REQUIRED_LOSS_KEYS
     non_diag = {k for k in extras if not k.startswith("diag_")}
     assert not non_diag, f"unexpected non-diagnostic keys: {sorted(non_diag)}"
-    # The original canonical diagnostics must still be present.
     assert {
         "diag_pi_mve_entropy", "diag_pi_pred_entropy",
-        "diag_cos_pred_cross", "diag_cos_pred_same",
-        "diag_cos_rew_cross", "diag_cos_rew_same",
+        "diag_cos_pred_pair", "diag_cos_rew_pair",
+        "diag_l2_rew_pair", "diag_norm_rew",
     } <= keys
 
 
-def test_loss_composition_internal_baseline_compatible(cfg_medium):
-    """The 5 internal baselines train through the SAME compose_total_loss as hyper.
+def test_loss_composition_internal_baseline_compatible(cfg_duo):
+    """The internal baselines train through the SAME compose_total_loss as hyper.
 
     They expose no ``current_subjective_thetas`` (no generated theta), so the
-    hypernet role-cosine / L2 diagnostics fall back to NaN — but the canonical
-    grad-carrying losses are finite and the dict is complete. This is the
-    compatibility contract the sweep worker relies on to train runner-owned
-    internal variants in-process (pkg-07 spec 08 §7.1).
+    hypernet pairwise-θ diagnostics fall back to NaN — but the canonical
+    grad-carrying losses are finite and the dict is complete.
     """
     from hyper_mve.baselines import create_baseline
-    model = create_baseline(cfg_medium, "input_wide")
-    trainer = MuZeroTrainer(cfg_medium, model)
-    losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, 100, cfg_medium)
+    model = create_baseline(cfg_duo, "input_wide")
+    trainer = MuZeroTrainer(cfg_duo, model, device=torch.device("cpu"))
+    losses = compose_total_loss(model, _make_batch(cfg_duo), trainer, 100, cfg_duo)
 
     missing = _REQUIRED_LOSS_KEYS - set(losses)
     assert not missing, f"baseline dropped required keys: {sorted(missing)}"
@@ -115,101 +110,74 @@ def test_loss_composition_internal_baseline_compatible(cfg_medium):
         v = losses[k]
         if torch.is_tensor(v):
             assert not torch.isnan(v).any(), f"NaN in canonical loss '{k}' (baseline)"
-    # No generated theta → the hypernet-only diagnostics are NaN (guarded path).
-    for k in ("diag_cos_pred_cross", "diag_cos_rew_cross",
-              "diag_l2_rew_cross", "diag_norm_rew_alpha"):
+    for k in ("diag_cos_pred_pair", "diag_cos_rew_pair",
+              "diag_l2_rew_pair", "diag_norm_rew"):
         assert math.isnan(losses[k].item()), f"{k} should be NaN for a non-hypernet baseline"
 
 
-def test_loss_composition_no_nan(trainer, cfg_medium, model):
-    losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, 100, cfg_medium)
+def test_loss_composition_no_nan(trainer, cfg_duo, model):
+    losses = compose_total_loss(model, _make_batch(cfg_duo), trainer, 100, cfg_duo)
     for k, v in losses.items():
         if torch.is_tensor(v):
             assert not torch.isnan(v).any(), f"NaN in loss['{k}']"
-    # medium is 2α+2β → all role-cosine categories have pairs (none NaN)
 
 
-# ====== diagnostics: entropy ranges + hypernet role-cosine ======
+# ====== diagnostics: entropy + pairwise-θ ranges ======
 
-def test_diagnostics_entropy_and_cosine_ranges(trainer, cfg_medium, model):
-    losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, 100, cfg_medium)
-    ln_A = math.log(cfg_medium.env.A)
+def test_diagnostics_entropy_and_pairwise_ranges(trainer, cfg_duo, model):
+    losses = compose_total_loss(model, _make_batch(cfg_duo), trainer, 100, cfg_duo)
+    ln_A = math.log(cfg_duo.env.A)
     for key in ("diag_pi_mve_entropy", "diag_pi_pred_entropy"):
         v = losses[key].item()
         assert 0.0 <= v <= ln_A + 1e-4, f"{key}={v} out of [0, ln A={ln_A:.3f}]"
-    # medium (2α+2β): both cross-type and same-type pairs exist → all defined in [-1, 1]
-    for key in ("diag_cos_pred_cross", "diag_cos_pred_same",
-                "diag_cos_rew_cross", "diag_cos_rew_same"):
+    for key in ("diag_cos_pred_pair", "diag_cos_rew_pair"):
         v = losses[key].item()
-        assert not math.isnan(v), f"{key} should be defined for medium (2α+2β)"
+        assert not math.isnan(v), f"{key} should be defined for N=2"
         assert -1.0 - 1e-4 <= v <= 1.0 + 1e-4, f"{key}={v} out of [-1, 1]"
+    assert losses["diag_l2_rew_pair"].item() >= 0.0
+    assert losses["diag_norm_rew"].item() > 0.0
 
 
-def test_diagnostics_duo_two_agent_cosine():
-    """Duo (N=2, 1α+1β): cross-type cosine defined, same-type undefined (NaN).
-
-    Also exercises the N=2 compose path end-to-end (z_hat opponent dim N-1=1).
-    """
-    cfg = V4Config.from_preset("duo")
+def test_full_gen_scope_compose_path():
+    """The FULL gen_scope model keeps the full loss/diag dict NaN-free."""
+    cfg = V4Config.from_preset("rel_duo")
+    cfg = replace(cfg, model=replace(cfg.model, hyper_gen_scope="full"))
     model = HyperMuZeroModel(cfg)
-    trainer = MuZeroTrainer(cfg, model)
-    losses = compose_total_loss(model, _make_batch(cfg), trainer, 100, cfg)
-
-    assert not math.isnan(losses["diag_cos_pred_cross"].item())
-    assert not math.isnan(losses["diag_cos_rew_cross"].item())
-    assert math.isnan(losses["diag_cos_pred_same"].item()), "no same-type pair in duo"
-    assert math.isnan(losses["diag_cos_rew_same"].item()), "no same-type pair in duo"
-
-
-# ====== film_head partial-generation: compose path intact ======
-
-def test_loss_composition_film_head_full_dict_and_no_nan():
-    """film_head model (shared trunk + generated FiLM/head) keeps the full loss/diag
-    dict and stays NaN-free. Medium (N=4=2a+2b) so all cosine categories are defined."""
-    from dataclasses import replace
-    cfg = V4Config.from_preset("medium")
-    cfg = replace(cfg, model=replace(
-        cfg.model, hyper_gen_scope="film_head",
-        trans_output_scale_init=0.1, pred_output_scale_init=0.1,
-    ))
-    model = HyperMuZeroModel(cfg)
-    trainer = MuZeroTrainer(cfg, model)
+    trainer = MuZeroTrainer(cfg, model, device=torch.device("cpu"))
     losses = compose_total_loss(model, _make_batch(cfg), trainer, 100, cfg)
     keys = set(losses)
     missing = _REQUIRED_LOSS_KEYS - keys
-    assert not missing, f"film_head dropped required keys: {sorted(missing)}"
-    non_diag = {k for k in (keys - _REQUIRED_LOSS_KEYS) if not k.startswith("diag_")}
-    assert not non_diag, f"unexpected non-diagnostic keys (film_head): {sorted(non_diag)}"
+    assert not missing, f"full scope dropped required keys: {sorted(missing)}"
     for k, v in losses.items():
         if torch.is_tensor(v):
-            assert not torch.isnan(v).any(), f"NaN in loss['{k}'] (film_head)"
+            assert not torch.isnan(v).any(), f"NaN in loss['{k}'] (full)"
 
 
 # ====== C5-L1: lambda_b at loss level ======
 
-def test_lambda_b_curve_matches_cfg(trainer, cfg_medium, model):
-    batch = _make_batch(cfg_medium)
+def test_lambda_b_curve_matches_cfg(trainer, cfg_duo, model):
+    batch = _make_batch(cfg_duo)
     for step in [0, 50_000, 100_000, 200_000]:
-        losses = compose_total_loss(model, batch, trainer, step, cfg_medium)
+        losses = compose_total_loss(model, batch, trainer, step, cfg_duo)
         assert torch.allclose(losses["lambda_b"], torch.tensor(float(trainer.scheduler.lambda_b(step))))
 
 
-def test_lambda_b_zero_disables_belief_weight(trainer, cfg_medium, model, monkeypatch):
+def test_lambda_b_zero_disables_belief_weight(trainer, cfg_duo, model, monkeypatch):
     monkeypatch.setattr(trainer.scheduler, "lambda_b", lambda step: 0.0)
-    losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, 100, cfg_medium)
+    losses = compose_total_loss(model, _make_batch(cfg_duo), trainer, 100, cfg_duo)
     assert torch.allclose(losses["total"], losses["main"], atol=1e-6)
     assert losses["belief"].item() > 0.0
 
 
 # ====== C5-L2: belief gradient gating (double path) ======
 
-def test_belief_gradient_isolation_pre_5k(trainer, cfg_medium, model, monkeypatch):
-    # mixing=0 isolates the GATING threshold (5000) from the curriculum stage, so
-    # the main-path belief is the *predicted* z (would carry grad if not gated).
-    monkeypatch.setattr(trainer.scheduler, "oracle_z_mixing_weight", lambda step: 0.0)
+def test_belief_gradient_isolation_pre_5k(trainer, cfg_duo, model, monkeypatch):
+    # mixing=0 isolates the GATING threshold from the curriculum stage, so the
+    # main-path belief is the *predicted* posterior (would carry grad if not gated).
+    monkeypatch.setattr(trainer.scheduler, "oracle_g_mixing_weight", lambda step: 0.0)
     step = 1000  # < belief_grad_gating_steps (5000)
     trainer.model.update_step(step)
-    losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, step, cfg_medium)
+    losses = compose_total_loss(model, _make_batch(cfg_duo), trainer, step, cfg_duo)
 
     # L_belief always trains BeliefNet.
     _zero_belief_grads(model)
@@ -225,20 +193,29 @@ def test_belief_gradient_isolation_pre_5k(trainer, cfg_medium, model, monkeypatc
     )
 
 
-def test_belief_gradient_both_sources_post_5k(trainer, cfg_medium, model, monkeypatch):
-    monkeypatch.setattr(trainer.scheduler, "oracle_z_mixing_weight", lambda step: 0.0)
+def test_belief_gradient_both_sources_post_5k(trainer, cfg_duo, model, monkeypatch):
+    monkeypatch.setattr(trainer.scheduler, "oracle_g_mixing_weight", lambda step: 0.0)
     step = 10_000  # >= 5000: gating off
     trainer.model.update_step(step)
-    losses = compose_total_loss(model, _make_batch(cfg_medium), trainer, step, cfg_medium)
+    losses = compose_total_loss(model, _make_batch(cfg_duo), trainer, step, cfg_duo)
 
-    # Once gating is off, the main path also backprops into BeliefNet — but ONLY
-    # through the reward head -> hyper_rew -> ctx_aug belief segment, because
-    # detach_pred_context=True severs the policy/value (hyper_pred) path. So it is
-    # small but strictly nonzero. Measure the main path in isolation (robust:
-    # avoids the fragile L1-norm-of-sum cancellation between the two gradient paths).
+    # Once gating is off, the main path also backprops into BeliefNet — via the
+    # reward head -> hyper_rew -> ctx_aug belief segment (detach_pred_context=True
+    # severs the policy/value path in this fixture). Small but strictly nonzero.
     _zero_belief_grads(model)
     losses["main"].backward()
     main_only = _belief_grad_norm(model)
     assert main_only > 0.0, (
         "post-5k: main loss should backprop into BeliefNet via reward/hyper_rew"
     )
+
+
+# ====== planner_on mask ======
+
+def test_planner_off_episodes_masked_from_policy_loss(trainer, cfg_duo, model):
+    batch = _make_batch(cfg_duo)
+    batch["planner_on"] = torch.zeros(batch["obs"].shape[0], dtype=torch.bool)
+    losses = compose_total_loss(model, batch, trainer, 100, cfg_duo)
+    # all-masked batch ⇒ policy CE contributes 0 and pi_mve entropy is NaN
+    assert losses["L_policy_raw"].item() == 0.0
+    assert math.isnan(losses["diag_pi_mve_entropy"].item())

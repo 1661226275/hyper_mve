@@ -1,39 +1,37 @@
-"""In-training periodic evaluation [v4-opt 2026-06] (2agent run diagnosis).
-
-The optimization-phase runs logged only losses — no episode returns, no eval — so
-"policy degrading" was indistinguishable from "policy improving while the commons
-depletes". This module adds the missing measurement:
+"""In-training periodic evaluation (v5 per-regime form; base [v4-opt 2026-06]).
 
     run_eval(model, cfg)  ->  flat {tag: float} dict (TB family ``eval/*``)
 
-Protocol (user decision 2026-06-11, dual-mode + c-grid):
+Protocol (v5 amendment of the 2026-06-11 dual-mode design):
     - **prior** mode: planner OFF — actions = argmax of the prediction net's own
       policy pi_hat. Measures the *distilled* policy the thesis ultimately ships.
     - **planner** mode: planner ON — actions = argmax of pi_mve. Measures the true
-      acting agent (Alg 5.2). The planner-prior return gap is the distillation
-      residual: large gap ⇒ pi_hat has not absorbed the planner's signal.
+      acting agent. The planner-prior return gap is the distillation residual.
     - Both run deterministically (epsilon=0, argmax, no sampling RNG) on dedicated
-      eval envs with ``c_mode="static"`` pinned to each c in ``eval_c_grid`` and
-      fixed reset seeds, and the planner uses a constant CRN seed — so curves at
-      different global_steps differ only through the model weights (CRN across
-      evaluations).
+      eval envs pinned to each regime ``g`` in the eval grid via
+      ``reset(options={"g": gid})`` (bypasses ``train_regime_ids`` — held-out
+      regimes ARE evaluable, that is the zero-shot probe), fixed reset seeds, and
+      a constant planner CRN seed — so curves at different global_steps differ
+      only through the model weights.
+
+v5-added metric: ``belief/regime_accuracy`` (+ per-regime variants) — the
+step-mean argmax accuracy of the BeliefNet regime posterior stored in the
+collected records. Reported per regime because own-row aliasing across
+regimes makes the global chance level misleading.
 
 All episodes of one mode run as a single vectorized batch through
-``Worker.collect_episodes`` (B = len(c_grid) * episodes), so one eval costs about
-two batched episode rollouts.
+``Worker.collect_episodes`` (B = len(grid) * episodes), so one eval costs
+about two batched episode rollouts.
 """
 from __future__ import annotations
-
-from dataclasses import replace
-from typing import Optional
 
 import numpy as np
 import torch
 
 from hyper_mve.configs import V4Config
-from hyper_mve.envs.resource_commons.env import ResourceCommonsEnv
+from hyper_mve.envs.relation_commons import RelationCommonsEnv
 from hyper_mve.planning.mve_planner import MVEPlanner
-from hyper_mve.schemas import AgentType
+from hyper_mve.schemas import get_regime_family
 from hyper_mve.training.worker import Worker
 
 # Constant seeds: identical eval conditions at every call (CRN across evaluations).
@@ -44,14 +42,8 @@ _EVAL_PLANNER_SEED = 20260611
 # (NOOP) and trivially underestimate the planner [v4-opt 2026-06b].
 _EVAL_TIEBREAK_SEED = 1_234_567
 
-
-def _type_masks(type_assignment) -> tuple[np.ndarray, np.ndarray]:
-    types = np.array([int(t) for t in type_assignment])
-    return types == int(AgentType.ALPHA), types == int(AgentType.BETA)
-
-
 # [2026-06 thesis welfare] commons-collapse threshold for the tragedy indicator
-# (Ch3.8.3: T = 1[S < 0.2]).
+# (T = 1[S < 0.2]).
 _TRAGEDY_THRESHOLD = 0.2
 
 
@@ -71,24 +63,36 @@ def _phys_fairness(w: np.ndarray) -> float:
     return float(1.0 - w.size * float(w.std()) / total)
 
 
+def _regime_accuracy(records) -> float:
+    """Step-mean argmax accuracy of the stored regime posterior vs oracle g."""
+    correct, total = 0, 0
+    for rec in records:
+        pred = np.asarray(rec.g_hat).argmax(axis=-1)     # (N,)
+        correct += int((pred == rec.g).sum())
+        total += pred.size
+    return correct / total if total else float("nan")
+
+
 @torch.no_grad()
 def run_eval(
     model,
     cfg: V4Config,
     global_step: int = 0,
 ) -> dict[str, float]:
-    """Dual-mode deterministic evaluation on the static-c grid.
+    """Dual-mode deterministic evaluation on the regime grid.
 
     Returns:
         Flat dict of scalars; keys are TB tags *without* the ``eval/`` prefix,
-        e.g. ``prior/return_total``, ``planner/return_alpha_c0.5``,
-        ``planner_prior_gap``. NaN-free as long as at least one mode runs.
+        e.g. ``prior/return_total``, ``planner/return_total_g2``,
+        ``belief/regime_accuracy_g2``, ``planner_prior_gap``.
     """
     ecfg = cfg.eval
-    c_grid = tuple(ecfg.eval_c_grid)
-    assert len(c_grid) > 0, "eval_c_grid must not be empty"
-    env_cfg = replace(cfg.env, c_mode="static")   # pin c for comparability
-    alpha_mask, beta_mask = _type_masks(cfg.env.type_assignment)
+    family = get_regime_family(cfg.env)
+    if ecfg.eval_regime_grid is not None:
+        regime_grid = tuple(int(g) for g in ecfg.eval_regime_grid)
+    else:
+        regime_grid = tuple(range(family.size))
+    assert len(regime_grid) > 0, "eval regime grid must not be empty"
 
     model.eval()
     results: dict[str, float] = {}
@@ -103,12 +107,12 @@ def run_eval(
             continue
 
         envs, seeds, options = [], [], []
-        for ci, c_val in enumerate(c_grid):
+        for gi, gid in enumerate(regime_grid):
             for e in range(n_eps):
-                seed = _EVAL_ENV_SEED_BASE + ci * 100 + e
-                envs.append(ResourceCommonsEnv(env_cfg, seed=seed))
+                seed = _EVAL_ENV_SEED_BASE + gi * 100 + e
+                envs.append(RelationCommonsEnv(cfg.env, seed=seed))
                 seeds.append(seed)
-                options.append({"c": float(c_val)})
+                options.append({"g": int(gid)})
 
         planner = MVEPlanner(cfg)
         planner.crn_rng = np.random.default_rng(_EVAL_PLANNER_SEED)
@@ -131,16 +135,16 @@ def run_eval(
             for o in outs
         ], axis=0)                                                # (B, N)
         sus = np.array([float(getattr(o, "sustainability", np.nan)) for o in outs], dtype=np.float64)
-        for ci, c_val in enumerate(c_grid):
-            block = rets[ci * n_eps:(ci + 1) * n_eps]             # (n_eps, N)
-            block_phys = phys[ci * n_eps:(ci + 1) * n_eps]        # (n_eps, N)
-            block_sus = sus[ci * n_eps:(ci + 1) * n_eps]          # (n_eps,)
-            suffix = f"_c{c_val:g}"
+        acc = np.array([_regime_accuracy(o.records) for o in outs], dtype=np.float64)
+
+        for gi, gid in enumerate(regime_grid):
+            sl = slice(gi * n_eps, (gi + 1) * n_eps)
+            block = rets[sl]                                      # (n_eps, N)
+            block_phys = phys[sl]
+            block_sus = sus[sl]
+            block_acc = acc[sl]
+            suffix = f"_g{gid}"
             results[f"{mode}/return_total{suffix}"] = float(block.sum(axis=1).mean())
-            if alpha_mask.any():
-                results[f"{mode}/return_alpha{suffix}"] = float(block[:, alpha_mask].sum(axis=1).mean())
-            if beta_mask.any():
-                results[f"{mode}/return_beta{suffix}"] = float(block[:, beta_mask].sum(axis=1).mean())
             # --- welfare metric family (Table 6.1) ---
             results[f"{mode}/welfare_physical{suffix}"] = float(block_phys.sum(axis=1).mean())
             fair = [_phys_fairness(block_phys[e]) for e in range(block_phys.shape[0])]
@@ -151,9 +155,13 @@ def run_eval(
                 float(valid_sus.mean()) if valid_sus.size else float("nan"))
             results[f"{mode}/tragedy{suffix}"] = (
                 float((valid_sus < _TRAGEDY_THRESHOLD).mean()) if valid_sus.size else float("nan"))
+            # --- v5 belief quality (per regime — own-row aliasing) ---
+            valid_acc = block_acc[np.isfinite(block_acc)]
+            results[f"belief/regime_accuracy{suffix}_{mode}"] = (
+                float(valid_acc.mean()) if valid_acc.size else float("nan"))
 
         results[f"{mode}/return_total"] = float(rets.sum(axis=1).mean())
-        # overall welfare family (across all c) — also surfaced to TB.
+        # overall welfare family (across all regimes) — also surfaced to TB.
         results[f"{mode}/welfare_physical"] = float(phys.sum(axis=1).mean())
         _fair_all = [_phys_fairness(phys[i]) for i in range(phys.shape[0])]
         _fair_all = [f for f in _fair_all if np.isfinite(f)]
@@ -162,10 +170,9 @@ def run_eval(
         if _valid_all.size:
             results[f"{mode}/sustainability"] = float(_valid_all.mean())
             results[f"{mode}/tragedy"] = float((_valid_all < _TRAGEDY_THRESHOLD).mean())
-        if alpha_mask.any():
-            results[f"{mode}/return_alpha"] = float(rets[:, alpha_mask].sum(axis=1).mean())
-        if beta_mask.any():
-            results[f"{mode}/return_beta"] = float(rets[:, beta_mask].sum(axis=1).mean())
+        _valid_acc_all = acc[np.isfinite(acc)]
+        results[f"belief/regime_accuracy_{mode}"] = (
+            float(_valid_acc_all.mean()) if _valid_acc_all.size else float("nan"))
         results[f"{mode}/ep_len"] = float(np.mean([len(o.records) for o in outs]))
         if use_planner:
             results[f"{mode}/pi_mve_entropy"] = float(np.mean([o.pi_entropy_mean for o in outs]))
@@ -175,11 +182,10 @@ def run_eval(
 
     if "prior" in mode_totals and "planner" in mode_totals:
         # Distillation residual: planner return minus distilled-policy return.
-        # We compute it from the per-c means (each c contributes equally) rather
-        # than the raw episode means, so the asymmetric episode counts
-        # (eval_episodes_prior vs eval_episodes_planner) don't bias the gap.
-        prior_per_c = [results[f"prior/return_total_c{c:g}"] for c in c_grid]
-        planner_per_c = [results[f"planner/return_total_c{c:g}"] for c in c_grid]
-        results["planner_prior_gap"] = float(np.mean(planner_per_c) - np.mean(prior_per_c))
+        # Computed from the per-regime means (each regime contributes equally)
+        # so asymmetric episode counts don't bias the gap.
+        prior_per_g = [results[f"prior/return_total_g{g}"] for g in regime_grid]
+        planner_per_g = [results[f"planner/return_total_g{g}"] for g in regime_grid]
+        results["planner_prior_gap"] = float(np.mean(planner_per_g) - np.mean(prior_per_g))
 
     return results

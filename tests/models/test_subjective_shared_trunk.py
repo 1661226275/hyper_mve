@@ -1,8 +1,7 @@
 """Shared subjective hypernet trunk (Idea 1) tests.
 
 When share_subjective_trunk=True, hyper_rew + hyper_pred collapse into one shared trunk
-(SubjectiveHyperNet) with two heads (theta_rew / theta_pred). hyper_trans (objective) is
-untouched. Each head keeps its own output_scale + grouped RMS. Detach (D5) under sharing
+(SubjectiveHyperNet) with two heads (theta_rew / theta_pred). the objective path no longer exists (v5). Each head keeps its own output_scale + grouped RMS. Detach (D5) under sharing
 detaches the TRUNK OUTPUT for the pred head (stronger than the unshared input-detach):
 value loss then trains only pred_head, not the shared trunk or the context (ctx_aug).
 """
@@ -11,17 +10,16 @@ import torch
 
 from hyper_mve.models.hyper_network import DualHyperNetwork, SubjectiveHyperNet
 
-C_CTX, CTX_AUG = 16, 80
-TRANS_PC = 25024                  # base_gen counts (latent=64, hidden=128, A=6, N=2)
-REW_PC, PRED_PC = 16897, 17671
+CTX_AUG = 64                      # v5: role (32) + belief (32)
+REW_PC, PRED_PC = 16897, 17671    # base_gen counts (latent=64, hidden=128, A=6, N=2)
 REW_GROUPS, PRED_GROUPS = [256, 16641], [256, 17415]
 
 
 def _dual(share, detach=False):
     torch.manual_seed(0)
     return DualHyperNetwork(
-        c_ctx_dim=C_CTX, ctx_aug_dim=CTX_AUG,
-        trans_param_count=TRANS_PC, rew_param_count=REW_PC, pred_param_count=PRED_PC,
+        ctx_aug_dim=CTX_AUG,
+        rew_param_count=REW_PC, pred_param_count=PRED_PC,
         rew_output_scale_init=0.1, pred_output_scale_init=0.1,
         detach_pred_context=detach,
         rew_output_groups=REW_GROUPS, pred_output_groups=PRED_GROUPS,
@@ -47,7 +45,7 @@ def test_shared_trunk_shapes_and_modules():
     net = _dual(share=True)
     assert hasattr(net, "subjective") and not hasattr(net, "hyper_rew")
     assert not hasattr(net, "hyper_pred")
-    assert hasattr(net, "hyper_trans")  # objective path untouched
+    assert not hasattr(net, "hyper_trans")  # v5: objective path deleted
     theta_rew, theta_pred = net.forward_subjective(torch.randn(4, CTX_AUG))
     assert theta_rew.shape == (4, REW_PC)
     assert theta_pred.shape == (4, PRED_PC)

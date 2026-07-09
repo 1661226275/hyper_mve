@@ -4,7 +4,7 @@ When ``output_rank=r`` is set, the dense ``output_layer = Linear(prev, pc)`` is 
 LoRA factorization ``Linear(prev, r, bias=False) -> Linear(r, pc, bias=True)`` (params
 ``prev*pc`` -> ``prev*r + r*pc + pc``). A=orthogonal, B=small_init (NOT zero, else the grouped
 RMS divides by the 1e-8 floor -> step-0 gradient spike). ``output_rank=None`` is byte-identical
-to the prior dense path. Applied uniformly to hyper_trans/hyper_rew/hyper_pred; the shared
+to the prior dense path. Applied uniformly to hyper_rew/hyper_pred (v5: hyper_trans deleted); the shared
 SubjectiveHyperNet branch is not yet wired (raises NotImplementedError).
 """
 import pytest
@@ -55,28 +55,26 @@ def test_output_rank_none_is_dense():
     assert mlp(torch.randn(2, 16)).shape == (2, 100)
 
 
-def test_dual_threads_rank_to_all_three():
+def test_dual_threads_rank_to_both_subjective():
     net = DualHyperNetwork(
-        c_ctx_dim=16, ctx_aug_dim=80,
-        trans_param_count=8768, rew_param_count=641, pred_param_count=1415,
-        trans_output_scale_init=0.1, rew_output_scale_init=0.1, pred_output_scale_init=0.1,
+        ctx_aug_dim=64,
+        rew_param_count=641, pred_param_count=1415,
+        rew_output_scale_init=0.1, pred_output_scale_init=0.1,
         hyper_output_rank=32,
     )
-    for sub in (net.hyper_trans, net.hyper_rew, net.hyper_pred):
+    for sub in (net.hyper_rew, net.hyper_pred):
         assert sub.output_rank == 32
         assert hasattr(sub, "output_A") and hasattr(sub, "output_B")
     # forward still produces the right shapes under LoRA.
-    theta_state = net.forward_trans(torch.randn(2, 16))
-    theta_rew, theta_pred = net.forward_subjective(torch.randn(2, 80))
-    assert theta_state.shape == (2, 8768)
+    theta_rew, theta_pred = net.forward_subjective(torch.randn(2, 64))
     assert theta_rew.shape == (2, 641) and theta_pred.shape == (2, 1415)
 
 
 def test_dual_share_plus_rank_raises():
     with pytest.raises(NotImplementedError, match="SubjectiveHyperNet"):
         DualHyperNetwork(
-            c_ctx_dim=16, ctx_aug_dim=80,
-            trans_param_count=8768, rew_param_count=641, pred_param_count=1415,
+            ctx_aug_dim=64,
+            rew_param_count=641, pred_param_count=1415,
             share_subjective_trunk=True, hyper_output_rank=32,
         )
 

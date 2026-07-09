@@ -1,20 +1,18 @@
-"""DualHyperNetwork v2 for Hyper-MuZero (Pkg-04 spec 01, Ch4.3).
+"""DualHyperNetwork for Hyper-MuZero (v5 amendment, Pkg-09; base: Pkg-04 spec 01).
 
-v4 关键改动 (相对 v4.7 双路 (rule_emb, id_emb) + 单 forward):
-    v4.7: __init__(rule_emb_dim, id_emb_dim, ...) + forward(rule_emb, id_emb)
-    v4:   __init__(c_ctx_dim=16, ctx_aug_dim=80, ...) +
-          forward_trans(c_ctx) -> theta_state       (客观通路, C1 物理转移上下文不变)
-          forward_subjective(ctx_aug) -> (theta_rew, theta_pred)  (主观通路 per-agent)
+v5 关键改动 (相对 v4): **客观通路删除**. c_t 移除后没有随 context 变化的物理量,
+state transition 改为普通共享 SGD 模块 (models/transition_net.TransitionNet);
+hypernet 生成只保留主观通路:
+
+    - hyper_rew:   ctx_aug (64) -> theta_rew^i        <- 主观通路 per-agent (3 层加深)
+    - hyper_pred:  ctx_aug (64) -> theta_pred^i       <- 主观通路 per-agent (可选 detach context, D5)
+
+"Dual" 语义 v5 起指 objective(共享 SGD transition) / subjective(生成式 reward+pred)
+双路架构, 而非三个 hypernet.
 
 保留 HyperNetMLP 结构不变 (L2 norm + learnable output_scale + small_init 稳定性技巧).
 
-三个 HyperNetMLP 内部独立 (不共用 trunk):
-    - hyper_trans: c_ctx (16) -> theta_state          <- 客观通路 (C1)
-    - hyper_rew:   ctx_aug (80) -> theta_rew^i        <- 主观通路 per-agent (3 层加深)
-    - hyper_pred:  ctx_aug (80) -> theta_pred^i       <- 主观通路 per-agent (可选 detach context, D5)
-
-output_scale 三初值 (v4.7 经验保留, C8):
-    - trans_output_scale_init = 0.01
+output_scale 初值 (v4.7 经验保留, C8):
     - rew_output_scale_init   = 0.1   <- v4.7 关键 (避免 init trap)
     - pred_output_scale_init  = 0.01
 """
@@ -224,56 +222,46 @@ class SubjectiveHyperNet(nn.Module):
 
 
 class DualHyperNetwork(nn.Module):
-    """v4 三路输入版 DualHyperNetwork (Ch4.3).
+    """v5 主观通路 DualHyperNetwork (Pkg-09 amendment).
 
-    v4 关键改动 (相对 v4.7):
-        v4.7: __init__(rule_emb_dim, id_emb_dim, ...) + forward(rule_emb, id_emb)
-        v4:   __init__(c_ctx_dim=16, ctx_aug_dim=80, ...) +
-              forward_trans(c_ctx) -> theta_state +
-              forward_subjective(ctx_aug) -> (theta_rew, theta_pred)
+    v5 关键改动 (相对 v4): hyper_trans 删除 (transition 改普通共享 SGD 模块);
+    只保留 forward_subjective(ctx_aug (64)) -> (theta_rew, theta_pred).
     """
 
     def __init__(
         self,
-        c_ctx_dim,
         ctx_aug_dim,
-        trans_param_count,
         rew_param_count,
         pred_param_count,
         hidden_dims=(256, 256),
         rew_hidden_dims=(256, 256, 256),
         norm_output=True,
-        trans_output_scale_init=0.01,
         rew_output_scale_init=0.1,        # v4.7 关键
         pred_output_scale_init=0.01,
         detach_pred_context=True,         # D5: hyper_pred 输入 detach
-        trans_output_groups=None,         # film_head: 分组 RMS 归一化的连续段大小
-        rew_output_groups=None,
+        rew_output_groups=None,           # film_head: 分组 RMS 归一化的连续段大小
         pred_output_groups=None,
         share_subjective_trunk=False,     # Idea 1: 共享 hyper_rew/pred trunk
-        hyper_output_rank=None,           # [LoRA] output_layer 低秩分解 (3 路统一 r)
+        hyper_output_rank=None,           # [LoRA] output_layer 低秩分解 (2 路统一 r)
     ):
         """
         Args:
-            c_ctx_dim:                 c_ctx 维度 (hyper_trans 输入, 默认 16)
-            ctx_aug_dim:               ctx_aug 维度 (hyper_rew/pred 输入, 默认 80)
-            trans_param_count:         FunctionalStateTransNet 参数总数
+            ctx_aug_dim:               ctx_aug 维度 (hyper_rew/pred 输入, v5 默认 64)
             rew_param_count:           FunctionalRewardHead 参数总数
             pred_param_count:          FunctionalPredictionNet 参数总数
-            hidden_dims:               hyper_trans / hyper_pred 隐层
-            rew_hidden_dims:           hyper_rew 隐层 (更深 3 层 for type 分化); None 退化为 hidden_dims
+            hidden_dims:               hyper_pred 隐层
+            rew_hidden_dims:           hyper_rew 隐层 (更深 3 层 for role 分化); None 退化为 hidden_dims
             norm_output:               L2 norm + scale (默认 True)
-            trans/rew/pred_output_scale_init: output_scale 三初值 (C8)
+            rew/pred_output_scale_init: output_scale 初值 (C8)
             detach_pred_context:       D5; True 时 hyper_pred 接收 ctx_aug.detach()
         """
         super().__init__()
 
-        self.c_ctx_dim = c_ctx_dim
         self.ctx_aug_dim = ctx_aug_dim
         self.detach_pred_context = detach_pred_context
         self.share_subjective_trunk = share_subjective_trunk
 
-        # [LoRA] output-layer factorization is wired for the three independent HyperNetMLPs
+        # [LoRA] output-layer factorization is wired for the independent HyperNetMLPs
         # only; the shared SubjectiveHyperNet branch is not yet supported.
         if share_subjective_trunk and hyper_output_rank is not None:
             raise NotImplementedError(
@@ -282,17 +270,6 @@ class DualHyperNetwork(nn.Module):
             )
 
         rew_hdims = rew_hidden_dims if rew_hidden_dims is not None else hidden_dims
-
-        # C1: hyper_trans 仅接 c_ctx_dim (16) -- 客观通路, 永不共享
-        self.hyper_trans = HyperNetMLP(
-            input_dim=c_ctx_dim,
-            output_dim=trans_param_count,
-            hidden_dims=hidden_dims,
-            norm_output=norm_output,
-            output_scale_init=trans_output_scale_init,
-            output_groups=trans_output_groups,
-            output_rank=hyper_output_rank,
-        )
 
         if share_subjective_trunk:
             # Idea 1: 共享 trunk (深度 = rew_hdims) -> 两个 head (theta_rew/theta_pred).
@@ -310,7 +287,7 @@ class DualHyperNetwork(nn.Module):
                 pred_output_groups=pred_output_groups,
             )
         else:
-            # C2: hyper_rew 接完整 ctx_aug_dim (80), 更深 3 层
+            # C2: hyper_rew 接完整 ctx_aug_dim (v5: 64), 更深 3 层
             self.hyper_rew = HyperNetMLP(
                 input_dim=ctx_aug_dim,
                 output_dim=rew_param_count,
@@ -321,7 +298,7 @@ class DualHyperNetwork(nn.Module):
                 output_rank=hyper_output_rank,
             )
 
-            # C2: hyper_pred 同接 ctx_aug_dim (80)
+            # C2: hyper_pred 同接 ctx_aug_dim
             self.hyper_pred = HyperNetMLP(
                 input_dim=ctx_aug_dim,
                 output_dim=pred_param_count,
@@ -332,27 +309,11 @@ class DualHyperNetwork(nn.Module):
                 output_rank=hyper_output_rank,
             )
 
-        self.trans_param_count = trans_param_count
         self.rew_param_count = rew_param_count
         self.pred_param_count = pred_param_count
 
-    def forward_trans(self, c_ctx):
-        """C1: 仅接 c_ctx (B, 16) 生成 theta_state.
-
-        改变 role / belief 输入时, 本方法输出不变 (物理转移上下文不变性).
-
-        Args:
-            c_ctx: (B, c_ctx_dim=16) float32
-        Returns:
-            theta_state: (B, trans_param_count) float32
-        """
-        assert c_ctx.shape[-1] == self.c_ctx_dim, (
-            f"c_ctx last dim {c_ctx.shape[-1]} != c_ctx_dim {self.c_ctx_dim}"
-        )
-        return self.hyper_trans(c_ctx)
-
     def forward_subjective(self, ctx_aug):
-        """C2: 接完整 80 维 ctx_aug 生成 (theta_rew, theta_pred).
+        """C2: 接完整 ctx_aug (v5: 64 维) 生成 (theta_rew, theta_pred).
 
         若 detach_pred_context=True (D5), hyper_pred 接收的 ctx_aug 被 .detach():
             - 防止 value loss 反向时扭曲 context_encoder 学习

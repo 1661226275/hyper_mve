@@ -57,27 +57,19 @@ def test_train_config_invalid_lr_schedule():
 
 
 def test_model_config_role_dim_exact_fill():
+    """v5 (Pkg-09): role = id_emb (8) + row_emb (24) exact fill."""
     cfg = ModelConfig()
     assert cfg.d_role == 32
-    assert cfg.d_id_emb + cfg.d_type_emb + cfg.d_cap_emb == cfg.d_role
+    assert cfg.d_id_emb + cfg.d_row_emb == cfg.d_role
 
     with pytest.raises(ValueError, match="d_role mismatch"):
-        ModelConfig(d_role=32, d_id_emb=8, d_type_emb=4, d_cap_emb=16)
-
-
-def test_model_config_belief_dim_consistency():
-    cfg = ModelConfig()
-    assert cfg.d_belief == 32
-    assert cfg.d_belief_proj == 16
-    assert cfg.d_belief == 2 * cfg.d_belief_proj
-
-    with pytest.raises(ValueError, match="d_belief mismatch"):
-        ModelConfig(d_belief=48, d_belief_proj=16)
+        ModelConfig(d_role=32, d_id_emb=8, d_row_emb=16)
 
 
 def test_model_config_total_ctx_aug():
+    """v5 (Pkg-09): ctx_aug = role (32) + belief (32) = 64 (c path removed)."""
     cfg = ModelConfig()
-    assert cfg.d_ctx_aug == 80
+    assert cfg.d_ctx_aug == 64
 
 
 def test_v4_config_frozen():

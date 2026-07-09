@@ -1,4 +1,4 @@
-"""Pkg-04 spec 04 acceptance tests: belief gradient gating (防线 5)."""
+"""Pkg-04 spec 04 acceptance tests: belief gradient gating (defence 5, v5 form)."""
 import pytest
 import torch
 
@@ -6,107 +6,109 @@ from hyper_mve.configs import V4Config
 from hyper_mve.models import HyperMuZeroModel
 from hyper_mve.models.grad_gating import BeliefGradGating
 
+_G = 5
 
-# ====== BeliefGradGating 单元 ======
+
+# ====== BeliefGradGating unit ======
 
 def test_grad_gating_detach_before_warmup():
     gating = BeliefGradGating(num_warmup_steps=5000)
-    c_hat = torch.tensor([0.5], requires_grad=True)
-    z_hat = torch.softmax(torch.randn(1, 3, 2, requires_grad=True), dim=-1)
-    c_out, z_out = gating.apply(c_hat, z_hat, step=1000)
-    assert c_out.requires_grad is False
-    assert z_out.requires_grad is False
+    g_hat = torch.softmax(torch.randn(1, _G, requires_grad=True), dim=-1)
+    g_out = gating.apply(g_hat, step=1000)
+    assert g_out.requires_grad is False
 
 
 def test_grad_gating_passthrough_after_warmup():
     gating = BeliefGradGating(num_warmup_steps=5000)
-    c_hat = torch.tensor([0.5], requires_grad=True)
-    z_hat = torch.softmax(torch.randn(1, 3, 2), dim=-1).requires_grad_(True)
-    c_out, z_out = gating.apply(c_hat, z_hat, step=10000)
-    assert c_out.requires_grad is True
-    assert z_out.requires_grad is True
+    g_hat = torch.softmax(torch.randn(1, _G), dim=-1).requires_grad_(True)
+    g_out = gating.apply(g_hat, step=10000)
+    assert g_out.requires_grad is True
 
 
 def test_grad_gating_boundary_step_eq_warmup():
     gating = BeliefGradGating(num_warmup_steps=5000)
-    c_hat = torch.tensor([0.5], requires_grad=True)
-    z_hat = torch.softmax(torch.randn(1, 3, 2), dim=-1).requires_grad_(True)
-    c_out, z_out = gating.apply(c_hat, z_hat, step=5000)
-    assert c_out.requires_grad is True
+    g_hat = torch.softmax(torch.randn(1, _G), dim=-1).requires_grad_(True)
+    g_out = gating.apply(g_hat, step=5000)
+    assert g_out.requires_grad is True
 
 
 def test_apply_ctx_detaches_only_belief_slice():
+    """v5 ctx_aug = [role (0:32) | belief (32:64)]."""
     gating = BeliefGradGating(num_warmup_steps=5000)
-    ctx = torch.randn(2, 80, requires_grad=True)
-    out = gating.apply_ctx(ctx, step=1000, belief_slice=(48, 80))
-    (out[..., :48].sum() + out[..., 48:].sum()).backward()
-    # c_ctx + role 段有梯度, belief 段被 detach (grad 仅来自前 48 维)
+    ctx = torch.randn(2, 64, requires_grad=True)
+    out = gating.apply_ctx(ctx, step=1000, belief_slice=(32, 64))
+    (out[..., :32].sum() + out[..., 32:].sum()).backward()
     assert ctx.grad is not None
-    assert ctx.grad[..., :48].abs().sum().item() > 0
-    assert ctx.grad[..., 48:80].abs().sum().item() == 0.0
+    assert ctx.grad[..., :32].abs().sum().item() > 0
+    assert ctx.grad[..., 32:64].abs().sum().item() == 0.0
 
 
 def test_apply_ctx_passthrough_after_warmup():
     gating = BeliefGradGating(num_warmup_steps=5000)
-    ctx = torch.randn(2, 80, requires_grad=True)
-    out = gating.apply_ctx(ctx, step=10000, belief_slice=(48, 80))
-    out[..., 48:].sum().backward()
-    assert ctx.grad[..., 48:80].abs().sum().item() > 0
+    ctx = torch.randn(2, 64, requires_grad=True)
+    out = gating.apply_ctx(ctx, step=10000, belief_slice=(32, 64))
+    out[..., 32:].sum().backward()
+    assert ctx.grad[..., 32:64].abs().sum().item() > 0
 
 
-# ====== HyperMuZeroModel 集成 ======
-
-@pytest.fixture
-def cfg_medium():
-    return V4Config.from_preset("medium")
-
+# ====== HyperMuZeroModel integration (v5 6-API) ======
 
 @pytest.fixture
-def model(cfg_medium):
-    return HyperMuZeroModel(cfg_medium)
+def cfg_duo():
+    return V4Config.from_preset("rel_duo")
+
+
+@pytest.fixture
+def model(cfg_duo):
+    return HyperMuZeroModel(cfg_duo)
+
+
+def _subjective_inputs(B, N, requires_grad=True):
+    row = (torch.rand(B, N - 1) * 2 - 1).requires_grad_(requires_grad)
+    g_hat = torch.softmax(torch.randn(B, _G), dim=-1)
+    if requires_grad:
+        g_hat = g_hat.clone().requires_grad_(True)
+    return row, g_hat
 
 
 def test_model_has_grad_gating(model):
-    assert hasattr(model, "grad_gating")
     assert isinstance(model.grad_gating, BeliefGradGating)
 
 
-def test_grad_gating_num_warmup_from_cfg(cfg_medium, model):
-    assert model.grad_gating.num_warmup_steps == cfg_medium.train.belief_grad_gating_steps
+def test_grad_gating_num_warmup_from_cfg(cfg_duo, model):
+    assert model.grad_gating.num_warmup_steps == cfg_duo.train.belief_grad_gating_steps
     assert model.grad_gating.num_warmup_steps == 5000
 
 
 def test_update_step_changes_internal_step(model):
-    model.update_step(0)
-    assert model._step == 0
-    model.update_step(1000)
-    assert model._step == 1000
-    model.update_step(10000)
-    assert model._step == 10000
+    for step in (0, 1000, 10000):
+        model.update_step(step)
+        assert model._step == step
 
 
-def test_pre_5k_belief_detached(model, cfg_medium):
-    model.update_step(1000)
-    B = 2
-    N = cfg_medium.env.N
-    obs_dim = model.rep_net.obs_dim
-
-    obs = torch.randn(B, N, obs_dim)
+def _reward_backward(model, cfg, row, g_hat):
+    B = row.shape[0]
+    N = cfg.env.N
+    obs = torch.randn(B, N, model.rep_net.obs_dim)
     s = model.encode(obs)
-    model.set_context_objective(torch.full((B,), 0.5))
-
-    c_hat = torch.rand(B, requires_grad=True)
-    z_hat = torch.softmax(torch.randn(B, N - 1, 2), dim=-1).requires_grad_(True)
-
-    for p in model.belief_net.parameters():
-        p.grad = None
-
-    model.set_context_subjective(0, torch.rand(B, 4), (c_hat, z_hat))
-
-    action = torch.zeros(B, N * cfg_medium.env.A)
+    model.set_context_subjective(0, row, g_hat)
+    action = torch.zeros(B, N * cfg.env.A)
     action[:, 0] = 1.0
     r = model.predict_reward(s, action)
     (r ** 2).sum().backward()
+
+
+def test_pre_5k_belief_detached(model, cfg_duo):
+    """Main-loss backprop never reaches BeliefNet during warmup."""
+    model.update_step(1000)
+    B, N = 2, cfg_duo.env.N
+    obs = torch.randn(B, N, model.rep_net.obs_dim)
+    prev_hidden = model.belief_net.init_hidden(B, N)
+    _, g_hat = model.belief_net.step(obs, prev_hidden)
+
+    for p in model.belief_net.parameters():
+        p.grad = None
+    _reward_backward(model, cfg_duo, torch.rand(B, N - 1), g_hat[:, 0])
 
     for name, p in model.belief_net.named_parameters():
         if p.grad is not None:
@@ -115,59 +117,31 @@ def test_pre_5k_belief_detached(model, cfg_medium):
             )
 
 
-def test_post_5k_belief_grad_flow(model, cfg_medium):
+def test_post_5k_belief_grad_flow(model, cfg_duo):
     model.update_step(10000)
-    B = 2
-    N = cfg_medium.env.N
-    obs_dim = model.rep_net.obs_dim
-
-    obs = torch.randn(B, N, obs_dim)
+    B, N = 2, cfg_duo.env.N
+    obs = torch.randn(B, N, model.rep_net.obs_dim)
     prev_hidden = model.belief_net.init_hidden(B, N)
-    _, c_hat, z_hat = model.belief_net.step(obs, prev_hidden)
-    c_hat_0 = c_hat[:, 0]
-    z_hat_0 = z_hat[:, 0]
+    _, g_hat = model.belief_net.step(obs, prev_hidden)
 
     for p in model.belief_net.parameters():
         p.grad = None
-
-    model.set_context_objective(torch.full((B,), 0.5))
-    model.set_context_subjective(0, torch.rand(B, 4), (c_hat_0, z_hat_0))
-
-    s = model.encode(obs)
-    action = torch.zeros(B, N * cfg_medium.env.A)
-    action[:, 0] = 1.0
-    r = model.predict_reward(s, action)
-    (r ** 2).sum().backward()
+    _reward_backward(model, cfg_duo, torch.rand(B, N - 1), g_hat[:, 0])
 
     has_grad = any(
         p.grad is not None and p.grad.abs().sum().item() > 0
         for p in model.belief_net.parameters()
     )
-    assert has_grad, "step=10000 时 BeliefNet 应有梯度 (grad gating 已关闭)"
+    assert has_grad, "step=10000: BeliefNet should receive main-loss gradient"
 
 
-def test_pre_5k_belief_encoder_also_detached(model, cfg_medium):
+def test_pre_5k_belief_encoder_also_detached(model, cfg_duo):
     model.update_step(1000)
-    B = 2
-    N = cfg_medium.env.N
-    obs_dim = model.rep_net.obs_dim
-    obs = torch.randn(B, N, obs_dim)
-
-    c_hat = torch.rand(B, requires_grad=True)
-    z_hat = torch.softmax(torch.randn(B, N - 1, 2), dim=-1).requires_grad_(True)
-
+    B, N = 2, cfg_duo.env.N
+    row, g_hat = _subjective_inputs(B, N)
     for p in model.tri_context_encoder.belief_encoder.parameters():
         p.grad = None
-
-    model.set_context_objective(torch.full((B,), 0.5))
-    model.set_context_subjective(0, torch.rand(B, 4), (c_hat, z_hat))
-
-    s = model.encode(obs)
-    action = torch.zeros(B, N * cfg_medium.env.A)
-    action[:, 0] = 1.0
-    r = model.predict_reward(s, action)
-    (r ** 2).sum().backward()
-
+    _reward_backward(model, cfg_duo, row, g_hat)
     for name, p in model.tri_context_encoder.belief_encoder.named_parameters():
         if p.grad is not None:
             assert p.grad.abs().sum().item() == 0.0, (
@@ -175,89 +149,50 @@ def test_pre_5k_belief_encoder_also_detached(model, cfg_medium):
             )
 
 
-def test_post_5k_belief_encoder_grad_flow(model, cfg_medium):
+def test_post_5k_belief_encoder_grad_flow(model, cfg_duo):
     model.update_step(10000)
-    B = 2
-    N = cfg_medium.env.N
-    obs_dim = model.rep_net.obs_dim
-    obs = torch.randn(B, N, obs_dim)
-
-    c_hat = torch.rand(B, requires_grad=True)
-    z_hat = torch.softmax(torch.randn(B, N - 1, 2), dim=-1).requires_grad_(True)
-
+    B, N = 2, cfg_duo.env.N
+    row, g_hat = _subjective_inputs(B, N)
     for p in model.tri_context_encoder.belief_encoder.parameters():
         p.grad = None
-
-    model.set_context_objective(torch.full((B,), 0.5))
-    model.set_context_subjective(0, torch.rand(B, 4), (c_hat, z_hat))
-
-    s = model.encode(obs)
-    action = torch.zeros(B, N * cfg_medium.env.A)
-    action[:, 0] = 1.0
-    r = model.predict_reward(s, action)
-    (r ** 2).sum().backward()
-
+    _reward_backward(model, cfg_duo, row, g_hat)
     has_grad = any(
         p.grad is not None and p.grad.abs().sum().item() > 0
         for p in model.tri_context_encoder.belief_encoder.parameters()
     )
-    assert has_grad, "step=10000 时 BeliefEncoder 应有梯度"
+    assert has_grad
 
 
-def test_l_belief_path_not_detached(model, cfg_medium):
+def test_l_belief_path_not_detached(model, cfg_duo):
+    """The independent L_belief path always reaches BeliefNet."""
     model.update_step(1000)
-    B = 2
-    N = cfg_medium.env.N
-    obs_dim = model.rep_net.obs_dim
-    obs = torch.randn(B, N, obs_dim)
-
+    B, N = 2, cfg_duo.env.N
+    obs = torch.randn(B, N, model.rep_net.obs_dim)
     for p in model.belief_net.parameters():
         p.grad = None
-
     prev_hidden = model.belief_net.init_hidden(B, N)
-    _, c_hat, z_hat = model.belief_net.step(obs, prev_hidden)
-
-    l_belief = (c_hat ** 2).sum() + (z_hat ** 2).sum()
-    l_belief.backward()
-
+    _, g_hat = model.belief_net.step(obs, prev_hidden)
+    (g_hat ** 2).sum().backward()
     has_grad = any(
         p.grad is not None and p.grad.abs().sum().item() > 0
         for p in model.belief_net.parameters()
     )
-    assert has_grad, "L_belief 路径应始终反向到 BeliefNet, 不受 grad gating 影响"
+    assert has_grad
 
 
-def test_c_ctx_role_path_grad_flows_during_gating(model, cfg_medium):
+def test_role_path_grad_flows_during_gating(model, cfg_duo):
+    """Gating detaches only the belief slice — the role path keeps training."""
     model.update_step(1000)
-    B = 2
-    N = cfg_medium.env.N
-    obs_dim = model.rep_net.obs_dim
-    obs = torch.randn(B, N, obs_dim)
-
-    c_hat = torch.rand(B, requires_grad=True)
-    z_hat = torch.softmax(torch.randn(B, N - 1, 2), dim=-1).requires_grad_(True)
-
-    for p in model.tri_context_encoder.c_encoder.parameters():
-        p.grad = None
+    B, N = 2, cfg_duo.env.N
+    row, g_hat = _subjective_inputs(B, N)
     for p in model.tri_context_encoder.role_encoder.parameters():
         p.grad = None
-
-    model.set_context_objective(torch.full((B,), 0.5))
-    model.set_context_subjective(0, torch.rand(B, 4), (c_hat, z_hat))
-
-    s = model.encode(obs)
-    action = torch.zeros(B, N * cfg_medium.env.A)
-    action[:, 0] = 1.0
-    r = model.predict_reward(s, action)
-    (r ** 2).sum().backward()
-
-    for sub_name, sub in [("CEncoder", model.tri_context_encoder.c_encoder),
-                          ("RoleEncoder", model.tri_context_encoder.role_encoder)]:
-        has_grad = any(
-            p.grad is not None and p.grad.abs().sum().item() > 0
-            for p in sub.parameters()
-        )
-        assert has_grad, f"{sub_name} 参数应有梯度 (gating active 时 c_ctx/role 路径未 detach)"
+    _reward_backward(model, cfg_duo, row, g_hat)
+    has_grad = any(
+        p.grad is not None and p.grad.abs().sum().item() > 0
+        for p in model.tri_context_encoder.role_encoder.parameters()
+    )
+    assert has_grad, "RoleEncoder must keep gradient while gating is active"
 
 
 if __name__ == "__main__":

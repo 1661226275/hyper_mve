@@ -1,4 +1,4 @@
-"""Unit tests for ``hyper_mve.schemas.buffer_record``."""
+"""Unit tests for ``hyper_mve.schemas.buffer_record`` (v5 TimeStepRecord)."""
 from __future__ import annotations
 
 import pickle
@@ -9,19 +9,19 @@ import pytest
 
 from hyper_mve.schemas import TimeStepRecord
 
+_G = 5  # |G| for the g2 family
 
-def _make_valid_record(N: int = 4, A: int = 6, obs_dim: int = 99, t: int = 0) -> TimeStepRecord:
+
+def _make_valid_record(N: int = 4, A: int = 6, obs_dim: int = 95, t: int = 0) -> TimeStepRecord:
     return TimeStepRecord(
         o=np.zeros((N, obs_dim), dtype=np.float32),
         a=np.zeros(N, dtype=np.int64),
         r=np.zeros(N, dtype=np.float32),
-        delta=np.zeros(N, dtype=np.float32),
         pi_mve=np.full((N, A), 1.0 / A, dtype=np.float32),
         v=np.zeros(N, dtype=np.float32),
-        tau=np.array([0, 0, 1, 1][:N], dtype=np.int8),
-        cap=np.zeros((N, 4), dtype=np.float32),
-        c_hat=np.full(N, 0.5, dtype=np.float32),
-        z_hat=np.full((N, N - 1, 2), 0.5, dtype=np.float32),
+        row=np.zeros((N, N - 1), dtype=np.float32),
+        g_hat=np.full((N, _G), 1.0 / _G, dtype=np.float32),
+        g=2,
         t=t,
         done=False,
     )
@@ -29,88 +29,88 @@ def _make_valid_record(N: int = 4, A: int = 6, obs_dim: int = 99, t: int = 0) ->
 
 def test_construct_valid():
     record = _make_valid_record()
-    assert record.o.shape == (4, 99)
-    assert record.tau.tolist() == [0, 0, 1, 1]
+    assert record.o.shape == (4, 95)
+    assert record.g == 2
+    assert record.row.shape == (4, 3)
 
 
 def test_n_dimension_mismatch():
     with pytest.raises(ValueError, match="N dimension mismatch"):
         TimeStepRecord(
-            o=np.zeros((4, 99), dtype=np.float32),
+            o=np.zeros((4, 95), dtype=np.float32),
             a=np.zeros(3, dtype=np.int64),       # WRONG: N=3 vs 4
             r=np.zeros(4, dtype=np.float32),
-            delta=np.zeros(4, dtype=np.float32),
             pi_mve=np.zeros((4, 6), dtype=np.float32),
             v=np.zeros(4, dtype=np.float32),
-            tau=np.zeros(4, dtype=np.int8),
-            cap=np.zeros((4, 4), dtype=np.float32),
-            c_hat=np.zeros(4, dtype=np.float32),
-            z_hat=np.zeros((4, 3, 2), dtype=np.float32),
+            row=np.zeros((4, 3), dtype=np.float32),
+            g_hat=np.zeros((4, _G), dtype=np.float32),
+            g=0,
             t=0,
         )
 
 
-def test_z_hat_dim_mismatch():
-    with pytest.raises(ValueError, match="z_hat dim 1"):
+def test_row_dim_mismatch():
+    with pytest.raises(ValueError, match="row dim 1"):
         TimeStepRecord(
-            o=np.zeros((4, 99), dtype=np.float32),
+            o=np.zeros((4, 95), dtype=np.float32),
             a=np.zeros(4, dtype=np.int64),
             r=np.zeros(4, dtype=np.float32),
-            delta=np.zeros(4, dtype=np.float32),
             pi_mve=np.zeros((4, 6), dtype=np.float32),
             v=np.zeros(4, dtype=np.float32),
-            tau=np.zeros(4, dtype=np.int8),
-            cap=np.zeros((4, 4), dtype=np.float32),
-            c_hat=np.zeros(4, dtype=np.float32),
-            z_hat=np.zeros((4, 4, 2), dtype=np.float32),  # WRONG: should be (4, 3, 2)
+            row=np.zeros((4, 4), dtype=np.float32),   # WRONG: should be (4, 3)
+            g_hat=np.zeros((4, _G), dtype=np.float32),
+            g=0,
             t=0,
         )
 
 
-def test_c_hat_is_scalar_per_agent():
-    """v4 (Ch4.2.3 Head 1): c_hat is (N,) scalar, not (N, d_c)."""
-    record = _make_valid_record()
-    assert record.c_hat.shape == (4,)
-    assert record.c_hat.dtype == np.float32
+def test_row_order_convention():
+    """For agent i, row[i, k] -> w_{i,j} with j = (k if k<i else k+1).
 
-
-def test_z_hat_order_convention():
-    """For agent i, z_hat[i, k] -> agent_id (k if k<i else k+1).
-
-    Mis-ordering silently corrupts L_opp CE loss (Ch4.5.2).
+    Must match the observation ``row`` block and ``Regime.row(i)`` —
+    mis-ordering silently corrupts the conditioning.
     """
-    N = 4
-    z_hat = np.zeros((N, N - 1, 2), dtype=np.float32)
-    for i in range(N):
-        for k in range(N - 1):
-            opp_id = k if k < i else k + 1
-            z_hat[i, k, 0] = (opp_id + 1) / 10.0
-            z_hat[i, k, 1] = 1.0 - z_hat[i, k, 0]
-    # agent 2 sees opponents [0, 1, 3] → probs [0.1, 0.2, 0.4]
-    assert np.isclose(z_hat[2, 0, 0], 0.1)
-    assert np.isclose(z_hat[2, 1, 0], 0.2)
-    assert np.isclose(z_hat[2, 2, 0], 0.4)
+    from hyper_mve.schemas import build_g2
+
+    fam = build_g2(1.0)
+    reg = fam.regimes[2]  # asym_exploit: W = [[1,-1],[1,1]]
+    rows = np.stack([reg.row(i) for i in range(2)])
+    record = TimeStepRecord(
+        o=np.zeros((2, 39), dtype=np.float32),
+        a=np.zeros(2, dtype=np.int64),
+        r=np.zeros(2, dtype=np.float32),
+        pi_mve=np.full((2, 6), 1.0 / 6, dtype=np.float32),
+        v=np.zeros(2, dtype=np.float32),
+        row=rows,
+        g_hat=np.full((2, _G), 1.0 / _G, dtype=np.float32),
+        g=2,
+        t=0,
+    )
+    assert record.row[0, 0] == -1.0   # w_01
+    assert record.row[1, 0] == 1.0    # w_10
 
 
 def test_to_from_arrays_roundtrip():
     record = _make_valid_record(t=42)
     arrays = record.to_arrays()
-    assert "o" in arrays and "tau" in arrays and "z_hat" in arrays
+    assert "o" in arrays and "row" in arrays and "g_hat" in arrays and "g" in arrays
 
     record2 = TimeStepRecord.from_arrays(arrays)
     assert record2.t == 42
+    assert record2.g == 2
     assert record2.done is False
     assert np.allclose(record.o, record2.o)
-    assert np.array_equal(record.tau, record2.tau)
-    assert np.allclose(record.z_hat, record2.z_hat)
+    assert np.array_equal(record.row, record2.row)
+    assert np.allclose(record.g_hat, record2.g_hat)
 
 
 def test_empty_belief_factory():
-    record = TimeStepRecord.empty_belief(N=4, A=6, obs_dim=99, t=5)
+    record = TimeStepRecord.empty_belief(N=4, A=6, obs_dim=95, n_regimes=_G, t=5)
     assert record.t == 5
     assert np.allclose(record.pi_mve, 1.0 / 6)
-    assert np.allclose(record.z_hat, 0.5)
-    assert record.c_hat.shape == (4,)
+    assert np.allclose(record.g_hat, 1.0 / _G)
+    assert record.row.shape == (4, 3)
+    assert record.g == 0
 
 
 def test_done_terminal():
@@ -131,15 +131,14 @@ def test_pickle_roundtrip():
     record = _make_valid_record(t=10)
     record2 = pickle.loads(pickle.dumps(record))
     assert record.t == record2.t
-    assert np.array_equal(record.tau, record2.tau)
+    assert np.array_equal(record.row, record2.row)
 
 
 def test_field_count():
-    """10 data fields + t + done (Ch5.6.1)."""
+    """7 data fields + g + t + done (v5)."""
     field_names = {f.name for f in fields(TimeStepRecord)}
     expected = {
-        "o", "a", "r", "delta", "pi_mve", "v",
-        "tau", "cap", "c_hat", "z_hat",
-        "t", "done",
+        "o", "a", "r", "pi_mve", "v", "row", "g_hat",
+        "g", "t", "done",
     }
     assert field_names == expected

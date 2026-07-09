@@ -1,7 +1,7 @@
 """Internal baseline variants (pkg-07 spec 03).
 
 5 model classes (input_wide, input_deep, ma_muzero, no_belief,
-rewardhead_explicit_type), all implementing the Pkg-04 spec 02 7-API +
+no_belief), all implementing the v5 6-API +
 stateful + Self-Info strict + BeliefGradGating contracts.
 """
 from __future__ import annotations
@@ -10,7 +10,6 @@ from .base import BaselineModel
 from .input_conditioned import InputDeepBaselineModel, InputWideBaselineModel
 from .ma_muzero import MAMuZeroBaselineModel
 from .no_belief import NoBeliefBaselineModel
-from .explicit_type_reward import ExplicitTypeRewardBaselineModel
 
 __all__ = [
     "BaselineModel",
@@ -18,5 +17,4 @@ __all__ = [
     "InputDeepBaselineModel",
     "MAMuZeroBaselineModel",
     "NoBeliefBaselineModel",
-    "ExplicitTypeRewardBaselineModel",
 ]

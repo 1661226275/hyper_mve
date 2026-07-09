@@ -1,4 +1,4 @@
-"""Per-Agent Coordinate Descent MVE Planner (v4.6 algorithm, v4 class API).
+"""Per-Agent Coordinate Descent MVE Planner (v4.6 algorithm, v5 API — Pkg-09).
 
 For each agent in randomised order (coordinate descent):
     1. Pre-sample other agents' step-0 actions once per scenario (CRN)
@@ -8,19 +8,24 @@ For each agent in randomised order (coordinate descent):
     5. Rollout K steps, accumulate agent j's discounted returns + terminal value
     6. pi_mve[j] = softmax(mean_return_per_action / temperature)
 
-v4.6 Common Random Numbers (CRN) — load-bearing (DESIGN_DOC §4.1 + §5.8): the other
-agents' step-0 actions are sampled ONCE per scenario and SHARED across all A
-candidate actions, cancelling the dominant noise source so the planner can detect
-the true per-action signal. **The 4-phase compute below is preserved verbatim.**
+v4.6 Common Random Numbers (CRN) — load-bearing: the other agents' step-0
+actions are sampled ONCE per scenario and SHARED across all A candidate
+actions, cancelling the dominant noise source so the planner can detect the
+true per-action signal. **The 4-phase compute below is preserved verbatim.**
 
-Pkg-05 spec 06 changes vs the v4.7 top-level function:
-    - wrapped in an ``MVEPlanner(cfg)`` class holding a persistent ``self.crn_rng``
-      (CRN seed persists across episodes; the worker holds one planner instance).
-    - ``sample_mve_plan`` takes explicit ``cap`` / ``belief`` dicts (D7) and ``c_t``.
-    - all stochasticity is driven by ``self.crn_rng`` (agent order) and a torch
-      Generator derived from it (action sampling), so resetting ``crn_rng`` exactly
-      reproduces the output (C5-P1 determinism).
-    - the v4.7 top-level ``sample_mve_plan`` function is removed (P1-3).
+v5 changes (Pkg-09):
+    - ``sample_mve_plan(model, root_s, row, belief)``: the ``cap`` dict becomes
+      the per-agent own-row dict ``{k: (B, N-1)}``; ``belief`` values are single
+      regime-posterior tensors ``(B, |G|)``; the ``c_t`` argument is gone.
+    - ``set_context_objective`` no longer exists: ``model.transition`` is a
+      plain shared module (batch-agnostic), so the objective θ-cache/install
+      machinery is deleted. The subjective θ-cache is retained verbatim.
+    - **p > 0 approximation (research point 2)**: within the imagined K-step
+      rollout the relationship regime is FROZEN at the current belief — the
+      world model does not simulate regime switches. Real-step belief updates
+      (worker) handle switches between plans. Under p = 0 (research point 1)
+      this is exact; under p > 0 it biases plans over horizons ≳ 1/p, which is
+      the documented trade-off (see sdd/pkg-09-dynamic-relations/design.md).
 """
 from __future__ import annotations
 
@@ -35,8 +40,8 @@ from hyper_mve.utils.utils import actions_to_one_hot, inverse_scalar_transform
 
 
 def _is_hyper_model(model) -> bool:
-    """v4 HyperMuZeroModel exposes set_context_objective (vs baseline get_id_emb)."""
-    return hasattr(model, "set_context_objective")
+    """v5 HyperMuZeroModel/BaselineModel expose set_context_subjective (vs legacy get_id_emb)."""
+    return hasattr(model, "set_context_subjective")
 
 
 def _expand_dim0(t, repeats):
@@ -46,21 +51,12 @@ def _expand_dim0(t, repeats):
     return t.repeat_interleave(repeats, dim=0)
 
 
-def _expand_belief(belief, repeats):
-    """Expand a belief tuple (c_hat, z_hat) along dim 0, or return None."""
-    if belief is None:
-        return None
-    c_hat, z_hat = belief
-    return (_expand_dim0(c_hat, repeats), _expand_dim0(z_hat, repeats))
-
-
-def _set_subjective(model, agent_idx, cap_b, belief_b):
-    """v4: set per-agent subjective context (assumes objective already set)."""
-    c_hat_b, z_hat_b = belief_b
+def _set_subjective(model, agent_idx, row_b, belief_b):
+    """v5: set per-agent subjective context (own row + regime posterior)."""
     model.set_context_subjective(
         agent_idx,
-        cap_b[:, agent_idx],                              # (batch, 4)
-        (c_hat_b[:, agent_idx], z_hat_b[:, agent_idx]),   # (batch,), (batch, N-1, 2)
+        row_b[:, agent_idx],                              # (batch, N-1)
+        belief_b[:, agent_idx],                           # (batch, |G|)
     )
 
 
@@ -70,7 +66,7 @@ def _multinomial_sample(probs, generator):
 
 
 class MVEPlanner:
-    """MVE planner — CRN + coordinate descent (Pkg-05 spec 06)."""
+    """MVE planner — CRN + coordinate descent (Pkg-05 spec 06, v5 API)."""
 
     def __init__(self, cfg: V4Config):
         self.cfg = cfg
@@ -90,7 +86,7 @@ class MVEPlanner:
         self.crn_rng = np.random.default_rng(seed=cfg.train.epsilon_decay_steps)
 
     def _sample_policy_action(self, model, curr_s, agent_idx, batch_size, device,
-                              is_hyper, cap_b, belief_b, generator, install_subj=None):
+                              is_hyper, row_b, belief_b, generator, install_subj=None):
         """Sample action for ``agent_idx`` from the model policy (deterministic).
 
         ``install_subj`` (θ-cache fast path): an optional ``(agent_idx, batch)``
@@ -102,7 +98,7 @@ class MVEPlanner:
             if install_subj is not None:
                 install_subj(agent_idx, batch_size)
             else:
-                _set_subjective(model, agent_idx, cap_b, belief_b)
+                _set_subjective(model, agent_idx, row_b, belief_b)
             logits_i, _ = model.predict(curr_s)
         else:
             id_i = torch.full((batch_size,), agent_idx, dtype=torch.long, device=device)
@@ -111,7 +107,7 @@ class MVEPlanner:
         return _multinomial_sample(F.softmax(logits_i, dim=-1), generator)
 
     @torch.no_grad()
-    def sample_mve_plan(self, model, root_s, cap: dict, belief: dict, c_t,
+    def sample_mve_plan(self, model, root_s, row: dict, belief: dict,
                         return_diagnostics: bool = False,
                         eval_use_crn: Optional[bool] = None,
                         eval_randomize_order: Optional[bool] = None):
@@ -120,52 +116,39 @@ class MVEPlanner:
         Args:
             model:  HyperMuZeroModel (or baseline via duck-typing).
             root_s: (B, latent_dim) current latent state.
-            cap:    {agent_id: (B, 4)} raw CapabilityVector per agent (D7).
-            belief: {agent_id: (c_hat (B,), z_hat (B, N-1, 2))} per agent (D7).
-            c_t:    (B,) shared context scalar.
+            row:    {agent_id: (B, N-1)} own relationship row per agent (D7;
+                    row-i-only-for-agent-i discipline upheld by the caller).
+            belief: {agent_id: (B, |G|)} regime posterior per agent (D7).
             return_diagnostics: if True, also return the per-agent per-action
-                expected returns and their normalised scores (cheap — all tensors
-                are already computed; default False keeps the (B, N, A) return for
-                the worker/tests).
-            eval_use_crn: pkg-08 spec 03 §4.2 — per-call override of
-                ``self.use_crn``. ``None`` (default) preserves training-time
-                behaviour; ``True`` / ``False`` flip the flag for this single
-                call. Used by the unified evaluator's 4-mode dispatch
-                (``planner_no_crn`` mode forces ``False``).
-            eval_randomize_order: pkg-08 spec 03 §4.2 — per-call override of
-                ``self.randomize_order``. Same semantics as
-                ``eval_use_crn``; the ``planner_no_coord_desc`` mode forces
-                ``False``.
+                expected returns and their normalised scores.
+            eval_use_crn / eval_randomize_order: pkg-08 spec 03 §4.2 per-call
+                overrides; ``None`` (default) preserves training-time flags.
 
         Returns:
             pi_mve: (B, N, A) per-agent search policy.
             If ``return_diagnostics``: ``(pi_mve, diag)`` with keys
-            ``returns_per_action`` (B, N, A) raw expected return per candidate
-            first-action (original reward scale); ``q_normalized`` (B, N, A) its
-            z-scored value; ``q_std`` (B, N) raw per-candidate return std (pre-floor);
-            ``q_gap`` (B, N) max-min spread of the candidate returns; and
-            ``uniform_frac`` scalar — fraction of (B, N) rows that fell below
-            ``mve_qstd_floor`` and were replaced by the uniform target [v4-opt 2026-06].
+            ``returns_per_action`` (B, N, A); ``q_normalized`` (B, N, A);
+            ``q_std`` (B, N) raw per-candidate return std (pre-floor);
+            ``q_gap`` (B, N); ``uniform_frac`` scalar [v4-opt 2026-06].
         """
         B = root_s.shape[0]
         N, A = self.N, self.A
         device = root_s.device
 
-        # --- D7 / R5-10: validate dict inputs (shape drift / type-leak guard) ---
+        # --- D7 / R5-10: validate dict inputs (shape drift / info-leak guard) ---
         for k in range(N):
-            assert k in cap and k in belief, f"cap/belief missing agent_id {k}"
-            assert cap[k].dim() == 2 and cap[k].shape[-1] == 4, (
-                f"cap[{k}].shape must be (B, 4), got {tuple(cap[k].shape)}"
+            assert k in row and k in belief, f"row/belief missing agent_id {k}"
+            assert row[k].dim() == 2 and row[k].shape[-1] == N - 1, (
+                f"row[{k}].shape must be (B, {N - 1}), got {tuple(row[k].shape)}"
             )
-            assert isinstance(belief[k], (tuple, list)) and len(belief[k]) == 2, (
-                f"belief[{k}] must be a 2-tuple (c_hat, z_hat)"
+            assert torch.is_tensor(belief[k]) and belief[k].dim() == 2, (
+                f"belief[{k}] must be a (B, |G|) tensor (v5), got "
+                f"{type(belief[k]).__name__}"
             )
 
         # --- pack dicts -> tensors for the (verbatim) CRN compute below ---
-        cap_t = torch.stack([cap[k] for k in range(N)], dim=1)                # (B, N, 4)
-        c_hat_t = torch.stack([belief[k][0] for k in range(N)], dim=1)        # (B, N)
-        z_hat_t = torch.stack([belief[k][1] for k in range(N)], dim=1)        # (B, N, N-1, 2)
-        belief_t = (c_hat_t, z_hat_t)
+        row_t = torch.stack([row[k] for k in range(N)], dim=1)            # (B, N, N-1)
+        belief_t = torch.stack([belief[k] for k in range(N)], dim=1)      # (B, N, |G|)
 
         K = self.mve_depth
         S = self.mve_samples
@@ -173,14 +156,12 @@ class MVEPlanner:
         temperature = self.mve_temperature
         is_hyper = _is_hyper_model(model)
 
-        # ── θ-cache fast path (numerically equivalent; HyperMuZeroModel only) ──
-        # Each agent's θ_rew^i / θ_pred^i depends only on (c_t, cap_i, belief_i)
-        # — all INVARIANT across the K rollout steps AND across every
-        # coordinate-descent iteration. θ_state depends only on c_t. Yet the
-        # baseline path regenerates them on every step at the expanded B*M batch
-        # (set_context_subjective inside _sample_policy_action / the reward+value
-        # calls). Here we generate them ONCE at base batch B and reuse the
-        # identical tensors, tiling by repeat_interleave to whatever batch each
+        # ── Subjective θ-cache fast path (numerically equivalent; HyperMuZeroModel only) ──
+        # Each agent's θ_rew^i / θ_pred^i depends only on (row_i, belief_i) — both
+        # INVARIANT across the K rollout steps AND across every coordinate-descent
+        # iteration. The baseline path regenerates them on every step at the
+        # expanded B*M batch. Here we generate them ONCE at base batch B and reuse
+        # the identical tensors, tiling by repeat_interleave to whatever batch each
         # call site needs.
         #
         # Equivalence: (1) functional nets are per-row (bmm + per-sample norm),
@@ -188,34 +169,17 @@ class MVEPlanner:
         # deterministic map in eval (no dropout / no RNG); (3) the planner's
         # batch growth is pure repeat_interleave (B -> B*spa -> B*M). It consumes
         # NO RNG, so ``gen`` / ``crn_rng`` draw in the same order → the same
-        # sampling decisions. The result is EXACT in real arithmetic and bit-
-        # identical on CPU. On CUDA the hypernet trunk GEMM now runs at batch B
-        # instead of B*M, so cuBLAS may pick a different kernel/reduction order —
-        # expect agreement to ~1e-6 rel (last few ULPs), far below the planner's
-        # own noise floor (z-score + mve_qstd_floor guard). The C5-P1 determinism
-        # test compares this path against ITSELF at fixed batch sizes, so it stays
-        # exactly reproducible. See docs/Chapter5_Planner_Training_v4.md.
-        # Gated on install_subjective_theta (unique to HyperMuZeroModel; the 5
-        # internal baselines also pass _is_hyper_model but lack the θ slots, so
-        # they fall through to the verbatim set_context_subjective path).
+        # sampling decisions. Bit-identical on CPU; ~1e-6 rel on CUDA (kernel
+        # selection), far below the planner's own noise floor.
+        # v5: transition is a plain shared module (batch-agnostic) — the v4
+        # objective θ-cache/install machinery no longer exists.
         theta_cache_on = is_hyper and hasattr(model, "install_subjective_theta")
-        cached_theta_state = None       # (B, trans_param_count)
-        cached_c_ctx = None             # (B, d_c)
         cached_subj: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}  # agent -> (θ_rew, θ_pred) @ B
         install_subj = None
         if theta_cache_on:
-            model.set_context_objective(c_t)                       # θ_state @ B
-            cached_theta_state, cached_c_ctx = model.current_objective_theta()
             for i in range(N):
-                _set_subjective(model, i, cap_t, belief_t)         # θ_rew^i/θ_pred^i @ B
+                _set_subjective(model, i, row_t, belief_t)         # θ_rew^i/θ_pred^i @ B
                 cached_subj[i] = model.current_subjective_thetas()
-
-            def _install_objective(repeats):
-                """Install θ_state tiled B -> B*repeats (== set_context_objective)."""
-                model.install_objective_theta(
-                    _expand_dim0(cached_theta_state, repeats),
-                    _expand_dim0(cached_c_ctx, repeats),
-                )
 
             def _install_subjective(agent_idx, batch):
                 """Install agent θ_rew/θ_pred tiled B -> batch (== set_context_subjective)."""
@@ -258,15 +222,10 @@ class MVEPlanner:
             s_scenarios = root_s.repeat_interleave(spa, dim=0)  # (B*spa, latent)
             B_spa = B * spa
             if is_hyper:
-                c_t_scenarios = _expand_dim0(c_t, spa)          # (B*spa,)
-                cap_scenarios = _expand_dim0(cap_t, spa)        # (B*spa, N, 4)
-                belief_scenarios = _expand_belief(belief_t, spa)
-                if theta_cache_on:
-                    _install_objective(spa)                     # theta_state for B_spa (cached)
-                else:
-                    model.set_context_objective(c_t_scenarios)  # theta_state for B_spa
+                row_scenarios = _expand_dim0(row_t, spa)        # (B*spa, N, N-1)
+                belief_scenarios = _expand_dim0(belief_t, spa)  # (B*spa, N, |G|)
             else:
-                c_t_scenarios = cap_scenarios = belief_scenarios = None
+                row_scenarios = belief_scenarios = None
 
             step0_actions_per_scenario = {}  # agent_i -> (B*spa,)
             for i in range(N):
@@ -278,22 +237,17 @@ class MVEPlanner:
                 else:
                     step0_actions_per_scenario[i] = self._sample_policy_action(
                         model, s_scenarios, i, B_spa, device, is_hyper,
-                        cap_scenarios, belief_scenarios, gen, install_subj=install_subj,
+                        row_scenarios, belief_scenarios, gen, install_subj=install_subj,
                     )
 
             # ── Phase 2: expand to (B*M,) = (B*spa*A,) — scenario outer, candidate inner
             s_exp = s_scenarios.repeat_interleave(A, dim=0)  # (B*M, latent)
             BM = B * M
             if is_hyper:
-                c_t_exp = _expand_dim0(c_t_scenarios, A)        # (B*M,)
-                cap_exp = _expand_dim0(cap_scenarios, A)        # (B*M, N, 4)
-                belief_exp = _expand_belief(belief_scenarios, A)
-                if theta_cache_on:
-                    _install_objective(M)                       # theta_state for B*M (cached)
-                else:
-                    model.set_context_objective(c_t_exp)        # theta_state for B*M
+                row_exp = _expand_dim0(row_scenarios, A)        # (B*M, N, N-1)
+                belief_exp = _expand_dim0(belief_scenarios, A)  # (B*M, N, |G|)
             else:
-                c_t_exp = cap_exp = belief_exp = None
+                row_exp = belief_exp = None
 
             cum_return_j = torch.zeros(BM, device=device)
             discount = 1.0
@@ -319,14 +273,14 @@ class MVEPlanner:
                         # step>0, or CRN disabled: independent sampling at BM granularity
                         a_i = self._sample_policy_action(
                             model, curr_s, i, BM, device, is_hyper,
-                            cap_exp, belief_exp, gen, install_subj=install_subj,
+                            row_exp, belief_exp, gen, install_subj=install_subj,
                         )
                     all_actions.append(a_i)
 
                 joint_actions = torch.stack(all_actions, dim=-1)        # (B*M, N)
                 action_onehot = actions_to_one_hot(joint_actions, A)    # (B*M, N*A)
 
-                # Objective state transition (theta_state set in Phase 2).
+                # Objective state transition (v5: plain shared module).
                 s_next = model.transition(curr_s, action_onehot)
 
                 # Subjective reward for agent j.
@@ -334,7 +288,7 @@ class MVEPlanner:
                     if theta_cache_on:
                         install_subj(j, BM)
                     else:
-                        _set_subjective(model, j, cap_exp, belief_exp)
+                        _set_subjective(model, j, row_exp, belief_exp)
                     r_j_scaled = model.predict_reward(curr_s, action_onehot)
                 else:
                     id_j = torch.full((BM,), j, dtype=torch.long, device=device)
@@ -352,7 +306,7 @@ class MVEPlanner:
                 if theta_cache_on:
                     install_subj(j, BM)
                 else:
-                    _set_subjective(model, j, cap_exp, belief_exp)
+                    _set_subjective(model, j, row_exp, belief_exp)
                 _, v_j_scaled = model.predict(curr_s)
             else:
                 id_j = torch.full((BM,), j, dtype=torch.long, device=device)

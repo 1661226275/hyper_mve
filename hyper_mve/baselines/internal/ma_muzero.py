@@ -27,9 +27,12 @@ class MAMuZeroBaselineModel(BaselineModel):
         latent_dim = cfg.model.latent_dim
         joint_action_dim = cfg.env.N * cfg.env.A
         hidden_dim = int(cfg.model.hidden_dim)
-        # id_onehot dim = N agents + 2 own-type bits.
-        self._id_dim = cfg.env.N + 2
-        in_trans = latent_dim + joint_action_dim + self._id_dim
+        # v5 conditioning = id_onehot ⊕ own row (N + N-1 dims). The failure
+        # mode is unchanged: the belief posterior never enters, so the shared
+        # RewardHead cannot adapt to the *hidden* part of the regime.
+        self._id_dim = cfg.env.N + (cfg.env.N - 1)
+        # v5: transition is objective and unconditioned.
+        in_trans = latent_dim + joint_action_dim
         in_reward = latent_dim + joint_action_dim + self._id_dim
         in_pred = latent_dim + self._id_dim
         self.trans_net = _mlp(in_trans, hidden_dim, latent_dim, n_layers=2)
@@ -51,39 +54,22 @@ class MAMuZeroBaselineModel(BaselineModel):
             )
         self.pred_net = _PredHead(in_pred, hidden_dim, cfg.env.A, n_layers=2)
         self._id_onehot: Optional[torch.Tensor] = None       # subjective (reward/pred)
-        self._id_onehot_obj: Optional[torch.Tensor] = None   # objective (transition)
 
-    def _build_conditioning_state(self, agent_id, cap_i, belief_gated):
+    def _build_conditioning_state(self, agent_id, row_i, belief_gated):
         # belief is consumed by grad_gating.apply_raw (already done in base.
-        # set_context_subjective) but NOT fed into id_onehot. ma_muzero's
-        # failure mode is "shared RewardHead learns avg gradient across α/β";
-        # belief flow is irrelevant to the conditioning.
+        # set_context_subjective) but NOT fed into the conditioning — ma_muzero's
+        # failure mode is "no inference over the hidden regime"; it only sees
+        # its own identity + own row (public Self-Info).
         del belief_gated  # intentionally unused
-        B = cap_i.shape[0]
-        device = cap_i.device
+        B = row_i.shape[0]
+        device = row_i.device
         n_agents = self.cfg.env.N
         agent_one_hot = torch.zeros((B, n_agents), dtype=torch.float32, device=device)
         agent_one_hot[:, int(agent_id)] = 1.0
-        # own_type derived from type_assignment (Self-Info strict; pkg-07
-        # spec 03 §5.3 — *not* from env.info["types"]).
-        own_type_idx = int(self.cfg.env.type_assignment[int(agent_id)].value)
-        type_one_hot = torch.zeros((B, 2), dtype=torch.float32, device=device)
-        type_one_hot[:, own_type_idx] = 1.0
-        self._id_onehot = torch.cat([agent_one_hot, type_one_hot], dim=-1)
-
-    def _build_objective_state(self, c_t):
-        # ma_muzero conditions only on agent identity (subjective) and has a
-        # shared/context-free world model — so the OBJECTIVE transition sees a
-        # zero id vector (no agent, no rule; ma_muzero's conditioning ignores
-        # c_t by design). Width = self._id_dim so trans_net's input is unchanged.
-        B = c_t.shape[0]
-        self._id_onehot_obj = torch.zeros(
-            (B, self._id_dim), dtype=torch.float32, device=c_t.device,
-        )
+        self._id_onehot = torch.cat([agent_one_hot, row_i.float()], dim=-1)
 
     def _apply_trans(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        idh = self._match_batch(self._id_onehot_obj, s)
-        return self.trans_net(torch.cat([s, action, idh], dim=-1))
+        return self.trans_net(torch.cat([s, action], dim=-1))
 
     def _apply_reward(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         idh = self._match_batch(self._id_onehot, s)

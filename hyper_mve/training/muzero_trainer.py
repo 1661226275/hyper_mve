@@ -4,10 +4,10 @@ Q2/D1: the v4.7 ``train_step`` + ``train_step_infer`` pair is merged into one
 ``train_step`` — BeliefNet (Pkg-03) replaces the v4.7 GRU rule inference, so
 "Oracle vs Infer" is no longer a model-class distinction but a curriculum stage.
 
-Per train_step (Pkg-04 spec 02 §2.3 order, enforced by compose_total_loss):
+Per train_step (v5 order, enforced by compose_total_loss):
     model.update_step(step) + target.update_step(step)      (C5-T1)
-    -> compose_total_loss: set_context_objective(c_t) once   (C5-T2)
-       then for k in range(N): set_context_subjective(...)    (C5-T3)
+    -> compose_total_loss: for k in range(N):
+       set_context_subjective(agent, row, g_main)            (C5-T3, v5)
     -> total.backward() -> clip -> optimizer.step()
     -> lr_scheduler.step() -> EMA target update
 

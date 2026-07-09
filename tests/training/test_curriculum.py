@@ -14,18 +14,18 @@ from hyper_mve.training.curriculum import CurriculumScheduler
 
 
 @pytest.fixture
-def cfg_medium():
-    return V4Config.from_preset("medium")
+def cfg_duo():
+    return V4Config.from_preset("rel_duo")
 
 
 @pytest.fixture
-def scheduler(cfg_medium):
-    return CurriculumScheduler(cfg_medium)
+def scheduler(cfg_duo):
+    return CurriculumScheduler(cfg_duo)
 
 
 def _bounds(s1_end, s2_end, max_steps):
     """A scheduler with directly-set bounds (bypasses TrainConfig 0<s1<s2<1)."""
-    sched = CurriculumScheduler(V4Config.from_preset("medium"))
+    sched = CurriculumScheduler(V4Config.from_preset("rel_duo"))
     sched.stage_1_end = s1_end
     sched.stage_2_end = s2_end
     sched.max_steps = max_steps
@@ -34,10 +34,10 @@ def _bounds(s1_end, s2_end, max_steps):
 
 # ====== C5-S1: stage boundaries ======
 
-def test_curriculum_stage_boundaries(scheduler, cfg_medium):
-    max_s = cfg_medium.train.max_train_steps
-    s1 = int(cfg_medium.train.curriculum_stage_1_end_frac * max_s)
-    s2 = int(cfg_medium.train.curriculum_stage_2_end_frac * max_s)
+def test_curriculum_stage_boundaries(scheduler, cfg_duo):
+    max_s = cfg_duo.train.max_train_steps
+    s1 = int(cfg_duo.train.curriculum_stage_1_end_frac * max_s)
+    s2 = int(cfg_duo.train.curriculum_stage_2_end_frac * max_s)
 
     assert scheduler.stage(0) == "stage_1"
     assert scheduler.stage(s1 - 1) == "stage_1"
@@ -49,57 +49,59 @@ def test_curriculum_stage_boundaries(scheduler, cfg_medium):
 
 # ====== C5-S2: Stage 1 full oracle ======
 
-def test_stage_1_full_oracle(scheduler, cfg_medium):
-    s1 = int(cfg_medium.train.curriculum_stage_1_end_frac * cfg_medium.train.max_train_steps)
+def test_stage_1_full_oracle(scheduler, cfg_duo):
+    s1 = int(cfg_duo.train.curriculum_stage_1_end_frac * cfg_duo.train.max_train_steps)
     for step in [0, 1000, s1 // 2, s1 - 1]:
-        assert scheduler.oracle_z_mixing_weight(step) == 1.0
+        assert scheduler.oracle_g_mixing_weight(step) == 1.0
 
 
 # ====== C5-S3: Stage 2 anneal monotone + continuous ======
 
-def test_oracle_mixing_anneal_monotonic(scheduler, cfg_medium):
-    max_s = cfg_medium.train.max_train_steps
-    s1 = int(cfg_medium.train.curriculum_stage_1_end_frac * max_s)
-    s2 = int(cfg_medium.train.curriculum_stage_2_end_frac * max_s)
+def test_oracle_mixing_anneal_monotonic(scheduler, cfg_duo):
+    max_s = cfg_duo.train.max_train_steps
+    s1 = int(cfg_duo.train.curriculum_stage_1_end_frac * max_s)
+    s2 = int(cfg_duo.train.curriculum_stage_2_end_frac * max_s)
     steps = list(range(s1, s2, max(1, (s2 - s1) // 10)))
-    weights = [scheduler.oracle_z_mixing_weight(s) for s in steps]
+    weights = [scheduler.oracle_g_mixing_weight(s) for s in steps]
     for w0, w1 in zip(weights[:-1], weights[1:]):
         assert w0 > w1
     assert weights[0] == 1.0
     assert weights[-1] < 0.15
 
 
-def test_oracle_mixing_anneal_continuous(scheduler, cfg_medium):
-    max_s = cfg_medium.train.max_train_steps
-    s1 = int(cfg_medium.train.curriculum_stage_1_end_frac * max_s)
-    s2 = int(cfg_medium.train.curriculum_stage_2_end_frac * max_s)
+def test_oracle_mixing_anneal_continuous(scheduler, cfg_duo):
+    max_s = cfg_duo.train.max_train_steps
+    s1 = int(cfg_duo.train.curriculum_stage_1_end_frac * max_s)
+    s2 = int(cfg_duo.train.curriculum_stage_2_end_frac * max_s)
     for step in range(s1, min(s1 + 100, s2)):
-        w_prev = scheduler.oracle_z_mixing_weight(step - 1)
-        w_curr = scheduler.oracle_z_mixing_weight(step)
+        w_prev = scheduler.oracle_g_mixing_weight(step - 1)
+        w_curr = scheduler.oracle_g_mixing_weight(step)
         assert abs(w_curr - w_prev) < 0.01
 
 
-def test_stage_3_zero_oracle(scheduler, cfg_medium):
-    s2 = int(cfg_medium.train.curriculum_stage_2_end_frac * cfg_medium.train.max_train_steps)
-    for step in [s2, s2 + 10_000, cfg_medium.train.max_train_steps]:
-        assert scheduler.oracle_z_mixing_weight(step) == 0.0
+def test_stage_3_zero_oracle(scheduler, cfg_duo):
+    s2 = int(cfg_duo.train.curriculum_stage_2_end_frac * cfg_duo.train.max_train_steps)
+    for step in [s2, s2 + 10_000, cfg_duo.train.max_train_steps]:
+        assert scheduler.oracle_g_mixing_weight(step) == 0.0
 
 
 # ====== C5-L1: lambda_b ======
 
-def test_lambda_b_curve_matches_cfg(scheduler, cfg_medium):
-    expected = cfg_medium.train.w_belief
+def test_lambda_b_curve_matches_cfg(scheduler, cfg_duo):
+    expected = cfg_duo.train.w_belief
     for step in [0, 50_000, 100_000, 150_000, 200_000]:
         assert scheduler.lambda_b(step) == expected
 
 
-# ====== build_oracle_z_seq pass-through ======
+# ====== build_oracle_g_seq wrapper (v5) ======
 
-def test_build_oracle_z_seq_passes_through(scheduler):
-    types_true = torch.tensor([[[0, 0, 1, 1]] * 5] * 2, dtype=torch.long)  # (2, 5, 4)
-    oracle_z = scheduler.build_oracle_z_seq(types_true)
-    assert oracle_z.shape == (2, 5, 4, 3, 2)
-    assert torch.allclose(oracle_z.sum(dim=-1), torch.ones_like(oracle_z[..., 0]))
+def test_build_oracle_g_seq_passes_through(scheduler):
+    g_true = torch.tensor([[0, 2, 4, 1, 3]] * 2, dtype=torch.long)   # (2, 5)
+    oracle_g = scheduler.build_oracle_g_seq(g_true)
+    assert oracle_g.shape == (2, 5, 2, 5)      # (B, T, N=2, |G|=5)
+    assert torch.allclose(oracle_g.sum(dim=-1), torch.ones_like(oracle_g[..., 0]))
+    # all agents share the regime one-hot
+    assert (oracle_g[0, 1, :, 2] == 1.0).all()
 
 
 # ====== D4: subclass override ======
@@ -109,7 +111,7 @@ def test_scheduler_subclass_override():
         def lambda_b(self, step):
             return {"stage_1": 0.5, "stage_2": 1.0, "stage_3": 1.5}[self.stage(step)]
 
-    cfg = V4Config.from_preset("medium")
+    cfg = V4Config.from_preset("rel_duo")
     sched = StageBasedLambda(cfg)
     s1 = int(cfg.train.curriculum_stage_1_end_frac * cfg.train.max_train_steps)
     s2 = int(cfg.train.curriculum_stage_2_end_frac * cfg.train.max_train_steps)
@@ -121,7 +123,7 @@ def test_scheduler_subclass_override():
 # ====== invalid boundaries rejected (TrainConfig validates on replace) ======
 
 def test_invalid_stage_boundaries():
-    cfg = V4Config.from_preset("medium")
+    cfg = V4Config.from_preset("rel_duo")
     with pytest.raises((AssertionError, ValueError)):
         cfg_bad = replace(cfg, train=replace(cfg.train,
             curriculum_stage_1_end_frac=0.7,
@@ -137,7 +139,7 @@ def test_oracle_only_bounds():
     sched = _bounds(max_s, max_s, max_s)  # oracle_only
     for step in [0, 50_000, max_s, max_s + 10_000]:
         assert sched.stage(step) == "stage_1"
-        assert sched.oracle_z_mixing_weight(step) == 1.0
+        assert sched.oracle_g_mixing_weight(step) == 1.0
 
 
 def test_infer_only_bounds():
@@ -145,14 +147,14 @@ def test_infer_only_bounds():
     sched = _bounds(0, 0, max_s)  # infer_only
     for step in [0, 50_000, max_s]:
         assert sched.stage(step) == "stage_3"
-        assert sched.oracle_z_mixing_weight(step) == 0.0
+        assert sched.oracle_g_mixing_weight(step) == 0.0
 
 
 def test_degenerate_stage_1_eq_stage_2():
     max_s = 200_000
     sched = _bounds(60_000, 60_000, max_s)
-    assert sched.oracle_z_mixing_weight(59_999) == 1.0
-    assert sched.oracle_z_mixing_weight(60_000) == 0.0
+    assert sched.oracle_g_mixing_weight(59_999) == 1.0
+    assert sched.oracle_g_mixing_weight(60_000) == 0.0
     assert sched.stage(60_000) == "stage_3"
 
 
@@ -162,7 +164,7 @@ def test_no_div_by_zero_anneal():
                    (max_s // 2, max_s), (60_000, 60_000), (0, max_s), (max_s // 2, max_s // 2)]:
         sched = _bounds(s1, s2, max_s)
         for step in [0, 50_000, 100_000, max_s]:
-            w = sched.oracle_z_mixing_weight(step)
+            w = sched.oracle_g_mixing_weight(step)
             assert 0.0 <= w <= 1.0
 
 

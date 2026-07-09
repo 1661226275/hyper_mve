@@ -1,13 +1,13 @@
-"""Regression: the 5 internal baselines survive the MVE planner's batch expansion.
+"""Regression: the internal baselines survive the MVE planner's batch expansion (v5).
 
 Root cause (Test-2 crash ``Sizes of tensors must match except in dimension 1.
 Expected size 96 but got size 16``): the planner grows the rollout batch by
 ``repeat_interleave`` from ``B_spa`` to ``B*M = B_spa * A`` *between*
 ``set_context_subjective`` (Phase-1 action sampling) and the Phase-3
 ``transition``, refreshing the subjective context only before reward/predict.
-``HyperMuZeroModel`` is immune (``set_context_objective`` regenerates
-``theta_state`` at the expanded batch); the baselines defer all conditioning to
-``set_context_subjective`` and so handed ``transition`` a stale-batch ctx/theta/
+``HyperMuZeroModel`` is immune (v5: transition is a plain batch-agnostic
+module); the baselines defer subjective conditioning to
+``set_context_subjective`` and so handed reward/predict a stale-batch ctx/theta/
 id tensor. ``BaselineModel._match_batch`` tiles the cached conditioning to the
 operand batch, fixing every input/theta/id-conditioned variant uniformly.
 
@@ -22,36 +22,36 @@ from hyper_mve.baselines.internal.base import BaselineModel
 from hyper_mve.configs import V4Config
 from hyper_mve.planning.mve_planner import MVEPlanner
 
-# The 5 internal factory args (pkg-07 spec 01 §2.1). All defer conditioning to
-# set_context_subjective, so all five hit the planner's transition-batch gap.
+# The 4 internal factory args (pkg-07 spec 01 §2.1, v5). All defer subjective
+# conditioning to set_context_subjective, so all hit the planner batch gap.
 _INTERNAL_VARIANTS = [
     "input_wide",
     "input_deep",
     "ma_muzero",
     "no_belief",
-    "rewardhead_explicit_type",
 ]
 
 
 @pytest.fixture(scope="module")
 def cfg():
-    # medium: N=4, A=6, mve_samples=50 -> spa=8, so the planner expands
+    # rel_duo: N=2, A=6, mve_samples=48 -> spa=8, so the planner expands
     # B_spa=B*8 to B*M=B*8*6 (factor A=6) — the exact ratio of the reported
     # crash (96/16=6).
-    return V4Config.from_preset("medium")
+    return V4Config.from_preset("rel_duo")
+
+
+_G = 5
 
 
 def _make_inputs(cfg, B=2, device="cpu"):
     N = cfg.env.N
     return {
         "root_s": torch.randn(B, cfg.model.latent_dim, device=device),
-        "cap": {k: torch.rand(B, 4, device=device) for k in range(N)},
+        "row": {k: torch.rand(B, N - 1, device=device) * 2 - 1 for k in range(N)},
         "belief": {
-            k: (torch.rand(B, device=device),
-                torch.softmax(torch.randn(B, N - 1, 2, device=device), dim=-1))
+            k: torch.softmax(torch.randn(B, _G, device=device), dim=-1)
             for k in range(N)
         },
-        "c_t": torch.full((B,), 0.5, device=device),
     }
 
 
@@ -76,20 +76,17 @@ def test_internal_baseline_survives_planner_batch_expansion(cfg, variant):
 
 @pytest.mark.parametrize("variant", _INTERNAL_VARIANTS)
 def test_transition_is_objective(cfg, variant):
-    """transition() must work after set_context_objective alone (no subjective).
+    """transition() must work with NO context call at all (v5: unconditioned).
 
-    The trainer (compose_total_loss) and planner both call transition once per
-    step BEFORE the per-agent set_context_subjective loop — transition is
-    objective (rule only), like HyperMuZeroModel's theta_state. Previously the
-    baselines asserted subjective context here and crashed in training.
+    The trainer (compose_total_loss) and planner both call transition before
+    any per-agent set_context_subjective — transition is objective physics.
     """
     model = create_baseline(cfg, variant)
     model.eval()
     B = 3
-    model.set_context_objective(torch.full((B,), 0.5))
     s = torch.randn(B, cfg.model.latent_dim)
     action = torch.zeros(B, cfg.env.N * cfg.env.A)
-    s_next = model.transition(s, action)  # must NOT raise (was AssertionError)
+    s_next = model.transition(s, action)  # must NOT raise
     assert s_next.shape == (B, cfg.model.latent_dim)
     assert torch.isfinite(s_next).all()
 

@@ -1,4 +1,4 @@
-"""Pkg-05 spec 06 acceptance: MVEPlanner (C5-P1 CRN determinism + C5-P2 migration)."""
+"""Pkg-05 spec 06 acceptance: MVEPlanner (C5-P1 CRN determinism, v5 API)."""
 import time
 from dataclasses import replace
 
@@ -9,6 +9,8 @@ import torch
 from hyper_mve.configs import V4Config
 from hyper_mve.models import HyperMuZeroModel
 from hyper_mve.planning.mve_planner import MVEPlanner
+
+_G = 5
 
 
 def _spy(monkeypatch, obj, name):
@@ -25,40 +27,40 @@ def _spy(monkeypatch, obj, name):
 
 
 @pytest.fixture
-def cfg_medium():
-    return V4Config.from_preset("medium")
+def cfg_duo():
+    cfg = V4Config.from_preset("rel_duo")
+    # small planner budget for CPU test speed
+    return replace(cfg, train=replace(cfg.train, mve_samples=12, mve_depth=2))
 
 
 @pytest.fixture
-def model(cfg_medium):
-    m = HyperMuZeroModel(cfg_medium)
+def model(cfg_duo):
+    m = HyperMuZeroModel(cfg_duo)
     m.eval()
     return m
 
 
 @pytest.fixture
-def planner(cfg_medium):
-    return MVEPlanner(cfg_medium)
+def planner(cfg_duo):
+    return MVEPlanner(cfg_duo)
 
 
 def _make_inputs(cfg, B=1, device="cpu"):
     N = cfg.env.N
     return {
         "root_s": torch.randn(B, cfg.model.latent_dim, device=device),
-        "cap": {k: torch.rand(B, 4, device=device) for k in range(N)},
+        "row": {k: torch.rand(B, N - 1, device=device) * 2 - 1 for k in range(N)},
         "belief": {
-            k: (torch.rand(B, device=device),
-                torch.softmax(torch.randn(B, N - 1, 2, device=device), dim=-1))
+            k: torch.softmax(torch.randn(B, _G, device=device), dim=-1)
             for k in range(N)
         },
-        "c_t": torch.full((B,), 0.5, device=device),
     }
 
 
 # ====== C5-P1: CRN determinism ======
 
-def test_crn_step0_deterministic_same_seed(planner, model, cfg_medium):
-    inputs = _make_inputs(cfg_medium)
+def test_crn_step0_deterministic_same_seed(planner, model, cfg_duo):
+    inputs = _make_inputs(cfg_duo)
     planner.crn_rng = np.random.default_rng(42)
     out1 = planner.sample_mve_plan(model, **inputs)
     planner.crn_rng = np.random.default_rng(42)
@@ -66,13 +68,10 @@ def test_crn_step0_deterministic_same_seed(planner, model, cfg_medium):
     assert torch.allclose(out1, out2, atol=1e-5)
 
 
-def test_crn_different_seed_different_output(cfg_medium, model):
-    # The default mve_qstd_floor noise guard collapses an untrained model's
-    # candidate-return std to ~0 → both seeds return the uniform fallback,
-    # which is identical regardless of CRN. Disable the guard for the
-    # determinism-vs-seed check; the noise guard itself is exercised
-    # elsewhere (worker.collect uniform_frac diagnostic).
-    cfg = replace(cfg_medium, train=replace(cfg_medium.train, mve_qstd_floor=0.0))
+def test_crn_different_seed_different_output(cfg_duo, model):
+    # Disable the qstd noise guard (an untrained model's flat candidate returns
+    # would collapse both seeds to the identical uniform fallback).
+    cfg = replace(cfg_duo, train=replace(cfg_duo.train, mve_qstd_floor=0.0))
     planner = MVEPlanner(cfg)
     inputs = _make_inputs(cfg)
     planner.crn_rng = np.random.default_rng(42)
@@ -82,54 +81,104 @@ def test_crn_different_seed_different_output(cfg_medium, model):
     assert not torch.allclose(out1, out2, atol=1e-3)
 
 
-# ====== C5-P2: 4 set_context call sites migrated to two-step API ======
+# ====== v5 API: subjective-only context calls ======
 
-def test_planner_4_set_context_migrated(planner, model, cfg_medium, monkeypatch):
-    obj_calls = _spy(monkeypatch, model, "set_context_objective")
+def test_planner_uses_subjective_context_only(planner, model, cfg_duo, monkeypatch):
     subj_calls = _spy(monkeypatch, model, "set_context_subjective")
-    planner.sample_mve_plan(model, **_make_inputs(cfg_medium))
-    assert len(obj_calls) >= 1
-    assert len(subj_calls) >= cfg_medium.env.N
+    planner.sample_mve_plan(model, **_make_inputs(cfg_duo))
+    # θ-cache path: one set_context_subjective per agent at base batch
+    assert len(subj_calls) >= cfg_duo.env.N
+    assert not hasattr(model, "set_context_objective")
 
 
-def test_planner_no_legacy_set_context(planner, model, cfg_medium, monkeypatch):
+def test_planner_no_legacy_set_context(planner, model, cfg_duo, monkeypatch):
     if hasattr(model, "set_context"):
         calls = _spy(monkeypatch, model, "set_context")
-        planner.sample_mve_plan(model, **_make_inputs(cfg_medium))
+        planner.sample_mve_plan(model, **_make_inputs(cfg_duo))
         assert len(calls) == 0
+
+
+# ====== θ-cache fast path ≡ slow path ======
+
+class _NoThetaCacheProxy:
+    """Duck-typed model view that hides install_subjective_theta, forcing the
+    planner onto the verbatim set_context_subjective slow path."""
+
+    def __init__(self, m):
+        object.__setattr__(self, "_m", m)
+
+    def __getattr__(self, name):
+        if name == "install_subjective_theta":
+            raise AttributeError(name)
+        return getattr(object.__getattribute__(self, "_m"), name)
+
+
+def test_theta_cache_matches_slow_path(cfg_duo, model):
+    cfg = replace(cfg_duo, train=replace(cfg_duo.train, mve_qstd_floor=0.0))
+    inputs = _make_inputs(cfg, B=2)
+
+    fast = MVEPlanner(cfg)
+    fast.crn_rng = np.random.default_rng(7)
+    out_fast = fast.sample_mve_plan(model, **inputs)
+
+    slow = MVEPlanner(cfg)
+    slow.crn_rng = np.random.default_rng(7)
+    out_slow = slow.sample_mve_plan(_NoThetaCacheProxy(model), **inputs)
+
+    # The two paths run the hypernet GEMMs at different batch sizes (B vs B*M),
+    # so MKL/cuBLAS blocking gives ~1e-4-level float drift which the z-score
+    # softmax amplifies slightly — equivalence is numerical, not bitwise.
+    assert torch.allclose(out_fast, out_slow, atol=5e-3)
+    assert (out_fast.argmax(-1) == out_slow.argmax(-1)).all()
 
 
 # ====== output shape ======
 
-def test_sample_mve_plan_output_shape(planner, model, cfg_medium):
+def test_sample_mve_plan_output_shape(planner, model, cfg_duo):
     B = 2
-    policies = planner.sample_mve_plan(model, **_make_inputs(cfg_medium, B=B))
-    assert policies.shape == (B, cfg_medium.env.N, cfg_medium.env.A)
+    policies = planner.sample_mve_plan(model, **_make_inputs(cfg_duo, B=B))
+    assert policies.shape == (B, cfg_duo.env.N, cfg_duo.env.A)
     assert torch.allclose(
-        policies.sum(dim=-1), torch.ones(B, cfg_medium.env.N), atol=1e-5,
+        policies.sum(dim=-1), torch.ones(B, cfg_duo.env.N), atol=1e-5,
     )
 
 
-# ====== R5-10: cap/belief shape guard ======
+def test_diagnostics_shapes(planner, model, cfg_duo):
+    B = 2
+    pi, diag = planner.sample_mve_plan(
+        model, **_make_inputs(cfg_duo, B=B), return_diagnostics=True)
+    N, A = cfg_duo.env.N, cfg_duo.env.A
+    assert diag["returns_per_action"].shape == (B, N, A)
+    assert diag["q_std"].shape == (B, N)
+    assert diag["q_gap"].shape == (B, N)
+    assert 0.0 <= float(diag["uniform_frac"]) <= 1.0
 
-def test_planner_cap_belief_shape(planner, model, cfg_medium):
-    inputs = _make_inputs(cfg_medium)
-    inputs["cap"][0] = torch.rand(1, 5)  # type-leak shape
+
+# ====== R5-10: row/belief shape guard ======
+
+def test_planner_row_belief_shape(planner, model, cfg_duo):
+    inputs = _make_inputs(cfg_duo)
+    inputs["row"][0] = torch.rand(1, cfg_duo.env.N)   # full-W info leak
     with pytest.raises((AssertionError, RuntimeError, ValueError)):
+        planner.sample_mve_plan(model, **inputs)
+
+    inputs = _make_inputs(cfg_duo)
+    inputs["belief"][0] = (torch.rand(1), torch.rand(1, 1, 2))   # v4 tuple form
+    with pytest.raises((AssertionError, RuntimeError, ValueError, TypeError)):
         planner.sample_mve_plan(model, **inputs)
 
 
 # ====== ablation switches (shape only; full ablation is Pkg-08) ======
 
-def test_use_crn_disabled(model, cfg_medium):
-    cfg = replace(cfg_medium, train=replace(cfg_medium.train, use_crn=False))
+def test_use_crn_disabled(model, cfg_duo):
+    cfg = replace(cfg_duo, train=replace(cfg_duo.train, use_crn=False))
     p = MVEPlanner(cfg)
     out = p.sample_mve_plan(model, **_make_inputs(cfg))
     assert out.shape == (1, cfg.env.N, cfg.env.A)
 
 
-def test_randomize_order_disabled(model, cfg_medium):
-    cfg = replace(cfg_medium, train=replace(cfg_medium.train, randomize_order=False))
+def test_randomize_order_disabled(model, cfg_duo):
+    cfg = replace(cfg_duo, train=replace(cfg_duo.train, randomize_order=False))
     p = MVEPlanner(cfg)
     out = p.sample_mve_plan(model, **_make_inputs(cfg))
     assert out.shape == (1, cfg.env.N, cfg.env.A)
@@ -138,12 +187,13 @@ def test_randomize_order_disabled(model, cfg_medium):
 # ====== performance ======
 
 @pytest.mark.gpu
-def test_sample_mve_plan_under_50ms(cfg_medium):
+def test_sample_mve_plan_under_300ms(cfg_duo):
     if not torch.cuda.is_available():
         pytest.skip("GPU required")
-    model = HyperMuZeroModel(cfg_medium).cuda().eval()
-    planner = MVEPlanner(cfg_medium)
-    inputs = _make_inputs(cfg_medium, device="cuda")
+    cfg = V4Config.from_preset("rel_duo")
+    model = HyperMuZeroModel(cfg).cuda().eval()
+    planner = MVEPlanner(cfg)
+    inputs = _make_inputs(cfg, device="cuda")
     for _ in range(5):
         planner.sample_mve_plan(model, **inputs)
     torch.cuda.synchronize()
@@ -154,8 +204,4 @@ def test_sample_mve_plan_under_50ms(cfg_medium):
         torch.cuda.synchronize()
         times.append((time.perf_counter() - t0) * 1000)
     mean_ms = sum(times) / len(times)
-    # NOTE: the SDD's 50 ms budget (spec 06 §5.3) assumes the chunked/small
-    # hypernet; the current vanilla hypernet is ~3x over the spec 07 §3.3 param
-    # budget (documented known gap), so the planner inherits that cost. Threshold
-    # relaxed to a regression guard until the hypernet is optimised.
-    assert mean_ms < 300.0, f"sample_mve_plan {mean_ms:.1f}ms (budget pending hypernet opt, spec 07 §3.3)"
+    assert mean_ms < 300.0, f"sample_mve_plan {mean_ms:.1f}ms (regression guard)"

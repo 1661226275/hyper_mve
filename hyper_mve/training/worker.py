@@ -1,26 +1,23 @@
-"""Worker — v4 episode collection (Pkg-05 spec 02, Ch5.6).
+"""Worker — v5 episode collection (Pkg-09; base: Pkg-05 spec 02).
 
-Rewrite of the v4.7 worker for the v4 stack:
-    - BeliefNet.step online inference (C5-W2) replaces v4.7 set_context_from_history.
-    - 7-API per-agent context (set_context_objective once + set_context_subjective
-      per agent), no model.update_step (C5-W1: worker is always no_grad inference).
-    - emits v4 TimeStepRecord (12 fields) + a parallel c_t scalar sequence.
-    - holds a single MVEPlanner instance so the CRN seed persists across episodes
-      (review 修订 5).
+v5 changes (relative to the v4 worker):
+    - BeliefNet.step returns (hidden, g_hat) — the |G|-way regime posterior.
+    - No ``set_context_objective`` (6-API v5): transition is a plain shared
+      module; the per-agent loop only calls ``set_context_subjective(k,
+      row_k, g_hat_k)``.
+    - Oracle discipline: ``info["rows"]`` is an Oracle field; the worker
+      applies **row-i-only-for-agent-i** — agent k's conditioning gets
+      ``rows[:, k]`` only (the same information its own observation carries).
+      ``info["g_true"]`` is consumed solely as the supervision label stored
+      in the record.
+    - emits v5 TimeStepRecords (o, a, r, pi_mve, v, row, g_hat, g).
 
-[v4-opt 2026-06] Vectorized collection (2agent run diagnosis): the MVE planner is
-already batched over B, but the old worker fed it B=1 — ~70 tiny GPU calls per env
-step, kernel-launch bound (measured 0.08 train-steps/s). ``collect_episodes`` now
-steps ``n_envs`` ResourceCommons environments in lockstep (the env never terminates
-before T_max, Pkg-02 spec 08) and runs the planner once per env-step with
-B=n_envs. ``collect_episode`` keeps the old single-env API by delegating with B=1.
-The batched path also powers deterministic evaluation (epsilon=0 + argmax actions)
-and surfaces per-episode returns + planner diagnostics (q_std / q_gap /
-uniform_frac) that were previously discarded.
-
-Self-Info strictness (C11): set_context_subjective only ever gets the RAW (B, 4)
-capability vector — never oracle types. Own type is resolved inside the model from
-cfg.env.type_assignment, not passed here.
+[v4-opt 2026-06] Vectorized collection retained: ``collect_episodes`` steps
+``n_envs`` RelationCommons environments in lockstep (the env never terminates
+before T_max) and runs the planner once per env-step with B=n_envs.
+``collect_episode`` keeps the single-env API by delegating with B=1. The
+batched path also powers deterministic evaluation (epsilon=0 + argmax
+actions) and surfaces per-episode returns + planner diagnostics.
 """
 from __future__ import annotations
 
@@ -39,15 +36,14 @@ from hyper_mve.utils.utils import inverse_scalar_transform
 
 @dataclass
 class CollectResult:
-    """One collected episode + the per-episode observability scalars [v4-opt 2026-06].
+    """One collected episode + per-episode observability scalars.
 
-    ``records`` / ``c_t_seq`` are exactly the two ``store_episode`` arguments; the
-    rest feed the ``collect/*`` TensorBoard family (returns) and the planner-target
-    health probes (q_std / q_gap / uniform_frac are NaN when the planner was off).
+    ``records`` is the ``store_episode`` argument; the rest feed the
+    ``collect/*`` TensorBoard family (returns) and the planner-target health
+    probes (q_std / q_gap / uniform_frac are NaN when the planner was off).
     """
 
     records: list[TimeStepRecord]
-    c_t_seq: torch.Tensor          # (T,) float32
     returns: np.ndarray            # (N,) per-agent undiscounted episode return (ΣR, subjective)
     pi_entropy_mean: float         # mean entropy of the stored pi_mve targets
     q_std_mean: float              # planner candidate-return std (raw, pre-floor)
@@ -55,14 +51,13 @@ class CollectResult:
     uniform_frac: float            # fraction of rows hit by the qstd noise guard
     # [2026-06 thesis welfare] per-agent cumulative PHYSICAL harvest Σ_t u_{i,t}
     # (from info['harvests']) and end-of-episode resource sustainability
-    # S = Σ_k q_{k,Tmax} / (K·Q_max). Optional/NaN defaults keep any other
-    # CollectResult construction valid; collect_episodes always populates them.
+    # S = Σ_k q_{k,Tmax} / (K·Q_max).
     phys_returns: Optional[np.ndarray] = None   # (N,) float32 — social-physical-welfare signal
     sustainability: float = float("nan")        # S ∈ [0, 1]; feeds fairness/tragedy too
 
 
 class Worker:
-    """Collects episodes into v4 TimeStepRecords (single-env or vectorized)."""
+    """Collects episodes into v5 TimeStepRecords (single-env or vectorized)."""
 
     def __init__(
         self,
@@ -75,7 +70,7 @@ class Worker:
         """Either ``env`` (single, legacy) or ``envs`` (vectorized) must be given.
 
         All envs must share ``cfg.env`` dimensions (N/A/T_max); they are stepped in
-        lockstep, which is safe because ResourceCommons only terminates at T_max.
+        lockstep, which is safe because RelationCommons only terminates at T_max.
         """
         self.cfg = cfg
         self.model = model
@@ -95,17 +90,16 @@ class Worker:
         self,
         epsilon: float = 0.1,
         use_planner: bool = True,
-    ) -> tuple[list[TimeStepRecord], torch.Tensor]:
-        """Collect a full episode on ``self.env`` (legacy B=1 API).
+    ) -> list[TimeStepRecord]:
+        """Collect a full episode on ``self.env`` (single-env API).
 
         Returns:
-            (records, c_t_seq): T TimeStepRecords and the parallel (T,) c_t series
-            (the second arg to ``EpisodeReplayBuffer.store_episode``).
+            records: T TimeStepRecords (the ``store_episode`` argument).
         """
         result = self.collect_episodes(
             n_envs=1, epsilon=epsilon, use_planner=use_planner,
         )[0]
-        return result.records, result.c_t_seq
+        return result.records
 
     @torch.no_grad()
     def collect_episodes(
@@ -123,21 +117,16 @@ class Worker:
         Args:
             n_envs: how many of ``self.envs`` to run (default: all).
             epsilon: ε-greedy mix-in (ignored when ``deterministic``).
-            use_planner: planner-on collection (Alg 5.2 a11-a14). With the planner
-                OFF the stored pi_mve is the model's own prior — a self-distillation
-                target; the caller must mark such episodes ``planner_on=False`` so
-                the policy loss can mask them (Ch5.9.1b).
+            use_planner: planner-on collection. With the planner OFF the stored
+                pi_mve is the model's own prior — a self-distillation target;
+                the caller must mark such episodes ``planner_on=False`` so the
+                policy loss can mask them (Ch5.9.1b).
             deterministic: evaluation mode — actions = argmax(pi_mve), no ε, no
                 sampling RNG consumed.
             reset_seeds / reset_options: optional per-env ``env.reset`` arguments
-                (evaluation uses them to pin seeds and force a static c).
+                (evaluation uses them to pin seeds and force a regime g).
             tiebreak_rng: optional reproducible RNG used to break argmax ties in
-                deterministic mode [v4-opt 2026-06b]. Without it, deterministic
-                actions on a uniform pi_mve (e.g. rows the noise guard fell back
-                to uniform) collapse to action 0 — which in ResourceCommons is
-                NOOP, masking the planner's true performance. With it, the choice
-                is uniform-random over the tied argmax set and still reproducible
-                across run_eval calls (same rng state → same picks).
+                deterministic mode [v4-opt 2026-06b].
 
         Returns:
             list of ``CollectResult``, one per env, in env order.
@@ -162,11 +151,10 @@ class Worker:
         prev_hidden = self.model.belief_net.init_hidden(B, N, device=device)
 
         records: list[list[TimeStepRecord]] = [[] for _ in range(B)]
-        c_t_lists: list[list[float]] = [[] for _ in range(B)]
         returns = np.zeros((B, N), dtype=np.float64)
         # [2026-06 thesis welfare] per-agent cumulative PHYSICAL harvest Σ_t u
         # (info['harvests'] is the public per-step harvest, untouched by the
-        # Fehr-Schmidt φ·ψ term that makes `returns` subjective).
+        # relational mixing that makes `returns` subjective).
         phys_returns = np.zeros((B, N), dtype=np.float64)
         ent_acc = torch.zeros(B, device=device)
         qstd_acc = torch.zeros(B, device=device)
@@ -179,31 +167,29 @@ class Worker:
             obs_t = torch.from_numpy(obs_np).to(device)
 
             # --- BeliefNet online inference (C5-W2) ---
-            prev_hidden, c_hat, z_hat = self.model.belief_net.step(obs_t, prev_hidden)
-            # c_hat (B, N), z_hat (B, N, N-1, 2)
+            prev_hidden, g_hat = self.model.belief_net.step(obs_t, prev_hidden)
+            # g_hat (B, N, |G|)
 
             s = self.model.encode(obs_t)                       # (B, latent_dim)
-            c_t_scalars = [float(info["c_true"]) for info in infos]
-            c_t_tensor = torch.tensor(c_t_scalars, dtype=torch.float32, device=device)
-            self.model.set_context_objective(c_t_tensor)
 
-            cap_np = np.stack([
-                np.stack([np.asarray(info["caps"][k].to_array(), dtype=np.float32)
-                          for k in range(N)], axis=0)
-                for info in infos
-            ], axis=0)                                          # (B, N, 4) RAW caps
-            cap_t = torch.from_numpy(cap_np).to(device)
+            # Oracle rows, row-i-only-for-agent-i discipline: agent k's
+            # conditioning receives rows[:, k] only.
+            rows_np = np.stack(
+                [np.asarray(info["rows"], dtype=np.float32) for info in infos],
+                axis=0,
+            )                                                   # (B, N, N-1)
+            rows_t = torch.from_numpy(rows_np).to(device)
 
-            cap_dict: dict[int, torch.Tensor] = {}
-            belief_dict: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+            row_dict: dict[int, torch.Tensor] = {}
+            belief_dict: dict[int, torch.Tensor] = {}
             value_estimates = torch.zeros(B, N, device=device)
             prior_pi = torch.zeros(B, N, A, device=device)
 
             for k in range(N):
-                cap_dict[k] = cap_t[:, k]                       # (B, 4) (no type leak)
-                belief_dict[k] = (c_hat[:, k], z_hat[:, k])
+                row_dict[k] = rows_t[:, k]                      # (B, N-1) own row only
+                belief_dict[k] = g_hat[:, k]                    # (B, |G|)
 
-                self.model.set_context_subjective(k, cap_dict[k], belief_dict[k])
+                self.model.set_context_subjective(k, row_dict[k], belief_dict[k])
                 logits_k, v_k = self.model.predict(s)
                 value_estimates[:, k] = inverse_scalar_transform(v_k).squeeze(-1)
                 if not use_planner:
@@ -211,7 +197,7 @@ class Worker:
 
             if use_planner:
                 pi_t, diag = self.planner.sample_mve_plan(
-                    self.model, s, cap_dict, belief_dict, c_t_tensor,
+                    self.model, s, row_dict, belief_dict,
                     return_diagnostics=True,
                 )                                               # (B, N, A)
                 qstd_acc += diag["q_std"].mean(dim=1)
@@ -225,16 +211,14 @@ class Worker:
 
             pi_np = pi_t.cpu().numpy().astype(np.float32)       # (B, N, A)
             v_np = value_estimates.cpu().numpy().astype(np.float32)
-            c_hat_np = c_hat.cpu().numpy().astype(np.float32)
-            z_hat_np = z_hat.cpu().numpy().astype(np.float32)
+            g_hat_np = g_hat.cpu().numpy().astype(np.float32)
 
             # --- action selection: argmax (eval) or epsilon-greedy (per env, agent) ---
             joint_actions = np.zeros((B, N), dtype=np.int64)
             if deterministic:
-                # Tie-broken argmax: deterministic with an explicit rng, plain argmax
-                # without. NOOP=action 0 in ResourceCommons, so a tied row (e.g. one
-                # the planner's noise guard set to uniform) would otherwise always
-                # pick 0 and trivially underestimate the planner [v4-opt 2026-06b].
+                # Tie-broken argmax [v4-opt 2026-06b]: NOOP=action 0, so a tied
+                # row (e.g. one the planner's noise guard set to uniform) would
+                # otherwise always pick 0 and underestimate the planner.
                 if tiebreak_rng is None:
                     joint_actions = pi_np.argmax(axis=-1)
                 else:
@@ -268,24 +252,21 @@ class Worker:
                     o=obs_np[b],
                     a=joint_actions[b],
                     r=reward,
-                    delta=np.asarray(next_info["deltas"], dtype=np.float32),
                     pi_mve=pi_np[b],
                     v=v_np[b],
-                    tau=np.asarray(infos[b]["types"], dtype=np.int8),
-                    cap=cap_np[b],
-                    c_hat=c_hat_np[b],
-                    z_hat=z_hat_np[b],
+                    row=rows_np[b],
+                    g_hat=g_hat_np[b],
+                    g=int(infos[b]["g_true"]),
                     t=t,
                     done=bool(done),
                 ))
-                c_t_lists[b].append(c_t_scalars[b])
 
                 obs_list[b] = np.asarray(next_obs, dtype=np.float32)
                 infos[b] = next_info
                 all_done = all_done and bool(done)
 
-            # Envs share T_max and never terminate early (Pkg-02 spec 08), so they
-            # finish together; the guard keeps the lockstep invariant explicit.
+            # Envs share T_max and never terminate early, so they finish
+            # together; the guard keeps the lockstep invariant explicit.
             if all_done:
                 break
 
@@ -316,7 +297,6 @@ class Worker:
         return [
             CollectResult(
                 records=records[b],
-                c_t_seq=torch.tensor(c_t_lists[b], dtype=torch.float32),
                 returns=returns[b].astype(np.float32),
                 pi_entropy_mean=float(ent_mean[b]),
                 q_std_mean=float(qstd_mean[b]),

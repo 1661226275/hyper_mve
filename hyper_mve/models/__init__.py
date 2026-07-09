@@ -1,11 +1,10 @@
-"""Pkg-03: TriContextEncoder + BeliefNet 公开 API.
+"""Pkg-03/04 公开 API (v5, Pkg-09 amendment).
 
-三路条件编码 (Ch4.2.4) + 信念推断网络 (Ch4.2.3 + 4.5). 供 Pkg-04 DualHyperNetwork
-v2 / Pkg-05 trainer/worker 消费.
+双路主观条件编码 (role + belief) + regime 信念推断网络 + 主观 hypernet +
+普通共享 TransitionNet. 供 Pkg-05 trainer/worker 消费.
 """
 from __future__ import annotations
 
-from hyper_mve.models.c_encoder import CEncoder
 from hyper_mve.models.role_encoder import RoleEncoder
 from hyper_mve.models.permutation_invariant_pool import (
     MeanPool,
@@ -14,25 +13,23 @@ from hyper_mve.models.permutation_invariant_pool import (
     make_pool,
 )
 from hyper_mve.models._belief_obs_encoder import BeliefObsEncoder
-from hyper_mve.models._belief_id_emb import BeliefIdEmbedding
 from hyper_mve.models.belief_net import BeliefNet
 from hyper_mve.models.belief_losses import (
-    l_c,
-    l_opp,
+    l_regime,
     l_div,
     belief_loss,
-    build_oracle_z_seq,
+    build_oracle_g_seq,
 )
 from hyper_mve.models.belief_encoder import BeliefEncoder
 from hyper_mve.models.tri_context_encoder import TriContextEncoder
 
-# Pkg-04: DualHyperNetwork v2 + HyperMuZeroModel + functional nets + RepNet + grad gating
+# Pkg-04: DualHyperNetwork + HyperMuZeroModel + functional nets + RepNet + grad gating
 from hyper_mve.models.hyper_network import DualHyperNetwork, HyperNetMLP, reward_diversity_loss
 from hyper_mve.models.functional_nets import (
-    FunctionalStateTransNet,
     FunctionalRewardHead,
     FunctionalPredictionNet,
 )
+from hyper_mve.models.transition_net import TransitionNet
 from hyper_mve.models.representation_net import (
     RepresentationNet,
     Projector,
@@ -44,7 +41,6 @@ from hyper_mve.models.hyper_muzero_model import HyperMuZeroModel
 
 __all__ = [
     # sub-encoders
-    "CEncoder",
     "RoleEncoder",
     "BeliefEncoder",
     "TriContextEncoder",
@@ -55,28 +51,26 @@ __all__ = [
     "make_pool",
     # belief net
     "BeliefObsEncoder",
-    "BeliefIdEmbedding",
     "BeliefNet",
-    # belief losses + oracle z
-    "l_c",
-    "l_opp",
+    # belief losses + oracle g
+    "l_regime",
     "l_div",
     "belief_loss",
-    "build_oracle_z_seq",
-    # Pkg-04: hypernet v2
+    "build_oracle_g_seq",
+    # hypernet (subjective)
     "DualHyperNetwork",
     "HyperNetMLP",
     "reward_diversity_loss",
-    # Pkg-04: functional nets
-    "FunctionalStateTransNet",
+    # functional nets (subjective) + plain transition
     "FunctionalRewardHead",
     "FunctionalPredictionNet",
-    # Pkg-04: representation net
+    "TransitionNet",
+    # representation net
     "RepresentationNet",
     "Projector",
     "cosine_similarity_loss",
     "negative_cosine_similarity",
-    # Pkg-04: grad gating + model
+    # grad gating + model
     "BeliefGradGating",
     "HyperMuZeroModel",
 ]

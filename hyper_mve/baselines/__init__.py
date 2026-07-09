@@ -1,4 +1,4 @@
-"""pkg-07 baseline package — factory + 11-key REGISTRY (5 internal + 6 external).
+"""pkg-07 baseline package — factory + 10-key REGISTRY (4 internal + 6 external).
 
 Public surface (pkg-07 spec 01 §3.2):
 
@@ -29,16 +29,13 @@ from typing import Callable, Mapping, Union
 
 from hyper_mve.configs import V4Config
 
-# Internal variants (5; pkg-07 spec 03).
+# Internal variants (4; pkg-07 spec 03, v5).
 from hyper_mve.baselines.internal.input_conditioned import (
     InputDeepBaselineModel,
     InputWideBaselineModel,
 )
 from hyper_mve.baselines.internal.ma_muzero import MAMuZeroBaselineModel
 from hyper_mve.baselines.internal.no_belief import NoBeliefBaselineModel
-from hyper_mve.baselines.internal.explicit_type_reward import (
-    ExplicitTypeRewardBaselineModel,
-)
 
 # External runners (6; pkg-07 spec 05 + 06).
 from hyper_mve.baselines.external.mappo import MAPPOAlgorithm
@@ -58,13 +55,13 @@ BaselineLike = Union[
 ]
 
 
-# Internal namespace: 5 keys (pkg-07 spec 01 §2.1).
+# Internal namespace: 4 keys (pkg-07 spec 01 §2.1; v5 deleted rewardhead_explicit_type
+# — discrete-type reward branching is meaningless under continuous relationship rows).
 INTERNAL_REGISTRY: Mapping[str, Callable[[V4Config], "BaselineModel"]] = MappingProxyType({
     "input_wide":                InputWideBaselineModel,
     "input_deep":                InputDeepBaselineModel,
     "ma_muzero":                 MAMuZeroBaselineModel,
     "no_belief":                 NoBeliefBaselineModel,
-    "rewardhead_explicit_type":  ExplicitTypeRewardBaselineModel,
 })
 
 # External namespace: 6 keys. ``MAMBAAlgorithm`` resolves to a stub (raises
@@ -96,14 +93,14 @@ _CLI_TO_FACTORY_INTERNAL_PREFIX: frozenset[str] = frozenset({
     "baseline_input_wide", "baseline_input_deep", "baseline_ma_muzero",
 })
 _CLI_BARE_INTERNAL: frozenset[str] = frozenset({
-    "no_belief", "rewardhead_explicit_type",
+    "no_belief",
 })
 
 # CLI strings recognised by ``train_main.py --variant`` (pkg-07 spec 01 §2.1).
 CLI_CHOICES: tuple[str, ...] = (
     "hyper", "oracle_only", "infer_only",
     "baseline_input_wide", "baseline_input_deep", "baseline_ma_muzero",
-    "no_belief", "rewardhead_explicit_type",
+    "no_belief",
     "external_mappo", "external_qmix", "external_ma_muzero_gh",
     "external_mamba", "external_marie", "external_ga",
 )
@@ -116,7 +113,7 @@ def cli_to_factory_arg(cli: str) -> str:
       - curriculum-override (``hyper`` / ``oracle_only`` / ``infer_only``):
         no factory; raises :class:`ValueError`.
       - internal-with-shared-backbone (``baseline_*``): strip the ``baseline_`` prefix.
-      - internal-ablation-only (``no_belief`` / ``rewardhead_explicit_type``):
+      - internal-ablation-only (``no_belief``):
         pass-through.
       - external (``external_*``): pass-through (preserves prefix for
         factory-side disambiguation).

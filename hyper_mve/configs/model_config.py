@@ -11,6 +11,7 @@ from hyper_mve.schemas._constants import (
     D_C_CTX,
     D_ID_EMB,
     D_ROLE,
+    D_ROW_EMB,
     D_TYPE_EMB,
 )
 
@@ -33,17 +34,21 @@ class ModelConfig:
     latent_dim: int = 64
     hidden_dim: int = 128
 
-    # Context-path dims (Ch4.2.4 hard constraints)
-    d_c: int = D_C_CTX
+    # Context-path dims (v5 Pkg-09 hard constraints: ctx_aug = role + belief = 64)
     d_role: int = D_ROLE
     d_belief: int = D_BELIEF
 
-    # role decomposition (Ch4.2.2)
+    # role decomposition (v5: id + own-row embedding)
     d_id_emb: int = D_ID_EMB
+    d_row_emb: int = D_ROW_EMB
+
+    # ------------------------------------------------------------------
+    # DEPRECATED v4 fields (unused since the v5 flip; kept only so legacy
+    # presets remain constructible until Stage-6 cleanup deletes both).
+    # ------------------------------------------------------------------
+    d_c: int = D_C_CTX
     d_type_emb: int = D_TYPE_EMB
     d_cap_emb: int = D_CAP_EMB
-
-    # belief decomposition (Ch4.2.3)
     d_belief_proj: int = D_BELIEF_PROJ
 
     # HyperNet (Ch4.6 stability)
@@ -51,9 +56,10 @@ class ModelConfig:
     hyper_rew_hidden_dims: tuple[int, ...] = (256, 256, 256)
 
     # output_scale initialisation (Ch4.6 defence line 1)
-    trans_output_scale_init: float = 0.01
-    rew_output_scale_init: float = 0.1     # v4.7-tuned; bigger than trans/pred
+    rew_output_scale_init: float = 0.1     # v4.7-tuned; bigger than pred
     pred_output_scale_init: float = 0.01
+    # DEPRECATED (v5: transition is a plain SGD module, no generated θ_state)
+    trans_output_scale_init: float = 0.01
 
     # HyperNet generation scope: "full" = generate every functional-net weight (legacy
     # default); "film_head" = shared SGD fc1/fc2 trunk + generate only FiLM gamma/beta +
@@ -97,18 +103,12 @@ class ModelConfig:
     proj_dim: int = 64
 
     def __post_init__(self) -> None:
-        expected_role = self.d_id_emb + self.d_type_emb + self.d_cap_emb
+        expected_role = self.d_id_emb + self.d_row_emb
         if expected_role != self.d_role:
             raise ValueError(
-                f"d_role mismatch: d_id({self.d_id_emb}) + d_type({self.d_type_emb}) "
-                f"+ d_cap({self.d_cap_emb}) = {expected_role}, but d_role={self.d_role}. "
-                "Ch4.2.2 requires exact fill, no padding."
-            )
-        if self.d_belief != 2 * self.d_belief_proj:
-            raise ValueError(
-                f"d_belief mismatch: 2 × d_belief_proj({self.d_belief_proj}) "
-                f"= {2 * self.d_belief_proj}, but d_belief={self.d_belief}. "
-                "Ch4.2.4 requires d_belief = 2 × d_belief_proj."
+                f"d_role mismatch: d_id({self.d_id_emb}) + d_row({self.d_row_emb}) "
+                f"= {expected_role}, but d_role={self.d_role}. "
+                "v5 (Pkg-09) requires exact fill, no padding."
             )
         if self.belief_pool not in _VALID_BELIEF_POOL:
             raise ValueError(
@@ -134,15 +134,14 @@ class ModelConfig:
         # 0.1) keeps it expressive (~0.028 at scale 0.1, r=8).
         if self.lora_fc2_rank and self.lora_fc2_rank > 0:
             assert all(s >= 0.05 for s in (
-                self.trans_output_scale_init,
                 self.rew_output_scale_init,
                 self.pred_output_scale_init,
             )), (
-                "lora_fc2 requires output_scale_init >= 0.05 on all three hypernets "
+                "lora_fc2 requires output_scale_init >= 0.05 on both subjective hypernets "
                 "(recommend 0.1) to keep Delta_W expressive."
             )
 
     @property
     def d_ctx_aug(self) -> int:
-        """Total conditioning vector dim (Ch4.2.4): ``d_c + d_role + d_belief``."""
-        return self.d_c + self.d_role + self.d_belief
+        """Total conditioning vector dim (v5 Pkg-09): ``d_role + d_belief`` = 64."""
+        return self.d_role + self.d_belief

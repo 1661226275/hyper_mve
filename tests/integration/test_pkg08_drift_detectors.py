@@ -64,8 +64,8 @@ def test_registry_keys_equal_cli_choices_minus_curriculum():
         f"CLI → factory drift: extra={resolved - set(REGISTRY)}, "
         f"missing={set(REGISTRY) - resolved}"
     )
-    assert len(REGISTRY) == 11
-    assert len(CLI_CHOICES) == 14
+    assert len(REGISTRY) == 10   # v5: rewardhead_explicit_type deleted (Pkg-09)
+    assert len(CLI_CHOICES) == 13
 
 
 def test_cli_to_factory_arg_total_over_non_curriculum_choices():

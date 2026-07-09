@@ -23,9 +23,14 @@ class EvalConfig:
     # deterministic (argmax, epsilon=0) episodes on static-c eval envs, per c value.
     # "prior" = planner OFF (the distilled policy pi_hat); "planner" = planner ON
     # (the true acting agent). The planner-prior return gap measures distillation.
-    eval_c_grid: tuple[float, ...] = (0.2, 0.5, 0.8)
+    eval_c_grid: tuple[float, ...] = (0.2, 0.5, 0.8)   # DEPRECATED (v5: per-regime eval)
     eval_episodes_prior: int = 4
     eval_episodes_planner: int = 2
+
+    # [v5 Pkg-09] per-regime eval grid: regime ids pinned via reset options
+    # {"g": gid}. None = every regime in the preset's family (including any
+    # train_regime_ids holdout — that IS the zero-shot probe).
+    eval_regime_grid: tuple[int, ...] | None = None
 
     # c-segment evaluation (Ch6.2.4)
     c_segments: tuple[tuple[float, float], ...] = (

@@ -108,7 +108,7 @@ def test_duo_basegen_preset():
     assert cfg.env.type_assignment == (AgentType.ALPHA, AgentType.BETA)
     assert cfg.env.c_mode == "random_walk"
     assert cfg.preset_name == "duo_basegen"
-    assert cfg.model.d_ctx_aug == 80
+    assert cfg.model.d_ctx_aug == 64   # v5: role + belief (c path removed)
 
     # base_gen + shared subjective trunk + companion knobs (Idea 1 + Idea 2).
     assert cfg.model.hyper_gen_scope == "base_gen"

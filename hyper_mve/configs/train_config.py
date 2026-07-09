@@ -57,11 +57,14 @@ class TrainConfig:
     w_consist: float = 0.5
     w_belief: float = 1.0
 
-    # BeliefNet sub-loss weights (Ch4.5)
-    w_belief_c: float = 1.0
-    w_belief_opp: float = 0.5
+    # BeliefNet sub-loss weights (v5 Pkg-09: L_regime CE + L_div hinge)
+    w_belief_regime: float = 1.0
     w_belief_div: float = 0.01
     belief_div_target_std: float = 0.1
+    # DEPRECATED v4 sub-loss weights (unused since the v5 flip; kept only so
+    # legacy presets remain constructible until Stage-6 cleanup).
+    w_belief_c: float = 1.0
+    w_belief_opp: float = 0.5
 
     # Curriculum boundaries (Ch5.7)
     curriculum_stage_1_end_frac: float = 0.3
@@ -110,7 +113,9 @@ class TrainConfig:
     # patch in mve_planner.py — pkg-08 spec 08 §5).
     mve_joint_enumerate: bool = False
 
-    # Type-stratified sampling (Ch5.6.5)
+    # Regime-stratified sampling (v5: buckets = episode initial regime g_0;
+    # the field name keeps its historical spelling — semantics are per-bucket
+    # minimum batch fraction).
     stratified_sampling: bool = True
     stratified_min_per_type_frac: float = 0.3
 

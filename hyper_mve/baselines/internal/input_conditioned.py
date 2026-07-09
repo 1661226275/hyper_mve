@@ -59,61 +59,31 @@ class _InputConditionedBase(BaselineModel):
         latent_dim = cfg.model.latent_dim
         joint_action_dim = cfg.env.N * cfg.env.A
         ctx_dim = cfg.model.d_ctx_aug
-        in_trans = latent_dim + joint_action_dim + ctx_dim
+        # v5: transition is objective and unconditioned (c_t removed) — no ctx
+        # concat on the transition input.
+        in_trans = latent_dim + joint_action_dim
         in_reward = latent_dim + joint_action_dim + ctx_dim
         in_pred = latent_dim + ctx_dim
         self.trans_net = _mlp(in_trans, self._hidden_dim, latent_dim, self._n_layers)
         self.reward_head = _mlp(in_reward, self._hidden_dim, 1, self._n_layers)
         self.pred_net = _PredHead(in_pred, self._hidden_dim, cfg.env.A, self._n_layers)
         self._ctx_aug: Optional[torch.Tensor] = None       # subjective (reward/pred)
-        self._ctx_aug_obj: Optional[torch.Tensor] = None   # objective (transition)
-        self._d_c: int = int(cfg.model.d_c)
 
-    def _build_conditioning_state(self, agent_id, cap_i, belief_gated):
+    def _build_conditioning_state(self, agent_id, row_i, belief_gated):
         # Build ctx_aug via TriContextEncoder's sub-encoders (single-agent path
-        # — same shape-circumvention HyperMuZeroModel uses; see model file
-        # lines 210-233). For the baseline-side this is a syntactic call: we
-        # accept that the encoder's sub-layer access surface may evolve, and
-        # we route through publicly stable hooks where possible.
+        # — same shape-circumvention HyperMuZeroModel uses).
         tce = self.tri_context_encoder
-        c_t = self._ctx_obj if self._ctx_obj is not None else torch.zeros(cap_i.shape[0], device=cap_i.device)
-        c_ctx = tce.forward_c_ctx_only(c_t)
-        B = cap_i.shape[0]
-        device = cap_i.device
+        B = row_i.shape[0]
+        device = row_i.device
         agent_ids_one = torch.full((B, 1), int(agent_id), dtype=torch.long, device=device)
-        own_type = torch.full(
-            (B, 1),
-            int(self.cfg.env.type_assignment[agent_id].value),
-            dtype=torch.long, device=device,
-        )
-        role = tce.role_encoder(agent_ids_one, own_type, cap_i.unsqueeze(1))
+        role = tce.role_encoder(agent_ids_one, row_i.unsqueeze(1))
         role = tce.ln_role(role).squeeze(1)
-        be = tce.belief_encoder
-        c_hat_g, z_hat_g = belief_gated
-        c_hat_proj = be.proj_c_hat(c_hat_g.reshape(B, 1, 1))
-        z_pooled = be.z_pool(z_hat_g.unsqueeze(1))
-        z_pooled_proj = be.proj_z_pooled(z_pooled)
-        belief_vec = torch.cat([c_hat_proj, z_pooled_proj], dim=-1)
+        belief_vec = tce.belief_encoder(belief_gated.unsqueeze(1))
         belief_vec = tce.ln_belief(belief_vec).squeeze(1)
-        self._ctx_aug = torch.cat([c_ctx, role, belief_vec], dim=-1)
-
-    def _build_objective_state(self, c_t):
-        # Objective transition conditioning: the same c_ctx slot the subjective
-        # ctx_aug carries, with the role + belief slots zeroed — transition is
-        # rule-only (role/belief are subjective and feed reward/pred). Width is
-        # d_ctx_aug so trans_net's input dim is unchanged.
-        tce = self.tri_context_encoder
-        c_ctx = tce.forward_c_ctx_only(c_t)                 # (B, d_c), already LN
-        B = c_ctx.shape[0]
-        pad = self.cfg.model.d_ctx_aug - self._d_c          # role + belief width
-        self._ctx_aug_obj = torch.cat(
-            [c_ctx, torch.zeros(B, pad, device=c_ctx.device, dtype=c_ctx.dtype)],
-            dim=-1,
-        )
+        self._ctx_aug = torch.cat([role, belief_vec], dim=-1)
 
     def _apply_trans(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        ctx = self._match_batch(self._ctx_aug_obj, s)
-        return self.trans_net(torch.cat([s, action, ctx], dim=-1))
+        return self.trans_net(torch.cat([s, action], dim=-1))
 
     def _apply_reward(self, s: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         ctx = self._match_batch(self._ctx_aug, s)

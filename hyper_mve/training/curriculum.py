@@ -10,7 +10,7 @@ Stage boundaries (default Medium, max_train_steps from cfg):
     Stage 2 (Anneal):         s1_end <= step < s2_end = frac2 * max_train_steps
     Stage 3 (Pure Inference): step >= s2_end
 
-The scheduler controls *oracle z injection* (``oracle_z_mixing_weight``) and the
+The scheduler controls *oracle g injection* (``oracle_g_mixing_weight``) and the
 L_belief course weight (``lambda_b``). It is the only object ``compose_total_loss``
 talks to for curriculum decisions, so Pkg-08 can subclass it without touching the
 loss code.
@@ -20,7 +20,8 @@ from __future__ import annotations
 import torch
 
 from hyper_mve.configs import V4Config
-from hyper_mve.models.belief_losses import build_oracle_z_seq as _build_oracle_z_seq
+from hyper_mve.models.belief_losses import build_oracle_g_seq as _build_oracle_g_seq
+from hyper_mve.schemas import get_regime_family
 
 
 class CurriculumScheduler:
@@ -59,12 +60,12 @@ class CurriculumScheduler:
 
     # ------------------------------------------------------ oracle injection
 
-    def oracle_z_mixing_weight(self, global_step: int) -> float:
-        """Oracle z injection weight in [0, 1].
+    def oracle_g_mixing_weight(self, global_step: int) -> float:
+        """Oracle g injection weight in [0, 1] (v5: regime posterior blend).
 
         Stage 1: 1.0 (full oracle).  Stage 2: linear anneal 1.0 -> 0.0.
         Stage 3: 0.0 (pure BeliefNet inference). The blend is applied by
-        ``compose_total_loss``: ``z_main = w * oracle_z + (1 - w) * z_predicted``.
+        ``compose_total_loss``: ``g_main = w * onehot(g) + (1 - w) * g_predicted``.
         """
         # Degenerate boundaries (guard against a zero-width anneal interval).
         if self.stage_1_end == self.max_steps:
@@ -93,17 +94,21 @@ class CurriculumScheduler:
         """
         return float(self.cfg.train.w_belief)
 
-    # --------------------------------------------------- oracle z construction
+    # --------------------------------------------------- oracle g construction
 
-    def build_oracle_z_seq(self, types_true: torch.Tensor) -> torch.Tensor:
-        """Pass-through wrapper of Pkg-03 ``build_oracle_z_seq`` (spec 08 §4.3).
+    def build_oracle_g_seq(self, g_true: torch.Tensor) -> torch.Tensor:
+        """Wrapper of Pkg-09 ``build_oracle_g_seq``.
 
         Args:
-            types_true: (B, T, N) int64 (AgentType.value).
+            g_true: (B, T) int64 oracle regime ids.
         Returns:
-            (B, T, N, N-1, 2) one-hot oracle z (agent_id ascending, skip self).
+            (B, T, N, |G|) one-hot oracle regime posterior.
         """
-        return _build_oracle_z_seq(types_true)
+        return _build_oracle_g_seq(
+            g_true,
+            N=self.cfg.env.N,
+            n_regimes=get_regime_family(self.cfg.env).size,
+        )
 
     # --------------------------------------------------------- serialization
 
