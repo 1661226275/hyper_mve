@@ -100,6 +100,88 @@ class ObservationLayout:
         raise RuntimeError("unreachable")
 
 
+class RelationObservationLayout:
+    """Five-block v5 observation layout (Pkg-09, ``envs.relation_commons``).
+
+    Differences from the v4 :class:`ObservationLayout`:
+
+    * no FOV — ``resource`` holds **all** K cells in index order (also makes
+      the block permutation-stable) and ``neighbor`` always sees all others
+      (``presence_flag`` kept ``= 1`` for slot-layout stability);
+    * ``global`` shrinks to 1 dim (``time_remaining_ratio``; c_t removed);
+    * ``capability`` + ``type`` blocks are replaced by ``row`` — the agent's
+      **own** relationship row ``w_i·`` (N-1 dims, ascending ``j`` skipping
+      self, same ordering as the ``neighbor`` block). Self-Info discipline:
+      others' rows are never observed, only inferred (BeliefNet).
+
+    Block order (fixed):
+        1. ``self``     — 4 dims (cum-harvest normalized by ``T_max·η``, η=1)
+        2. ``resource`` — K × 3 ``(rel_dx, rel_dy, q_norm)``
+        3. ``neighbor`` — (N-1) × 9 ``(rel_dx, rel_dy, action_onehot[6], presence)``
+        4. ``global``   — 1 dim ``(time_remaining_ratio,)``
+        5. ``row``      — (N-1) dims, own ``w_i·``
+    """
+
+    SELF_DIM: int = 4
+    RESOURCE_PER_ITEM: int = 3
+    NEIGHBOR_PER_ITEM: int = 9
+    GLOBAL_DIM: int = 1                 # (time_remaining_ratio,)
+    NEIGHBOR_ACTION_DIM: int = 6
+
+    BLOCK_ORDER: tuple[str, ...] = (
+        "self", "resource", "neighbor", "global", "row",
+    )
+
+    @staticmethod
+    def block_dim(block_name: str, N: int, K: int) -> int:
+        """Flattened dimension of a single block."""
+        if block_name == "self":
+            return RelationObservationLayout.SELF_DIM
+        if block_name == "resource":
+            return K * RelationObservationLayout.RESOURCE_PER_ITEM
+        if block_name == "neighbor":
+            return (N - 1) * RelationObservationLayout.NEIGHBOR_PER_ITEM
+        if block_name == "global":
+            return RelationObservationLayout.GLOBAL_DIM
+        if block_name == "row":
+            return N - 1
+        raise ValueError(f"Unknown block name: {block_name}")
+
+    @staticmethod
+    def total_dim(N: int, K: int) -> int:
+        """Total per-agent observation dim = 5 + 3K + 10(N-1).
+
+        Reference values:
+            rel_duo  (N=2, K=8):  4 + 24 + 9  + 1 + 1 = 39
+            rel_quad (N=4, K=20): 4 + 60 + 27 + 1 + 3 = 95
+        """
+        return sum(
+            RelationObservationLayout.block_dim(b, N, K)
+            for b in RelationObservationLayout.BLOCK_ORDER
+        )
+
+    @staticmethod
+    def block_offset(block_name: str, N: int, K: int) -> tuple[int, int]:
+        """``(start, end)`` indices of a block in the flattened observation."""
+        if block_name not in RelationObservationLayout.BLOCK_ORDER:
+            raise ValueError(f"Unknown block: {block_name}")
+        start = 0
+        for b in RelationObservationLayout.BLOCK_ORDER:
+            d = RelationObservationLayout.block_dim(b, N, K)
+            if b == block_name:
+                return (start, start + d)
+            start += d
+        raise RuntimeError("unreachable")
+
+
+def slice_relation_block(
+    obs: np.ndarray, block_name: str, N: int, K: int,
+) -> np.ndarray:
+    """Slice a single v5 block out of a flattened observation (debug / viz)."""
+    start, end = RelationObservationLayout.block_offset(block_name, N, K)
+    return obs[..., start:end]
+
+
 def pad_resource_block(
     visible: Iterable[tuple[float, float, float]],
     K: int,
