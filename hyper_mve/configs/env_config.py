@@ -20,6 +20,8 @@ from hyper_mve.schemas._constants import (
 
 
 _VALID_C_MODES: tuple[str, ...] = ("static", "oscillate", "random_walk")
+_VALID_RELATION_FAMILIES: tuple[str, ...] = ("g2", "g4", "g4_ext")
+_VALID_REGIME_KERNELS: tuple[str, ...] = ("uniform",)
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,20 @@ class EnvConfig:
     nu_range: tuple[float, float] = NU_RANGE
     zeta_range: tuple[float, float] = ZETA_RANGE
 
+    # ------------------------------------------------------------------
+    # v5 relationship regimes (Pkg-09, `schemas.relation`) — consumed only
+    # by `envs.relation_commons`; legacy ResourceCommons ignores them.
+    # Family↔N consistency is validated in `get_regime_family`, not here,
+    # so legacy presets (any N) stay constructible with these defaults.
+    # ------------------------------------------------------------------
+    relation_family: str = "g2"
+    relation_intensity: float = 1.0     # λ: ±λ off-diagonal weights
+    regime_prior: tuple[float, ...] | None = None   # ρ over full G (None = uniform)
+    regime_switch_prob: float = 0.0     # p: 0 = point 1 (episodic), >0 = point 2
+    regime_kernel: str = "uniform"      # κ
+    train_regime_ids: tuple[int, ...] | None = None  # holdout restriction at reset
+    alpha: float = 0.10                 # v5 constant regen rate (replaces α(c_t))
+
     def __post_init__(self) -> None:
         if len(self.type_assignment) != self.N:
             raise ValueError(
@@ -108,3 +124,35 @@ class EnvConfig:
             raise ValueError(
                 f"L({self.L}), K({self.K}), T_max({self.T_max}) must be positive"
             )
+        # v5 relationship-regime fields (Pkg-09)
+        if self.relation_family not in _VALID_RELATION_FAMILIES:
+            raise ValueError(
+                f"Unknown relation_family: {self.relation_family!r} "
+                f"(valid: {_VALID_RELATION_FAMILIES})"
+            )
+        if not (0.0 < self.relation_intensity <= 1.0):
+            raise ValueError(
+                f"relation_intensity={self.relation_intensity} ∉ (0, 1]"
+            )
+        if not (0.0 <= self.regime_switch_prob <= 1.0):
+            raise ValueError(
+                f"regime_switch_prob={self.regime_switch_prob} ∉ [0, 1]"
+            )
+        if self.regime_kernel not in _VALID_REGIME_KERNELS:
+            raise ValueError(
+                f"Unknown regime_kernel: {self.regime_kernel!r} "
+                f"(valid: {_VALID_REGIME_KERNELS})"
+            )
+        if self.regime_prior is not None:
+            if any(p < 0 for p in self.regime_prior):
+                raise ValueError(
+                    f"regime_prior has negative entries: {self.regime_prior}"
+                )
+            if abs(sum(self.regime_prior) - 1.0) > 1e-6:
+                raise ValueError(
+                    f"regime_prior must sum to 1, got {sum(self.regime_prior)}"
+                )
+        if self.train_regime_ids is not None and len(self.train_regime_ids) == 0:
+            raise ValueError("train_regime_ids must be None or non-empty")
+        if not (0.0 < self.alpha <= 1.0):
+            raise ValueError(f"alpha={self.alpha} ∉ (0, 1]")

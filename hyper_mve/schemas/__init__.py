@@ -32,9 +32,22 @@ from .context import ContextSchema
 from .observation import (
     ObservationBlockSpec,
     ObservationLayout,
+    RelationObservationLayout,
     pad_neighbor_block,
     pad_resource_block,
     slice_block,
+    slice_relation_block,
+)
+from .relation import (
+    Regime,
+    RegimeFamily,
+    build_g2,
+    build_g4,
+    build_g4_ext,
+    compute_relational_rewards,
+    get_regime_family,
+    sample_initial_regime,
+    step_regime,
 )
 
 __all__ = [
@@ -45,6 +58,18 @@ __all__ = [
     "ObservationBlockSpec",
     "ObservationLayout",
     "TimeStepRecord",
+    # v5 relationship regimes (Pkg-09)
+    "Regime",
+    "RegimeFamily",
+    "RelationObservationLayout",
+    "slice_relation_block",
+    "build_g2",
+    "build_g4",
+    "build_g4_ext",
+    "compute_relational_rewards",
+    "get_regime_family",
+    "sample_initial_regime",
+    "step_regime",
     # helpers
     "count_in_assignment",
     "from_index",

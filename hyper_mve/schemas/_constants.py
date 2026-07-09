@@ -66,6 +66,11 @@ D_BELIEF: int = 2 * D_BELIEF_PROJ   # = 32 (Ch4.2.4 d_b^{proj·2})
 D_CTX_AUG: int = D_C_CTX + D_ROLE + D_BELIEF        # = 80
 
 # ---------------------------------------------------------------------------
+# v5 architecture dimensions (Pkg-09) — role = Concat[id, row] after the flip
+# ---------------------------------------------------------------------------
+D_ROW_EMB: int = 24                 # own-row w_i· embedding; D_ID_EMB + D_ROW_EMB = 32
+
+# ---------------------------------------------------------------------------
 # AgentType enum values (kept here to avoid circular imports with schemas)
 # ---------------------------------------------------------------------------
 AGENT_TYPE_ALPHA: int = 0
