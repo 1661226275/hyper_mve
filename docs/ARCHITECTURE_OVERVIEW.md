@@ -302,8 +302,9 @@ L_total = L_main + λ_b·L_belief  →  一次 backward 同时反传 A、B 两�
 - **NashConv 依赖 BR 质量**：预算固定并随值报告；是下界不是点估计。
 - **研究点 2（p>0）**：env/kernel/config 从第一天就支持，但 planner 的 W-冻结近似、
   适应性/动态 regret 指标、切换检测评估都未建——留待研究点 1 结果落地后。
-- **Stage-6 清理未完成期间**：`envs/resource_commons/`、`schemas/{agent_type,capability}.py`
-  等 v4 遗留文件仍在树上但已无消费者，勿新增依赖（将整体删除）。
+- **v5 消融矩阵未定义**：v4 的 ablate.py 调度器（abl1/abl4/abl6/abl7）随
+  resource_commons 一并删除；v5 的消融（CRN×坐标下降、belief 门控、oracle 课程角点）
+  设计好后作为普通 suite cell 走 run_suite。
 - 旧 `runs/` 结果属于 v4 设计，与 v5 不可比（已接受）。
 
 ---
