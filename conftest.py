@@ -24,6 +24,10 @@ def pytest_configure(config):
         "markers",
         "slow: 20K env-step external baseline smoke gate; skipped unless --runslow",
     )
+    config.addinivalue_line(
+        "markers",
+        "gpu: exercises CUDA when available (still runs on CPU-only hosts)",
+    )
 
 
 def pytest_collection_modifyitems(config, items):

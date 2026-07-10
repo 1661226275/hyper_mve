@@ -61,16 +61,15 @@ PlannerMode = Literal[
     "planner_no_coord_desc",
     "planner_full",
 ]
-Preset = Literal["easy", "medium", "hard"]
+Preset = Literal["rel_duo", "rel_duo_holdout"]
 
 
 @dataclass(frozen=True)
 class SweepConfig:
     """Single source of truth for one sweep invocation (spec 05 §3.1).
 
-    Materialised either from a YAML at
-    ``hyper_mve/experiments/ablations/<id>.yaml`` (spec 06 dispatcher) or
-    constructed in-process (μP self-check, spec 04).
+    Materialised either from a suite-cell YAML (``experiments/suite/cells/``)
+    or constructed in-process (μP self-check, spec 04).
     """
 
     # === Cartesian axes (3) ===
@@ -79,7 +78,7 @@ class SweepConfig:
     overrides: tuple[Mapping[str, object], ...]
 
     # === Single-valued scalars (3) ===
-    preset: Preset = "medium"
+    preset: Preset = "rel_duo"
     max_steps: int = 200000
     eval_planner_mode: PlannerMode = "planner_full"
 

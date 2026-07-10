@@ -6,12 +6,6 @@
 from __future__ import annotations
 
 from hyper_mve.models.role_encoder import RoleEncoder
-from hyper_mve.models.permutation_invariant_pool import (
-    MeanPool,
-    MaxPool,
-    AttentionPool,
-    make_pool,
-)
 from hyper_mve.models._belief_obs_encoder import BeliefObsEncoder
 from hyper_mve.models.belief_net import BeliefNet
 from hyper_mve.models.belief_losses import (
@@ -44,11 +38,6 @@ __all__ = [
     "RoleEncoder",
     "BeliefEncoder",
     "TriContextEncoder",
-    # pooling
-    "MeanPool",
-    "MaxPool",
-    "AttentionPool",
-    "make_pool",
     # belief net
     "BeliefObsEncoder",
     "BeliefNet",

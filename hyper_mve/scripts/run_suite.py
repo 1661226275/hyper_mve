@@ -1,7 +1,7 @@
 """run_suite.py — unified launcher for the modular thesis experiment suite.
 
-One entry point over the declarative cells in ``experiments/suite/`` (+ the
-in-place ``experiments/ablations/``). Reuses ``run_sweep`` per cell with
+One entry point over the declarative cells in ``experiments/suite/``.
+Reuses ``run_sweep`` per cell with
 per-cell registry isolation, and supports **explicit selective re-run** down to
 a single ``(variant, seed)`` row.
 

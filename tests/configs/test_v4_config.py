@@ -1,4 +1,4 @@
-"""Unit tests for ``hyper_mve.configs.v4_config``."""
+"""Unit tests for ``hyper_mve.configs.v4_config`` (v5 Pkg-09)."""
 from __future__ import annotations
 
 import json
@@ -9,38 +9,37 @@ import pytest
 from hyper_mve.configs import ModelConfig, TrainConfig, V4Config
 
 
-def test_from_preset_medium():
-    cfg = V4Config.from_preset("medium")
-    assert cfg.env.N == 4
-    assert cfg.env.K == 20
-    assert cfg.env.T_max == 200
-    assert cfg.preset_name == "medium"
+def test_from_preset_rel_duo():
+    cfg = V4Config.from_preset("rel_duo")
+    assert cfg.env.N == 2
+    assert cfg.env.K == 8
+    assert cfg.env.T_max == 100
+    assert cfg.preset_name == "rel_duo"
 
 
 def test_from_preset_invalid():
     with pytest.raises(ValueError, match="Unknown preset"):
         V4Config.from_preset("ultra")
+    with pytest.raises(ValueError, match="Unknown preset"):
+        V4Config.from_preset("medium")   # v4 presets deleted in Stage 6
 
 
 def test_replace_propagation():
-    cfg = V4Config.from_preset("medium")
+    cfg = V4Config.from_preset("rel_duo")
     cfg_new = replace(cfg, train=replace(cfg.train, lr=3e-4))
     assert cfg.train.lr == 1e-4              # original unchanged
     assert cfg_new.train.lr == 3e-4
-    assert cfg_new.env.N == 4                # other fields preserved
+    assert cfg_new.env.N == 2                # other fields preserved
 
 
 def test_to_dict_json_serializable():
-    cfg = V4Config.from_preset("medium")
+    cfg = V4Config.from_preset("rel_duo")
     d = cfg.to_dict()
     s = json.dumps(d)
     assert len(s) > 500
-
-
-def test_type_assignment_serialised_as_int():
-    cfg = V4Config.from_preset("medium")
-    d = cfg.to_dict()
-    assert d["env"]["type_assignment"] == [0, 0, 1, 1]
+    # v5: relation fields serialise plainly; no AgentType coercion needed.
+    assert d["env"]["relation_family"] == "g2"
+    assert "type_assignment" not in d["env"]
 
 
 def test_train_config_curriculum_boundaries():
@@ -72,7 +71,16 @@ def test_model_config_total_ctx_aug():
     assert cfg.d_ctx_aug == 64
 
 
+def test_model_config_v4_fields_gone():
+    """Stage-6 lock: the deprecated v4 dims must not regrow."""
+    from dataclasses import fields
+    names = {f.name for f in fields(ModelConfig)}
+    for gone in ("d_c", "d_type_emb", "d_cap_emb", "d_belief_proj",
+                 "trans_output_scale_init"):
+        assert gone not in names, f"ModelConfig regrew v4 field {gone!r}"
+
+
 def test_v4_config_frozen():
-    cfg = V4Config.from_preset("medium")
+    cfg = V4Config.from_preset("rel_duo")
     with pytest.raises(Exception):
         cfg.preset_name = "tampered"  # type: ignore[misc]

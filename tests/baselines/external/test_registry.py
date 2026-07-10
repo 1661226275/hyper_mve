@@ -30,7 +30,7 @@ _TIER1_VARIANTS = [
 
 @pytest.mark.parametrize("variant,expected_cls", _TIER1_VARIANTS)
 def test_factory_dispatches_tier1(variant, expected_cls):
-    cfg = V4Config.from_preset("easy")
+    cfg = V4Config.from_preset("rel_duo")
     runner = create_baseline(cfg, variant)
     assert isinstance(runner, expected_cls), (
         f"create_baseline({variant!r}) returned {type(runner).__name__}, "
@@ -53,7 +53,7 @@ def test_tier1_train_signature_has_keyword_only_args(variant, _cls):
     """pkg-07 spec 05 §4.2 / spec 06 §2.3: ``train`` must have
     ``total_env_steps`` / ``lr`` / ``seed`` as keyword-only params."""
     import inspect
-    cfg = V4Config.from_preset("easy")
+    cfg = V4Config.from_preset("rel_duo")
     runner = create_baseline(cfg, variant)
     sig = inspect.signature(runner.train)
     for name in ("total_env_steps", "lr", "seed"):
@@ -65,7 +65,7 @@ def test_tier1_train_signature_has_keyword_only_args(variant, _cls):
 
 def test_param_count_method_present_on_tier1():
     """spec 06 §8.4 disclosure feed — every Tier-1 runner exposes ``param_count``."""
-    cfg = V4Config.from_preset("easy")
+    cfg = V4Config.from_preset("rel_duo")
     for variant, _ in _TIER1_VARIANTS:
         runner = create_baseline(cfg, variant)
         assert hasattr(runner, "param_count")

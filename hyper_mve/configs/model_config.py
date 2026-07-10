@@ -6,13 +6,9 @@ from typing import Optional
 
 from hyper_mve.schemas._constants import (
     D_BELIEF,
-    D_BELIEF_PROJ,
-    D_CAP_EMB,
-    D_C_CTX,
     D_ID_EMB,
     D_ROLE,
     D_ROW_EMB,
-    D_TYPE_EMB,
 )
 
 
@@ -42,15 +38,6 @@ class ModelConfig:
     d_id_emb: int = D_ID_EMB
     d_row_emb: int = D_ROW_EMB
 
-    # ------------------------------------------------------------------
-    # DEPRECATED v4 fields (unused since the v5 flip; kept only so legacy
-    # presets remain constructible until Stage-6 cleanup deletes both).
-    # ------------------------------------------------------------------
-    d_c: int = D_C_CTX
-    d_type_emb: int = D_TYPE_EMB
-    d_cap_emb: int = D_CAP_EMB
-    d_belief_proj: int = D_BELIEF_PROJ
-
     # HyperNet (Ch4.6 stability)
     hyper_hidden_dims: tuple[int, ...] = (256, 256)
     hyper_rew_hidden_dims: tuple[int, ...] = (256, 256, 256)
@@ -58,8 +45,6 @@ class ModelConfig:
     # output_scale initialisation (Ch4.6 defence line 1)
     rew_output_scale_init: float = 0.1     # v4.7-tuned; bigger than pred
     pred_output_scale_init: float = 0.01
-    # DEPRECATED (v5: transition is a plain SGD module, no generated θ_state)
-    trans_output_scale_init: float = 0.01
 
     # HyperNet generation scope: "full" = generate every functional-net weight (legacy
     # default); "film_head" = shared SGD fc1/fc2 trunk + generate only FiLM gamma/beta +

@@ -10,8 +10,8 @@ no_renderer).
         --suite-root runs/suite --out results
 
 Renderers degrade gracefully: a deliverable whose cell hasn't run yet is
-``no_data``; blocked ones (Table 6.3, Fig 6.7) emit a placeholder + TODO. Figure
-renderers need matplotlib; without it they report ``error`` but tables still render.
+``no_data``. Figure renderers need matplotlib; without it they report
+``error`` but tables still render.
 """
 from __future__ import annotations
 

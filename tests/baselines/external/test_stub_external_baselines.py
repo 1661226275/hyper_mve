@@ -19,7 +19,7 @@ _STUB_VARIANTS = ("external_marie", "external_ga") + \
 @pytest.mark.parametrize("variant", _STUB_VARIANTS)
 def test_stub_baselines_raise_notimplementederror_at_init(variant):
     """The factory itself does NOT raise; the stub class's __init__ does."""
-    cfg = V4Config.from_preset("easy")
+    cfg = V4Config.from_preset("rel_duo")
     with pytest.raises(NotImplementedError):
         create_baseline(cfg, variant)
 

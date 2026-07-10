@@ -1,20 +1,26 @@
 """analyze_results.py — generic results analysis for the experiment suite.
 
-Three modes (mutually exclusive):
+Four modes (mutually exclusive):
 
     # 1. method comparison from a sweep cell's registry (Welch-t + Holm-Bonferroni
     #    table + bar/errorbar plot + per-variant CSVs the `compare` CLI can reuse)
     python hyper_mve/scripts/analyze_results.py --compare \
-        --registry runs/fast_300k/registry.jsonl --metric return_mean \
+        --registry runs/suite/rel_gate_duo/registry.jsonl --metric return_mean \
         --reference hyper --out runs/_analysis
 
-    # 2. TB-only runs (e.g. runs/lora_sweep): tabulate the last value of a scalar
+    # 2. TB-only runs: tabulate the last value of a scalar
     python hyper_mve/scripts/analyze_results.py --tb \
-        --tb-root runs/lora_sweep --tag eval/planner/return_total --out runs/_analysis
+        --tb-root runs/rel_duo_hyper --tag eval/planner/return_total --out runs/_analysis
 
     # 3. external-runner disclosure table from a registry
     python hyper_mve/scripts/analyze_results.py --disclose \
-        --registry runs/fast_300k/registry.jsonl --preset medium --out runs/_analysis
+        --registry runs/suite/rel_gate_duo/registry.jsonl --preset rel_duo --out runs/_analysis
+
+    # 4. game-theory metrics table from eval_game_metrics.py JSON outputs
+    #    (NashConv per regime + empirical PoA; v5 Pkg-09)
+    python hyper_mve/scripts/analyze_results.py --game-metrics \
+        runs/rel_duo_hyper/game_metrics.json runs/rel_duo_mappo/game_metrics.json \
+        --out runs/_analysis
 
 Reuses ``experiments.stats`` (Welch-t / Holm-Bonferroni / disclosure),
 ``experiments.compare.render_plot`` (Agg bar chart), and
@@ -51,6 +57,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                       help="Tabulate a TB scalar across TB-only runs.")
     mode.add_argument("--disclose", action="store_true",
                       help="External-runner disclosure table from a registry.")
+    mode.add_argument("--game-metrics", dest="game_metrics", nargs="+",
+                      type=pathlib.Path, default=None, metavar="JSON",
+                      help="Render a NashConv + PoA table from eval_game_metrics.py "
+                           "JSON output(s).")
     # --compare / --disclose
     p.add_argument("--registry", type=pathlib.Path, default=None,
                    help="Path to a cell's registry.jsonl (compare/disclose).")
@@ -59,7 +69,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     p.add_argument("--reference", default="hyper",
                    help="Reference method for pairwise tests (default hyper); "
                         "use '' / 'none' for all-pairs.")
-    p.add_argument("--preset", choices=("easy", "medium", "hard"), default=None,
+    p.add_argument("--preset", choices=("rel_duo", "rel_duo_holdout"), default=None,
                    help="Restrict disclosure table to one preset.")
     # --tb
     p.add_argument("--tb-root", dest="tb_root", type=pathlib.Path, default=None,
@@ -178,6 +188,58 @@ def _run_disclose(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_game_metrics(args: argparse.Namespace) -> int:
+    """Tabulate one or more ``eval_game_metrics.py`` JSON outputs (v5 Pkg-09).
+
+    One row per (checkpoint, regime): NashConv (lower-bound exploitability),
+    physical welfare, efficiency vs the coop reference (empirical PoA).
+    """
+    import json
+
+    reports = []
+    for p in args.game_metrics:
+        try:
+            body = json.loads(pathlib.Path(p).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"[game-metrics] skipping {p}: {e}", file=sys.stderr)
+            continue
+        if body.get("schema_version") != "game-metrics-v1":
+            print(f"[game-metrics] {p}: unexpected schema "
+                  f"{body.get('schema_version')!r} (want game-metrics-v1)", file=sys.stderr)
+        reports.append((pathlib.Path(p), body))
+    if not reports:
+        raise SystemExit("[game-metrics] no readable game-metrics JSON")
+
+    lines = ["# Game-theory metrics (NashConv + empirical PoA)", "",
+             "| variant | checkpoint | regime | NashConv ↓ | W_phys | Eff(g)=W/Ŵ* |",
+             "|---|---|---|---|---|---|"]
+    for path, body in reports:
+        variant = body.get("variant", "?")
+        ckpt = pathlib.Path(str(body.get("checkpoint", path))).name
+        nashconv = body.get("nashconv") or {}
+        welfare = body.get("welfare_physical") or {}
+        eff = body.get("efficiency") or {}
+        for g in sorted(nashconv, key=lambda s: int(s)):
+            nc = f"{float(nashconv[g]):.3f}"
+            w = f"{float(welfare[g]):.3f}" if g in welfare else "—"
+            e = f"{float(eff[g]):.3f}" if g in eff else "—"
+            lines.append(f"| {variant} | {ckpt} | g={g} | {nc} | {w} | {e} |")
+    br_steps = {body.get("br_env_steps") for _, body in reports}
+    coop = {body.get("coop_reference_welfare") for _, body in reports}
+    lines += ["",
+              f"_BR budget (env steps per (agent, regime)): {sorted(br_steps)}; "
+              f"coop reference Ŵ*: {sorted(str(c) for c in coop)}. NashConv values are "
+              "LOWER BOUNDS (approximate DQN best response); the frozen policy acts "
+              "via its distilled prior, not the MVE planner._"]
+    md = "\n".join(lines)
+    args.out.mkdir(parents=True, exist_ok=True)
+    out_md = args.out / "game_metrics.md"
+    out_md.write_text(md + "\n", encoding="utf-8")
+    print(md)
+    print(f"\n[game-metrics] wrote {out_md}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.compare:
@@ -186,6 +248,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_tb(args)
     if args.disclose:
         return _run_disclose(args)
+    if args.game_metrics:
+        return _run_game_metrics(args)
     raise SystemExit("no mode selected")  # argparse required-group guards this
 
 

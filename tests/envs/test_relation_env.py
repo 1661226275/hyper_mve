@@ -13,16 +13,15 @@ import pytest
 
 from hyper_mve.configs.env_config import EnvConfig
 from hyper_mve.envs.relation_commons import RelationCommonsEnv, make_relation_commons
-from hyper_mve.schemas import AgentType, RelationObservationLayout, slice_relation_block
+from hyper_mve.schemas import RelationObservationLayout, slice_relation_block
 
 NOOP, HARVEST = 0, 5
 
 
 def _cfg(N: int = 2, **kw) -> EnvConfig:
     base = dict(
-        N=N, L=8, K=8, M=1, T_max=20,
+        N=N, L=8, K=8, T_max=20,
         relation_family="g2" if N == 2 else "g4",
-        type_assignment=tuple([AgentType.ALPHA] * N),
     )
     base.update(kw)
     return EnvConfig(**base)

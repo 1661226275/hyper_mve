@@ -1,41 +1,23 @@
-"""Public schema types shared across all v4 packages (Pkg-01 output).
+"""Public schema types shared across all v5 packages (Pkg-01/09 output).
 
 Import from this module — sub-module paths are not part of the public API:
 
     >>> from hyper_mve.schemas import (
-    ...     AgentType,
-    ...     CapabilityVector,
-    ...     ObservationLayout,
+    ...     RegimeFamily,
+    ...     RelationObservationLayout,
     ...     TimeStepRecord,
-    ...     ContextSchema,
+    ...     compute_relational_rewards,
     ... )
 """
 from __future__ import annotations
 
 from . import _constants
-from .agent_type import (
-    AgentType,
-    count_in_assignment,
-    from_index,
-    from_str,
-    one_hot,
-    to_long_tensor,
-)
 from .buffer_record import TimeStepRecord
-from .capability import (
-    CapabilityVector,
-    sample_default,
-    sample_n,
-    to_batch_tensor,
-)
-from .context import ContextSchema
 from .observation import (
-    ObservationBlockSpec,
     ObservationLayout,
     RelationObservationLayout,
     pad_neighbor_block,
     pad_resource_block,
-    slice_block,
     slice_relation_block,
 )
 from .relation import (
@@ -52,16 +34,12 @@ from .relation import (
 
 __all__ = [
     # core schemas
-    "AgentType",
-    "CapabilityVector",
-    "ContextSchema",
-    "ObservationBlockSpec",
-    "ObservationLayout",
     "TimeStepRecord",
     # v5 relationship regimes (Pkg-09)
     "Regime",
     "RegimeFamily",
     "RelationObservationLayout",
+    "ObservationLayout",            # Stage-6 alias of RelationObservationLayout
     "slice_relation_block",
     "build_g2",
     "build_g4",
@@ -71,17 +49,8 @@ __all__ = [
     "sample_initial_regime",
     "step_regime",
     # helpers
-    "count_in_assignment",
-    "from_index",
-    "from_str",
-    "one_hot",
-    "to_long_tensor",
-    "sample_default",
-    "sample_n",
-    "to_batch_tensor",
     "pad_neighbor_block",
     "pad_resource_block",
-    "slice_block",
     # constants namespace
     "_constants",
 ]

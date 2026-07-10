@@ -448,7 +448,7 @@ def render_disclosure_table(
         and str(r.get("variant", "")).startswith("external_")
     ]
     presets_to_emit: list[str] = (
-        [preset] if preset is not None else ["easy", "medium", "hard"]
+        [preset] if preset is not None else ["rel_duo", "rel_duo_holdout"]
     )
 
     lines: list[str] = []

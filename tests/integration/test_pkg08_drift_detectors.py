@@ -100,12 +100,12 @@ def test_planner_mode_literal_4tuple():
     assert len(args) == 4
 
 
-def test_ablation_ids_5_tuple():
-    """pkg-08 spec 06 Lock 1 — 5 canned IDs (4 logical cells)."""
-    from hyper_mve.experiments.ablate import ABLATION_IDS
-    assert ABLATION_IDS == (
-        "abl1", "abl4_crn_joint", "abl4_joint_easy_n2", "abl6", "abl7",
-    )
+def test_v4_ablation_dispatcher_deleted():
+    """v5 Stage-6 lock — the v4 ablation dispatcher (abl1/abl4/abl6/abl7,
+    Fehr-Schmidt included) went with resource_commons; v5 ablations run as
+    ordinary suite cells through run_suite."""
+    import importlib.util
+    assert importlib.util.find_spec("hyper_mve.experiments.ablate") is None
 
 
 def test_disclosure_columns_10_tuple():

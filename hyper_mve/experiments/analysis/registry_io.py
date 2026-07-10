@@ -24,6 +24,7 @@ __all__ = [
     "metric_value",
     "per_variant_metric",
     "method_samples",
+    "report_dict",
     "to_compare_csv",
     "REGISTRY_SUMMARY_METRICS",
 ]
@@ -86,6 +87,18 @@ def _load_report(path: str) -> dict[str, Any] | None:
             report = None
     _REPORT_CACHE[path] = report
     return report
+
+
+def report_dict(row: dict[str, Any]) -> dict[str, Any] | None:
+    """The row's full EvalReport JSON (cached), or ``None``.
+
+    For non-scalar rel-v1 fields (``return_per_regime`` etc.) that
+    :func:`metric_value` cannot deliver.
+    """
+    path = row.get("eval_report_path")
+    if not path:
+        return None
+    return _load_report(str(path))
 
 
 def metric_value(row: dict[str, Any], metric: str) -> float | None:

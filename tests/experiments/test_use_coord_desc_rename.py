@@ -11,7 +11,7 @@ from hyper_mve.configs import V4Config
 
 def test_use_coord_desc_alias_warns_read():
     """spec 06 §4.1 / §7.5 — READ via @property emits DeprecationWarning."""
-    cfg = V4Config.from_preset("easy")
+    cfg = V4Config.from_preset("rel_duo")
     with pytest.warns(DeprecationWarning, match="use_coord_desc is deprecated"):
         value = cfg.train.use_coord_desc
     assert value == cfg.train.randomize_order
@@ -19,7 +19,7 @@ def test_use_coord_desc_alias_warns_read():
 
 def test_use_coord_desc_alias_warns_write():
     """spec 06 §4.2 / §7.5 — WRITE via dataclasses.replace emits DeprecationWarning."""
-    cfg = V4Config.from_preset("easy")
+    cfg = V4Config.from_preset("rel_duo")
     # Pick a non-default value so the reconciliation triggers (otherwise compat
     # equals randomize_order's default and the warning is suppressed).
     new_value = not cfg.train.randomize_order
@@ -30,7 +30,7 @@ def test_use_coord_desc_alias_warns_write():
 
 def test_use_coord_desc_compat_is_internal():
     """spec 06 §6 — _use_coord_desc_compat is leading-underscore (internal)."""
-    cfg = V4Config.from_preset("easy")
+    cfg = V4Config.from_preset("rel_duo")
     public_field_names = {
         f.name for f in dataclasses.fields(cfg.train) if not f.name.startswith("_")
     }
@@ -43,5 +43,5 @@ def test_default_construction_does_not_warn():
     """spec 06 §4.4 — default V4Config construction emits no DeprecationWarning."""
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
-        cfg = V4Config.from_preset("easy")
+        cfg = V4Config.from_preset("rel_duo")
         assert cfg.train.randomize_order is True

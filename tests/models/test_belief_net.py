@@ -19,8 +19,7 @@ def cfg_duo():
 @pytest.fixture
 def cfg_quad():
     base = V4Config.from_preset("rel_duo")
-    env = replace(base.env, N=4, K=20, relation_family="g4",
-                  type_assignment=base.env.type_assignment * 2)
+    env = replace(base.env, N=4, K=20, relation_family="g4")
     return replace(base, env=env)
 
 

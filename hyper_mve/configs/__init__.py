@@ -1,11 +1,11 @@
-"""v4 configuration package (Pkg-01 output).
+"""v5 configuration package (Pkg-01/09 output).
 
 Public surface:
 
     >>> from hyper_mve.configs import V4Config
-    >>> cfg = V4Config.from_preset("medium")
+    >>> cfg = V4Config.from_preset("rel_duo")
     >>> cfg.env.N, cfg.env.K, cfg.train.lr
-    (4, 20, 0.0001)
+    (2, 8, 0.0001)
 
 Sub-config dataclasses (``EnvConfig``, ``ModelConfig``, ``TrainConfig``,
 ``MupConfig``, ``EvalConfig``, ``LegacyConfig``) are also re-exported for

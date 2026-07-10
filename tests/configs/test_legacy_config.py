@@ -22,7 +22,7 @@ def test_v4_deleted_fields_absent():
 
 
 def test_legacy_in_v4_config_default_disabled():
-    cfg = V4Config.from_preset("medium")
+    cfg = V4Config.from_preset("rel_duo")
     assert cfg.legacy.freeze_enabled is False
 
 

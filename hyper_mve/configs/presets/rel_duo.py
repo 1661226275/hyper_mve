@@ -22,8 +22,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from hyper_mve.schemas import AgentType
-
 from ..env_config import EnvConfig
 from ..eval_config import EvalConfig
 from ..legacy_config import LegacyConfig
@@ -39,9 +37,7 @@ def build_rel_duo_config() -> V4Config:
         N=2,
         L=8,
         K=8,
-        M=1,                    # unused by relation_commons (legacy field until Stage 6)
         T_max=100,
-        type_assignment=(AgentType.ALPHA, AgentType.ALPHA),  # legacy field (unused in v5)
         # v5 relationship regimes (Pkg-09)
         relation_family="g2",
         relation_intensity=1.0,

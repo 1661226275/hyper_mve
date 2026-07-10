@@ -1,14 +1,16 @@
-"""Thesis table renderers (Table 6.1–6.7) → markdown.
+"""Thesis table renderers (v5 Pkg-09: Table 6.1 rel gate / 6.2 regime holdout) → markdown.
 
 Each renderer has the signature ``(suite_root, cells, out_dir) -> RenderOutcome``
 where ``cells`` is the list of suite cells that declare this deliverable. They
 reuse ``registry_io`` (per-variant metric samples) + ``stats.compare_methods``
 (Welch-t + Holm-Bonferroni p-values vs Hyper) and degrade gracefully when a
-cell hasn't run yet (``status="no_data"``) or is blocked (``status="blocked"``).
+cell hasn't run yet (``status="no_data"``).
+
+The v4 renderers (Table 6.3–6.7, gen_scope sweep — c segments, type-ratio
+bell curve, Fehr-Schmidt robustness) went with the resource_commons design.
 """
 from __future__ import annotations
 
-import pathlib
 from typing import Any
 
 from . import registry_io
@@ -17,7 +19,6 @@ from .render_common import (
     WELFARE_METRICS,
     cell_rows,
     mean_sem,
-    type_ratio_of_row,
 )
 
 REFERENCE = "hyper"
@@ -48,11 +49,26 @@ def _fmt(mean: float, sem: float) -> str:
     return f"{mean:.3f} ± {sem:.3f}"
 
 
+def _per_regime_samples(rows: list[dict[str, Any]]) -> dict[str, dict[str, list[float]]]:
+    """``{variant: {regime_id(str): [return, ...]}}`` from rel-v1 ``return_per_regime``."""
+    out: dict[str, dict[str, list[float]]] = {}
+    for r in rows:
+        rep = registry_io.report_dict(r)
+        if rep is None:
+            continue
+        rpr = rep.get("return_per_regime") or {}
+        for g, val in rpr.items():
+            out.setdefault(str(r.get("variant")), {}).setdefault(str(g), []).append(float(val))
+    return out
+
+
 def render_methods_table(
     suite_root, cells, out_dir, *, deliverable: str,
     metrics=WELFARE_METRICS, reference=REFERENCE, title: str | None = None,
+    per_regime: bool = True,
 ) -> RenderOutcome:
-    """Per-variant mean ± sem across ``metrics`` + p(vs reference) on the headline."""
+    """Per-variant mean ± sem across ``metrics`` + p(vs reference) on the headline,
+    plus (rel-v1) a per-regime return appendix."""
     rows: list[dict[str, Any]] = []
     for cell in cells:
         rows.extend(cell_rows(suite_root, cell))
@@ -82,8 +98,23 @@ def render_methods_table(
         warn = "  ⚠n<5" if n < 5 else ""
         lines.append(f"| {v} ({n} seed{warn}) | " + " | ".join(cells_md) + f" | {p_md} |")
     lines.append("")
-    lines.append("_Metrics: W_total=`return_mean` (subjective ΣR); W_phys/S/F/T from the §F eval extension. "
-                 "p-values are Holm-Bonferroni-adjusted Welch-t vs Hyper on W_total._")
+    lines.append("_Metrics: W_total=`return_mean` (subjective ΣR); W_phys/S/F/T from the eval "
+                 "extension. p-values are Holm-Bonferroni-adjusted Welch-t vs Hyper on W_total._")
+
+    # rel-v1 per-regime appendix
+    if per_regime:
+        seg = _per_regime_samples(rows)
+        if seg:
+            regimes = sorted({g for d in seg.values() for g in d}, key=lambda s: int(s))
+            lines += ["", "### Per-regime W_total (`return_per_regime`)", "",
+                      "| variant | " + " | ".join(f"g={g}" for g in regimes) + " |",
+                      "|" + "|".join(["---"] * (len(regimes) + 1)) + "|"]
+            for v in order:
+                if v not in seg:
+                    continue
+                vals = [_fmt(*mean_sem(seg[v].get(g, []))) for g in regimes]
+                lines.append(f"| {v} | " + " | ".join(vals) + " |")
+
     md = "\n".join(lines)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{deliverable.replace(' ', '_').replace('.', '_')}.md"
@@ -94,160 +125,45 @@ def render_methods_table(
 def render_table_6_1(suite_root, cells, out_dir) -> RenderOutcome:
     return render_methods_table(
         suite_root, cells, out_dir, deliverable="Table 6.1",
-        title="Table 6.1 — 主对比 (Medium, 5 seeds): 5 metrics × 7 methods",
+        title="Table 6.1 — v5 关系博弈主对照 (rel_gate_duo, 混合隐 regime)",
     )
 
 
 def render_table_6_2(suite_root, cells, out_dir) -> RenderOutcome:
-    return render_methods_table(
-        suite_root, cells, out_dir, deliverable="Table 6.2",
-        title="Table 6.2 — 消融1 条件化谱 (断言 B′)",
-    )
-
-
-def render_table_6_5(suite_root, cells, out_dir) -> RenderOutcome:
-    return render_methods_table(
-        suite_root, cells, out_dir, deliverable="Table 6.5",
-        title="Table 6.5 — 消融4 CRN×CoordDesc 2×2 (断言 D)",
-    )
-
-
-def render_table_6_3(suite_root, cells, out_dir) -> RenderOutcome:
-    """Abl2 context-paths — BLOCKED (only hyper + no_belief exist)."""
-    rows: list[dict[str, Any]] = []
-    for cell in cells:
-        rows.extend(cell_rows(suite_root, cell))
-    note = ("Table 6.3 (消融2 三联通路) is BLOCKED: no_type / no_cap / only_c variants "
-            "are not implemented. Shipping the 2 existing variants (hyper, no_belief).")
-    if rows:
-        oc = render_methods_table(
-            suite_root, cells, out_dir, deliverable="Table 6.3",
-            title="Table 6.3 — 消融2 (PARTIAL: hyper + no_belief only)",
-        )
-        oc.status = "partial"
-        oc.message = note
-        return oc
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "Table_6_3.md"
-    path.write_text(f"## Table 6.3 — 消融2 (BLOCKED)\n\n{note}\n", encoding="utf-8")
-    return RenderOutcome("Table 6.3", "blocked", path, note)
-
-
-def render_table_6_4(suite_root, cells, out_dir) -> RenderOutcome:
-    """Abl3 bell curve as a table: return_mean per (n_alpha, n_beta) per variant."""
+    """Zero-shot regime holdout: seen / unseen / gap per variant (rel_zero_shot_duo)."""
     rows: list[dict[str, Any]] = []
     for cell in cells:
         rows.extend(cell_rows(suite_root, cell))
     if not rows:
-        return RenderOutcome("Table 6.4", "no_data", None, "no completed Abl3 rows yet")
-    # group: (variant, (n_alpha, n_beta)) -> [return_mean]
-    grouped: dict[str, dict[tuple[int, int], list[float]]] = {}
-    for r in rows:
-        tr = type_ratio_of_row(r)
-        if tr is None:
-            continue
-        val = registry_io.metric_value(r, "return_mean")
-        if val is None:
-            continue
-        grouped.setdefault(str(r.get("variant")), {}).setdefault(tr, []).append(val)
-    if not grouped:
-        return RenderOutcome("Table 6.4", "partial", None,
-                             "rows present but type_assignment not recoverable from config snapshots")
-    ratios = sorted({tr for d in grouped.values() for tr in d})
-    lines = ["## Table 6.4 — 消融3 类型异质性钟形曲线 (W_total per ρ_β)", ""]
-    lines.append("| variant | " + " | ".join(f"{a}α{b}β" for a, b in ratios) + " |")
-    lines.append("|" + "|".join(["---"] * (len(ratios) + 1)) + "|")
-    for v in sorted(grouped):
-        cellvals = []
-        for tr in ratios:
-            xs = grouped[v].get(tr, [])
-            mean, sem = mean_sem(xs)
-            cellvals.append(_fmt(mean, sem))
-        lines.append(f"| {v} | " + " | ".join(cellvals) + " |")
-    lines.append("\n_See Fig 6.4 for the bell curve; peak advantage expected near 2α2β._")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "Table_6_4.md"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return RenderOutcome("Table 6.4", "rendered", path, f"{len(ratios)} ratios × {len(grouped)} variants")
-
-
-def render_table_6_6(suite_root, cells, out_dir) -> RenderOutcome:
-    """Abl6 Fehr-Schmidt 3×3 sensitivity (welfare metrics per variant — robustness)."""
-    return render_methods_table(
-        suite_root, cells, out_dir, deliverable="Table 6.6",
-        title="Table 6.6 — 消融5 Fehr-Schmidt 稳健性 (aggregated over the 3×3 grid)",
-    )
-
-
-def render_table_6_7(suite_root, cells, out_dir) -> RenderOutcome:
-    """Zero-shot retention: seen / unseen / gap per variant (Ch6.9)."""
-    rows: list[dict[str, Any]] = []
-    for cell in cells:
-        rows.extend(cell_rows(suite_root, cell))
-    if not rows:
-        return RenderOutcome("Table 6.7", "no_data", None, "no completed zero-shot rows yet")
+        return RenderOutcome("Table 6.2", "no_data", None, "no completed zero-shot rows yet")
     seen = registry_io.method_samples(rows, "return_zero_shot_seen")
     unseen = registry_io.method_samples(rows, "return_zero_shot_unseen")
     gap = registry_io.method_samples(rows, "return_zero_shot_gap")
     variants = sorted(set(seen) | set(unseen),
                       key=lambda k: -(mean_sem(unseen.get(k, []))[0] if unseen.get(k) else 0))
     if not variants:
-        return RenderOutcome("Table 6.7", "no_data", None, "zero-shot fields absent")
-    lines = ["## Table 6.7 — 零样本泛化保留率 (seen / unseen / gap)", "",
-             "| variant | seen c | unseen c | gap (seen−unseen) |", "|---|---|---|---|"]
+        return RenderOutcome("Table 6.2", "no_data", None, "zero-shot fields absent")
+    lines = ["## Table 6.2 — 零样本 regime 泛化 (train {coop,comp,neutral} → eval 非对称)", "",
+             "| variant | seen regimes | unseen regimes | gap (seen−unseen) |", "|---|---|---|---|"]
     for v in variants:
         s = _fmt(*mean_sem(seen.get(v, [])))
         u = _fmt(*mean_sem(unseen.get(v, [])))
         g = _fmt(*mean_sem(gap.get(v, [])))
         lines.append(f"| {v} | {s} | {u} | {g} |")
+    lines.append("")
+    lines.append("_seen = regimes in `train_regime_ids` (0,1,4); unseen = held-out asymmetric "
+                 "pair (2,3). Small gap ⇒ the relationship-linear value decomposition "
+                 "recombines across W(g)._")
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "Table_6_7.md"
+    path = out_dir / "Table_6_2.md"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return RenderOutcome("Table 6.7", "rendered", path, f"{len(variants)} variants")
-
-
-def render_gen_scope_sweep(suite_root, cells, out_dir) -> RenderOutcome:
-    """Decision-Gate-0 gen_scope sweep: one row per cell (preset), welfare columns.
-
-    The LoRA cells are all ``variant=hyper`` and differ only by preset (gen_scope
-    mode), so a variant-grouped table collapses them. Here each cell is a row.
-    """
-    lines = ["## Table 6.2 — gen_scope 选型 (决策门 0): per-preset welfare", "",
-             "| cell (gen_scope preset) | " + " | ".join(lbl for _, lbl in WELFARE_METRICS) + " | n |",
-             "|" + "|".join(["---"] * (len(WELFARE_METRICS) + 2)) + "|"]
-    any_rows = False
-    for cell in cells:
-        rows = cell_rows(suite_root, cell)
-        if not rows:
-            lines.append(f"| {cell.id} | " + " | ".join(["—"] * len(WELFARE_METRICS)) + " | 0 |")
-            continue
-        any_rows = True
-        vals = []
-        n = 0
-        for m, _lbl in WELFARE_METRICS:
-            xs = [x for s in registry_io.per_variant_metric(rows, m).values() for _, x in s]
-            n = max(n, len(xs))
-            vals.append(_fmt(*mean_sem(xs)))
-        lines.append(f"| {cell.id} | " + " | ".join(vals) + f" | {n} |")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "Table_6_2_gen_scope_sweep.md"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return RenderOutcome("Table 6.2 (gen_scope sweep)",
-                         "rendered" if any_rows else "no_data", path,
-                         f"{len(cells)} gen_scope presets")
+    return RenderOutcome("Table 6.2", "rendered", path, f"{len(variants)} variants")
 
 
 RENDERERS = {
     "Table 6.1": render_table_6_1,
     "Table 6.2": render_table_6_2,
-    "Table 6.3": render_table_6_3,
-    "Table 6.4": render_table_6_4,
-    "Table 6.5": render_table_6_5,
-    "Table 6.6": render_table_6_6,
-    "Table 6.7": render_table_6_7,
 }
 
 # Exact-deliverable-string overrides (take precedence over the token map).
-EXACT_RENDERERS = {
-    "Table 6.2 (gen_scope sweep)": render_gen_scope_sweep,
-}
+EXACT_RENDERERS: dict[str, Any] = {}

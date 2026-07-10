@@ -87,12 +87,8 @@ _CURRICULUM_OVERRIDE_DEFERRED: dict[str, str] = {
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Hyper-MuZero v5 unified trainer")
-    p.add_argument("--preset", default="rel_duo", choices=(
-        "rel_duo", "rel_duo_holdout",
-        "easy", "medium", "hard", "duo", "duo_basegen",
-        "duo_film_lora", "duo_film_lora_fc2", "duo_base_lora",
-        "medium_film_lora", "medium_film_lora_fc2", "medium_base_lora",
-    ))
+    p.add_argument("--preset", default="rel_duo",
+                   choices=("rel_duo", "rel_duo_holdout"))
     p.add_argument("--variant", default="hyper", choices=CLI_CHOICES)
     p.add_argument("--max_steps", type=int, default=None, help="override train.max_train_steps")
     p.add_argument("--override", action="append", default=[], help='"section.field=value" (repeatable)')

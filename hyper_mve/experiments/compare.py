@@ -66,7 +66,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
                    help="Emit external-runner disclosure table")
     p.add_argument("--registry", type=pathlib.Path,
                    default=pathlib.Path("runs/registry.jsonl"))
-    p.add_argument("--preset", choices=("easy", "medium", "hard"), default=None,
+    p.add_argument("--preset", choices=("rel_duo", "rel_duo_holdout"), default=None,
                    help="Restrict disclosure table to one preset; default: "
                         "emit one block per preset")
     # Common

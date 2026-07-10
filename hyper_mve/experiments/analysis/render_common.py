@@ -1,10 +1,10 @@
 """Shared helpers for the thesis table/figure renderers.
 
 Pure-stdlib (no matplotlib/torch) so it loads anywhere. Provides:
-  * deliverable-id normalisation (``"Table 6.1 (Easy gate)"`` → ``"Table 6.1"``),
+  * deliverable-id normalisation (``"Table 6.1 (rel gate)"`` → ``"Table 6.1"``),
   * per-cell registry/EvalReport loading (``cell_rows``),
   * the thesis 5-metric column spec,
-  * a per-(variant) mean ± sem helper and an Abl3 type-ratio key extractor.
+  * a per-(variant) mean ± sem helper.
 """
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ __all__ = [
     "cell_rows",
     "WELFARE_METRICS",
     "mean_sem",
-    "type_ratio_of_row",
 ]
 
 
@@ -76,22 +75,3 @@ def mean_sem(xs: list[float]) -> tuple[float, float]:
     return mean, math.sqrt(var) / math.sqrt(n)
 
 
-def type_ratio_of_row(row: dict[str, Any]) -> tuple[int, int] | None:
-    """(n_alpha, n_beta) from an Abl3 row's ``env.type_assignment`` override.
-
-    Reads the row's config snapshot if present; falls back to parsing the
-    ablation_cell / run_tag is not reliable, so returns ``None`` when the
-    assignment can't be recovered. ALPHA=0, BETA=1.
-    """
-    snap = row.get("config_snapshot_path")
-    if snap and pathlib.Path(snap).exists():
-        import json
-        try:
-            cfg = json.loads(pathlib.Path(snap).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        ta = (cfg.get("env") or {}).get("type_assignment")
-        if ta is not None:
-            vals = [int(x) for x in ta]
-            return (sum(1 for v in vals if v == 0), sum(1 for v in vals if v == 1))
-    return None

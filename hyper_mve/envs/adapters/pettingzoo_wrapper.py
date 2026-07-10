@@ -40,7 +40,7 @@ class RelationCommonsPettingZooEnv(ParallelEnv):
     Agent ids are the literal strings ``"agent_0"`` .. ``f"agent_{N-1}"``,
     where N is read from ``env_cfg.N`` (locked preset domain {2, 4, 8}).
     The action space is ``Discrete(6)`` per agent (NOOP/UP/DOWN/LEFT/RIGHT/HARVEST,
-    inherited from ``hyper_mve.envs.resource_commons.spaces.make_action_space``).
+    from ``hyper_mve.envs.relation_commons.spaces.make_action_space``).
     """
 
     metadata = {"render_modes": ["rgb_array"], "name": "relation_commons_v5"}

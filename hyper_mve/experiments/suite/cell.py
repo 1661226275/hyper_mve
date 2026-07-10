@@ -1,12 +1,12 @@
 """SuiteCell — one thesis experiment = a SweepConfig + thesis metadata.
 
-A *cell YAML* is an ordinary strict SweepConfig YAML (the same schema
-``experiments/ablations/*.yaml`` use) plus an extra top-level ``meta:`` block
-carrying thesis bookkeeping that ``SweepConfig.from_yaml`` would reject:
+A *cell YAML* is an ordinary strict SweepConfig YAML plus an extra top-level
+``meta:`` block carrying thesis bookkeeping that ``SweepConfig.from_yaml``
+would reject:
 
     meta:
-      id: abl3_type_heterogeneity
-      title: "类型异质性扫描 — 生死判官钟形曲线"
+      id: rel_gate_duo
+      title: "v5 relation gate — rel_duo N=2 混合 regime 主对照"
       tier: must_have            # must_have | degradable | cuttable
       size: medium               # easy | medium | hard (informational)
       deliverables: ["Table 6.4", "Fig 6.4"]
@@ -143,8 +143,7 @@ def load_manifest(path: pathlib.Path | str | None = None) -> list[SuiteCell]:
     """Load every cell listed in the suite manifest, in declared order.
 
     ``manifest.yaml`` lists cell paths under a ``cells:`` key, each resolved
-    relative to the manifest's own directory (so it can point at both
-    ``cells/*.yaml`` and the in-place ``../ablations/*.yaml``).
+    relative to the manifest's own directory (``cells/*.yaml``).
     """
     manifest_path = pathlib.Path(path) if path is not None else default_manifest_path()
     raw = _read_yaml(manifest_path)

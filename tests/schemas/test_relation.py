@@ -28,13 +28,8 @@ from hyper_mve.schemas import (
 
 
 def _env_cfg(N: int = 2, family: str = "g2", **kw) -> EnvConfig:
-    base = dict(N=N, L=8, K=8, M=1, T_max=100, relation_family=family)
+    base = dict(N=N, L=8, K=8, T_max=100, relation_family=family)
     base.update(kw)
-    if N != 4:
-        # legacy default type_assignment has length 4
-        from hyper_mve.schemas import AgentType
-
-        base.setdefault("type_assignment", tuple([AgentType.ALPHA] * N))
     return EnvConfig(**base)
 
 

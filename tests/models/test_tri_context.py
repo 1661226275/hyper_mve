@@ -20,8 +20,7 @@ def cfg_duo():
 
 @pytest.fixture
 def cfg_quad(cfg_duo):
-    env = replace(cfg_duo.env, N=4, K=20, relation_family="g4",
-                  type_assignment=cfg_duo.env.type_assignment * 2)
+    env = replace(cfg_duo.env, N=4, K=20, relation_family="g4")
     return replace(cfg_duo, env=env)
 
 
@@ -96,8 +95,7 @@ def test_n_variation(cfg_duo):
     ctx2 = enc2.forward(*_inputs(1, 2))
     assert ctx2.shape == (1, 2, 64)
 
-    env4 = replace(cfg_duo.env, N=4, K=20, relation_family="g4_ext",
-                   type_assignment=cfg_duo.env.type_assignment * 2)
+    env4 = replace(cfg_duo.env, N=4, K=20, relation_family="g4_ext")
     enc4 = TriContextEncoder(env4, cfg_duo.model)
     agent_ids = torch.arange(4).unsqueeze(0)
     rows = torch.rand(1, 4, 3)
