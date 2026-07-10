@@ -44,7 +44,7 @@ class _PermanentStubBase(ExternalBaselineRunner):
     ) -> None:
         raise NotImplementedError(f"{self._STUB_NAME} stub — see __init__.")
 
-    def evaluate(self, env_fn, c_grid, episodes):
+    def evaluate(self, env_fn, regime_grid, episodes):
         raise NotImplementedError(f"{self._STUB_NAME} stub — see __init__.")
 
     def save_checkpoint(self, path: Union[Path, str]) -> None:

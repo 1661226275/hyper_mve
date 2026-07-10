@@ -2,7 +2,7 @@
 
 Covers the fairness formula and the EvalReport schema extension. The full
 end-to-end populate (run_eval → unified_evaluator) needs torch + the env stack
-and is exercised by the suite smoke (`run_suite --only main_comparison_easy
+and is exercised by the suite smoke (`run_suite --only rel_gate_duo
 --max-steps 100`) in the runtime checklist.
 """
 from __future__ import annotations
@@ -44,4 +44,4 @@ def test_eval_report_welfare_fields_default_zero():
     ):
         assert name in defaults, f"EvalReport missing {name!r}"
         assert defaults[name] == 0.0, f"{name} default should be 0.0, got {defaults[name]!r}"
-    assert defaults["schema_version"] == "pkg08-spec01-v2"
+    assert defaults["schema_version"] == "rel-v1"

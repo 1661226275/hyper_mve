@@ -219,52 +219,34 @@ class BaselineModel(nn.Module):
     def evaluate(
         self,
         env_fn: Callable[[], Any],
-        c_grid: tuple[float, ...],
+        regime_grid: tuple[int, ...],
         episodes: int,
     ) -> EvalReport:
-        """Internal-variant ``.evaluate`` (pkg-07 spec 08 §4.1 signature lock).
+        """Internal-variant ``.evaluate`` (pkg-07 spec 08 §4.1 signature lock, v5).
 
         For internal variants the unified evaluator (pkg-08 spec 01 §4.2)
         drives the real eval through ``training/evaluation.py:run_eval``.
         This method exists so that the signature contract is satisfied and so
         that callers using a baseline standalone (no unified evaluator) still
-        get an :class:`EvalReport` — but the per-c loop here is intentionally
-        minimal; the heavy lifting belongs in pkg-08 spec 01.
+        get an :class:`EvalReport` — the per-regime loop here is intentionally
+        a zero-valued placeholder.
         """
-        # pkg-07 spec 08 §4.1: structural placeholder. The unified evaluator
-        # (pkg-08 spec 01 §4.2 internal branch) calls run_eval directly and
-        # builds the EvalReport; this method is the spec-08 contract slot for
-        # any caller that hits ``.evaluate`` on an internal runner without
-        # going through the unified evaluator.
         t0 = time.time()
-        empty_per_c: dict[float, float] = {c: 0.0 for c in c_grid}
-        empty_int_per_c: dict[float, int] = {c: 0 for c in c_grid}
-        empty_bool_per_c: dict[float, bool] = {c: False for c in c_grid}
-        segments = tuple(self.cfg.eval.c_segments)
-        ratios = tuple(self.cfg.eval.bell_curve_type_ratios)
+        grid = tuple(int(g) for g in regime_grid)
         return EvalReport(
             variant=type(self).__name__,
             seed=0,
             config_hash="0" * 40,
             eval_mode="planner",
             eval_planner_mode=self.cfg.eval.eval_planner_mode,
-            c_visible=bool(self.cfg.env.c_visible),
             return_mean=0.0,
             return_sem=0.0,
             return_zero_shot_seen=0.0,
             return_zero_shot_unseen=0.0,
             return_zero_shot_gap=0.0,
-            return_per_c=MappingProxyType(dict(empty_per_c)),
-            return_per_c_sem=MappingProxyType(dict(empty_per_c)),
-            episodes_per_c=MappingProxyType(dict(empty_int_per_c)),
-            return_per_segment=MappingProxyType({seg: 0.0 for seg in segments}),
-            return_per_segment_sem=MappingProxyType({seg: 0.0 for seg in segments}),
-            return_per_type_ratio=MappingProxyType({r: 0.0 for r in ratios}),
-            return_per_type_ratio_sem=MappingProxyType({r: 0.0 for r in ratios}),
-            regret_per_c=MappingProxyType(dict(empty_per_c)),
-            regret_mean=0.0,
-            oracle_ceiling_per_c=MappingProxyType(dict(empty_per_c)),
-            oracle_ceiling_cache_hit=MappingProxyType(dict(empty_bool_per_c)),
+            return_per_regime=MappingProxyType({g: 0.0 for g in grid}),
+            return_per_regime_sem=MappingProxyType({g: 0.0 for g in grid}),
+            episodes_per_regime=MappingProxyType({g: 0 for g in grid}),
             planner_prior_return_gap=0.0,
             direct_inference_return_mean=0.0,
             planner_full_return_mean=0.0,

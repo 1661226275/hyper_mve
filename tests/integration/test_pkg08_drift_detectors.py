@@ -3,9 +3,9 @@
 Runs without torch. Validates that pkg-07 + pkg-08 still agree on the four
 spine invariants:
 
-* `EvalReport` exposes 37 dataclass fields with `schema_version="pkg08-spec01-v2"`.
+* `EvalReport` exposes 28 dataclass fields with `schema_version="rel-v1"`.
 * `RegistryRow` exposes 23 dataclass fields with `schema_version="pkg08-spec05-v1"`.
-* `REGISTRY` keys (11) match `CLI_CHOICES` (14, after curriculum-override removal).
+* `REGISTRY` keys (10) match `CLI_CHOICES` (13, after curriculum-override removal).
 * `cli_to_factory_arg` is total over `CLI_CHOICES` minus curriculum-overrides.
 """
 from __future__ import annotations
@@ -15,24 +15,29 @@ from dataclasses import fields
 import pytest
 
 
-def test_eval_report_37_field_dataclass_lock():
-    """pkg-08 spec 01 Lock 2 — 36 payload fields + 1 `schema_version` sentinel.
+def test_eval_report_28_field_dataclass_lock():
+    """rel-v1 (v5 Pkg-09) — 27 payload fields + 1 `schema_version` sentinel.
 
-    v2 (2026-06): +4 thesis welfare metrics (welfare_physical / sustainability /
-    fairness / tragedy_index; Ch3.8.3 / Table 6.1) → 33→37 total fields.
+    The v4 per-c / c-segment / type-ratio / regret machinery went with c_t and
+    the type system; per-regime breakdown + belief regime-quality replace them.
     """
     pytest.importorskip("torch")  # EvalReport pulls torch transitively
     from hyper_mve.eval import EvalReport
     fld = tuple(f.name for f in fields(EvalReport))
-    assert len(fld) == 37, f"EvalReport drift: {len(fld)} fields (expect 37)"
+    assert len(fld) == 28, f"EvalReport drift: {len(fld)} fields (expect 28)"
     assert fld[-1] == "schema_version"
     for name in (
+        "return_per_regime", "return_per_regime_sem", "episodes_per_regime",
+        "regime_accuracy", "regime_nll",
         "welfare_physical_mean", "sustainability_mean",
         "fairness_mean", "tragedy_index_mean",
     ):
-        assert name in fld, f"EvalReport missing welfare field {name!r}"
+        assert name in fld, f"EvalReport missing field {name!r}"
+    for gone in ("c_visible", "return_per_c", "regret_mean", "return_per_segment",
+                 "return_per_type_ratio", "belief_c_mae"):
+        assert gone not in fld, f"EvalReport regrew v4 field {gone!r}"
     sentinel_field = fields(EvalReport)[-1]
-    assert sentinel_field.default == "pkg08-spec01-v2"
+    assert sentinel_field.default == "rel-v1"
 
 
 def test_registry_row_23_field_dataclass_lock():

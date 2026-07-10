@@ -6,7 +6,7 @@ constructs the runner, **trains it in-process**, then evaluates the *same traine
 object* via the unified evaluator and writes ``EvalReport`` JSON.
 
 Training is wired per runner family (pkg-07 spec 08 §7.1):
-  * ``hyper`` + the 5 internal ``BaselineModel`` variants share the 7-API, so
+  * ``hyper`` + the 4 internal ``BaselineModel`` variants share the v5 6-API, so
     they train through the shared ``train_main.run_training`` MuZeroTrainer loop.
   * external runners own their algorithm loop and train via ``runner.train``.
 
@@ -151,11 +151,11 @@ def _train_runner(cfg, runner, payload: dict[str, Any], seed: int) -> None:
 
     if isinstance(runner, ExternalBaselineRunner):
         from hyper_mve.envs.adapters.pettingzoo_wrapper import (
-            ResourceCommonsPettingZooEnv,
+            RelationCommonsPettingZooEnv,
         )
 
-        def env_fn() -> "ResourceCommonsPettingZooEnv":
-            return ResourceCommonsPettingZooEnv(
+        def env_fn() -> "RelationCommonsPettingZooEnv":
+            return RelationCommonsPettingZooEnv(
                 cfg.env, oracle_mode=False, eval_info_mode=False,
             )
 
@@ -190,7 +190,7 @@ def main() -> None:
         import torch
         from hyper_mve.eval import evaluate
         from hyper_mve.envs.adapters.pettingzoo_wrapper import (
-            ResourceCommonsPettingZooEnv,
+            RelationCommonsPettingZooEnv,
         )
     except ImportError as e:
         print(f"FAIL: worker imports: {e}", file=sys.stderr, flush=True)
@@ -206,16 +206,15 @@ def main() -> None:
         sys.exit(1)
     _write_config_snapshot(cfg, pathlib.Path(payload["config_snapshot_path"]))
 
-    def env_fn() -> ResourceCommonsPettingZooEnv:
-        # eval_info_mode=False is the locked external-runner eval contract
-        # (tests/baselines/external/test_external_eval_contract.py:46-48). With
-        # eval_info_mode=True the env exposes the eval-only diagnostic fields
-        # ('resource_state', 'hotspot_centers'), which trip every external
-        # runner's per-step _assert_info_clean CTDE guard — and nothing in the
-        # current eval path consumes them (regret slots are 0.0 placeholders;
-        # the internal branch ignores env_fn entirely and run_eval builds its
-        # own envs). oracle_mode stays False so _verify_env_fn_flags passes.
-        return ResourceCommonsPettingZooEnv(
+    def env_fn() -> RelationCommonsPettingZooEnv:
+        # eval_info_mode=False is the locked external-runner eval contract.
+        # With eval_info_mode=True the env exposes the eval-only diagnostic
+        # field ('resource_state'), which trips every external runner's
+        # per-step _check_forbidden_info CTDE guard — and nothing in the
+        # current eval path consumes it (the internal branch ignores env_fn
+        # entirely; run_eval builds its own envs). oracle_mode stays False so
+        # _verify_env_fn_flags passes.
+        return RelationCommonsPettingZooEnv(
             cfg.env, oracle_mode=False, eval_info_mode=False,
         )
 

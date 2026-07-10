@@ -71,6 +71,7 @@ from hyper_mve.baselines.external._muzero_general.self_play import (
     Node,
 )
 from hyper_mve.configs import V4Config
+from hyper_mve.baselines.external.base import split_seen_unseen_regimes
 from hyper_mve.eval.eval_report import EvalReport
 
 
@@ -401,7 +402,7 @@ class MAMuZeroGHAlgorithm(ExternalBaselineRunner):
         self,
         env,
         evaluate: bool,
-        c_override: Optional[float] = None,
+        g_override: Optional[int] = None,
     ) -> tuple[int, float]:
         """Roll one episode; push transitions into each learner's buffer.
         Returns (env_steps, episode_return)."""
@@ -409,7 +410,7 @@ class MAMuZeroGHAlgorithm(ExternalBaselineRunner):
         n_actions = int(self.cfg.env.A)
         episode_limit = int(self.cfg.env.T_max)
 
-        reset_options = {"c": float(c_override)} if c_override is not None else None
+        reset_options = {"g": int(g_override)} if g_override is not None else None
         obs_dict, info = env.reset(options=reset_options)
         _check_forbidden_info(info)
 
@@ -526,10 +527,10 @@ class MAMuZeroGHAlgorithm(ExternalBaselineRunner):
     def evaluate(
         self,
         env_fn: Callable[[], Any],
-        c_grid: tuple[float, ...],
+        regime_grid: tuple[int, ...],
         episodes: int,
     ) -> EvalReport:
-        """Per-c deterministic rollouts (argmax-on-visits, no Dirichlet).
+        """Per-regime deterministic rollouts (argmax-on-visits, no Dirichlet).
         Field-population matrix per pkg-07 spec 06 §3.7 (= §2.7)."""
         env = env_fn()
         obs_dict, _ = env.reset()
@@ -539,39 +540,31 @@ class MAMuZeroGHAlgorithm(ExternalBaselineRunner):
 
         env = env_fn()
         t0 = time.time()
-        return_per_c: dict[float, float] = {}
-        return_per_c_sem: dict[float, float] = {}
-        episodes_per_c: dict[float, int] = {}
+        return_per_regime: dict[int, float] = {}
+        return_per_regime_sem: dict[int, float] = {}
+        episodes_per_regime: dict[int, int] = {}
         all_returns: list[float] = []
         env_steps_total = 0
 
-        for c in c_grid:
-            c_returns: list[float] = []
+        for g in regime_grid:
+            g_returns: list[float] = []
             for _ep in range(int(episodes)):
                 steps, ep_return = self._run_one_episode(
-                    env=env, evaluate=True, c_override=float(c),
+                    env=env, evaluate=True, g_override=int(g),
                 )
-                c_returns.append(float(ep_return))
+                g_returns.append(float(ep_return))
                 env_steps_total += int(steps)
-            return_per_c[float(c)] = float(np.mean(c_returns)) if c_returns else 0.0
+            return_per_regime[int(g)] = float(np.mean(g_returns)) if g_returns else 0.0
             sem = (
-                float(np.std(c_returns) / max(np.sqrt(len(c_returns)), 1.0))
-                if len(c_returns) > 1 else 0.0
+                float(np.std(g_returns) / max(np.sqrt(len(g_returns)), 1.0))
+                if len(g_returns) > 1 else 0.0
             )
-            return_per_c_sem[float(c)] = sem
-            episodes_per_c[float(c)] = int(len(c_returns))
-            all_returns.extend(c_returns)
+            return_per_regime_sem[int(g)] = sem
+            episodes_per_regime[int(g)] = int(len(g_returns))
+            all_returns.extend(g_returns)
         env.close()
 
-        zs_train = set(float(c) for c in self.cfg.eval.zero_shot_train_c)
-        zs_unseen = set(float(c) for c in self.cfg.eval.zero_shot_unseen_c)
-        seen_returns = [return_per_c[c] for c in return_per_c if c in zs_train]
-        unseen_returns = [return_per_c[c] for c in return_per_c if c in zs_unseen]
-        zs_seen = float(np.mean(seen_returns)) if seen_returns else 0.0
-        zs_unseen_v = float(np.mean(unseen_returns)) if unseen_returns else 0.0
-
-        segments = tuple(self.cfg.eval.c_segments)
-        ratios = tuple(self.cfg.eval.bell_curve_type_ratios)
+        zs_seen, zs_unseen_v = split_seen_unseen_regimes(self.cfg, return_per_regime)
 
         return_mean = float(np.mean(all_returns)) if all_returns else 0.0
         return_sem = (
@@ -585,23 +578,14 @@ class MAMuZeroGHAlgorithm(ExternalBaselineRunner):
             config_hash="0" * 40,
             eval_mode="planner",
             eval_planner_mode="planner_full",
-            c_visible=bool(self.cfg.env.c_visible),
             return_mean=return_mean,
             return_sem=return_sem,
             return_zero_shot_seen=zs_seen,
             return_zero_shot_unseen=zs_unseen_v,
             return_zero_shot_gap=zs_seen - zs_unseen_v,
-            return_per_c=MappingProxyType(return_per_c),
-            return_per_c_sem=MappingProxyType(return_per_c_sem),
-            episodes_per_c=MappingProxyType(episodes_per_c),
-            return_per_segment=MappingProxyType({seg: 0.0 for seg in segments}),
-            return_per_segment_sem=MappingProxyType({seg: 0.0 for seg in segments}),
-            return_per_type_ratio=MappingProxyType({r: 0.0 for r in ratios}),
-            return_per_type_ratio_sem=MappingProxyType({r: 0.0 for r in ratios}),
-            regret_per_c=MappingProxyType({c: 0.0 for c in c_grid}),
-            regret_mean=0.0,
-            oracle_ceiling_per_c=MappingProxyType({c: 0.0 for c in c_grid}),
-            oracle_ceiling_cache_hit=MappingProxyType({c: False for c in c_grid}),
+            return_per_regime=MappingProxyType(return_per_regime),
+            return_per_regime_sem=MappingProxyType(return_per_regime_sem),
+            episodes_per_regime=MappingProxyType(episodes_per_regime),
             planner_prior_return_gap=0.0,
             direct_inference_return_mean=return_mean,
             planner_full_return_mean=return_mean,
@@ -610,8 +594,6 @@ class MAMuZeroGHAlgorithm(ExternalBaselineRunner):
             episodes_total=int(len(all_returns)),
             info_gating_strict=True,
             set_context_subjective_oracle_leak=False,
-            belief_c_mae=None,
-            belief_c_calibration=None,
         )
 
     # ----------------------------------------------------------- ckpt

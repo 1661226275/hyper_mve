@@ -1,10 +1,15 @@
-"""Frozen 36-field (+1 sentinel) EvalReport — pkg-08 spec 01 §3.1 (mother-doc).
+"""Frozen EvalReport — rel-v1 (v5 Pkg-09; base: pkg-08 spec 01 §3.1).
 
-v2 [2026-06]: extended from 32→36 payload fields with the 4 thesis welfare
-metrics (welfare_physical / sustainability / fairness / tragedy_index;
-Ch3.8.3 / Table 6.1). The dataclass-field-count + sentinel lock lives in
-``tests/integration/test_pkg08_drift_detectors.py``
-(``test_eval_report_33_field_dataclass_lock`` → now 37 total).
+rel-v1 [2026-07]: the per-c / c-segment / type-ratio / regret machinery of the
+v4 schema is gone with c_t and the type system; the per-regime breakdown and
+the belief regime-quality fields replace them. 27 payload fields + 1
+``schema_version`` sentinel = 28 total. The dataclass-field-count + sentinel
+lock lives in ``tests/integration/test_pkg08_drift_detectors.py``.
+
+NOT in this schema (deliberately): NashConv / Price-of-Anarchy — the two
+game-theoretic metrics are post-hoc deliverables (``eval/game_metrics.py``,
+schema ``game-metrics-v1``) because best-response training is too expensive
+to run at every eval.
 """
 from __future__ import annotations
 
@@ -15,15 +20,14 @@ from typing import Literal, Mapping
 @dataclass(frozen=True)
 class EvalReport:
     """Single-run evaluation report, produced by:
-      - BaselineModel.evaluate(env_fn, c_grid, episodes) -> EvalReport     [pkg-07 spec 01 §3.2]
-      - ExternalBaselineRunner.evaluate(env_fn, c_grid, episodes) -> EvalReport  [pkg-07 spec 04 §10]
-      - unified_evaluator.evaluate(runner, env_fn, cfg) -> EvalReport     [pkg-08 spec 01]
+      - BaselineModel.evaluate(env_fn, regime_grid, episodes) -> EvalReport
+      - ExternalBaselineRunner.evaluate(env_fn, regime_grid, episodes) -> EvalReport
+      - unified_evaluator.evaluate(runner, env_fn, cfg) -> EvalReport
 
-    Schema is frozen here AND in pkg-08 spec 08 §3 (byte-identical). Any drift triggers
-    test_eval_report_schema_lock_matches_spec_08.py failure.
+    Schema is frozen here; drift trips the integration lock test.
     """
 
-    # === Identity (6) — who/what was evaluated ===
+    # === Identity (5) — who/what was evaluated ===
     variant: str
     seed: int
     config_hash: str
@@ -34,33 +38,21 @@ class EvalReport:
         "planner_no_coord_desc",
         "planner_full",
     ]
-    c_visible: bool
 
     # === Headline scalars (5) ===
+    # return_mean is social TOTAL welfare (ΣR, subjective relational reward).
+    # zero-shot semantics (v5): "seen" = regimes in cfg.env.train_regime_ids
+    # (all regimes when None), "unseen" = evaluated regimes outside it.
     return_mean: float
     return_sem: float
     return_zero_shot_seen: float
     return_zero_shot_unseen: float
     return_zero_shot_gap: float
 
-    # === Per-c breakdown (3) — zero-shot full grid ===
-    return_per_c: Mapping[float, float]
-    return_per_c_sem: Mapping[float, float]
-    episodes_per_c: Mapping[float, int]
-
-    # === c-segment aggregation (2) — Ch6.2.4 ===
-    return_per_segment: Mapping[tuple[float, float], float]
-    return_per_segment_sem: Mapping[tuple[float, float], float]
-
-    # === Bell-curve type-ratio sweep (2) — Ch6.6 ===
-    return_per_type_ratio: Mapping[tuple[int, int], float]
-    return_per_type_ratio_sem: Mapping[tuple[int, int], float]
-
-    # === Regret vs oracle ceiling (4) — spec 02 §3 ===
-    regret_per_c: Mapping[float, float]
-    regret_mean: float
-    oracle_ceiling_per_c: Mapping[float, float]
-    oracle_ceiling_cache_hit: Mapping[float, bool]
+    # === Per-regime breakdown (3) — keyed by regime id ===
+    return_per_regime: Mapping[int, float]
+    return_per_regime_sem: Mapping[int, float]
+    episodes_per_regime: Mapping[int, int]
 
     # === Planner-prior gap (3) — in-training eval semantic, retained ===
     planner_prior_return_gap: float
@@ -74,59 +66,40 @@ class EvalReport:
     info_gating_strict: bool
     set_context_subjective_oracle_leak: bool
 
-    # === Optional belief diagnostics (2) — hyper-only; None for every other variant ===
-    belief_c_mae: float | None = None
-    belief_c_calibration: float | None = None
+    # === Belief regime-quality (2) — belief-carrying variants; None otherwise ===
+    # regime_accuracy: step-mean argmax accuracy of the BeliefNet posterior vs
+    # oracle g. regime_nll is reserved (None until the analysis stage computes
+    # it from stored posteriors); keeping the slot avoids a schema bump later.
+    regime_accuracy: float | None = None
+    regime_nll: float | None = None
 
-    # === v4-thesis welfare metrics (4) — Ch3.8.3 / Table 6.1 ===
-    # ``return_mean`` is social TOTAL welfare (ΣR, the subjective Fehr-Schmidt
-    # reward). These add the complementary physical welfare (Σu, cross-type
-    # comparable), resource sustainability (S = Σ_k q_k,Tmax / (K·Q_max)),
-    # fairness (F = 1 − N·σ(W_i^phys)/Σ_i W_i^phys), and the tragedy indicator
-    # (T = 1[S < 0.2]). Default 0.0: external runners that don't surface them
-    # report a placeholder; the internal/hyper path populates them in
-    # ``unified_evaluator`` from the per-episode physical-harvest + final
-    # resource-stock signal threaded through ``run_eval`` / the worker.
+    # === v5-thesis welfare metrics (4) ===
+    # Physical welfare (Σu, regime-comparable), sustainability
+    # (S = Σ_k q_k,Tmax / (K·Q_max)), fairness (F = 1 − N·σ(W_phys)/Σ W_phys),
+    # tragedy indicator mean (T = 1[S < 0.2]). Default 0.0: runners that don't
+    # surface them report a placeholder.
     welfare_physical_mean: float = 0.0
     sustainability_mean: float = 0.0
     fairness_mean: float = 0.0
     tragedy_index_mean: float = 0.0
 
-    # === Schema version sentinel (1) — for forward migration ===
-    # v2 (2026-06): +4 welfare metrics above (was v1, 33 fields → now 37).
-    schema_version: str = "pkg08-spec01-v2"
+    # === Schema version sentinel (1) ===
+    schema_version: str = "rel-v1"
 
     def to_dict(self) -> dict:
         """JSON-safe plain-dict view of the report.
 
-        Used by the sweep worker (``_sweep_worker.py`` prefers ``to_dict`` over
-        ``dataclasses.asdict``). Two reasons we cannot use ``asdict`` here:
-
-          * ``asdict`` deep-copies every field, and the ``Mapping`` fields are
-            stored as :class:`types.MappingProxyType`, which is not
-            deep-copyable (``TypeError: cannot pickle 'mappingproxy' object``).
-          * The tuple-keyed maps (``return_per_segment``,
-            ``return_per_type_ratio`` and their ``_sem`` twins) have tuple keys,
-            which ``json.dumps`` rejects. We stringify those keys here.
-
-        Float / int / bool / None keys pass through unchanged (``json.dumps``
-        coerces numeric keys to strings on its own). The conversion is one-way;
-        nothing in the pipeline reads these maps back by key.
+        The ``Mapping`` fields are stored as :class:`types.MappingProxyType`
+        (not deep-copyable by ``dataclasses.asdict``), so we convert manually;
+        int keys pass through (``json.dumps`` coerces them to strings).
         """
         from dataclasses import fields
-
-        def _key(k):
-            if isinstance(k, tuple):
-                return ",".join(str(x) for x in k)
-            return k
 
         out: dict = {}
         for f in fields(self):
             value = getattr(self, f.name)
-            # Detect mapping-like fields (MappingProxyType included) without
-            # importing the concrete proxy type.
             if hasattr(value, "items") and not isinstance(value, (str, bytes)):
-                out[f.name] = {_key(k): v for k, v in value.items()}
+                out[f.name] = dict(value.items())
             else:
                 out[f.name] = value
         return out

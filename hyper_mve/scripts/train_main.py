@@ -58,8 +58,8 @@ from hyper_mve.training import EpisodeReplayBuffer, MuZeroTrainer, Worker, run_e
 _SUB_CONFIGS = ("env", "model", "train", "mup", "eval", "legacy")
 
 # pkg-07 spec 06 §4.6 + design D9: 3 stub-CLIs that raise on construction.
-# Other variants (baseline_*, no_belief, rewardhead_explicit_type, external_mappo,
-# external_qmix, external_ma_muzero_gh) are reachable but route through the
+# Other variants (baseline_*, no_belief, external_mappo, external_qmix,
+# external_ma_muzero_gh) are reachable but route through the
 # pkg-08 sweep harness — train_main.py prints a delegation message rather
 # than driving them through MuZeroTrainer.
 _STUB_VARIANTS: dict[str, str] = {

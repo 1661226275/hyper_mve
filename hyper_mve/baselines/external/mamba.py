@@ -51,7 +51,7 @@ class _MAMBAStub(ExternalBaselineRunner):
     ) -> None:
         raise NotImplementedError("MAMBA stub — see __init__.")
 
-    def evaluate(self, env_fn, c_grid, episodes):
+    def evaluate(self, env_fn, regime_grid, episodes):
         raise NotImplementedError("MAMBA stub — see __init__.")
 
     def save_checkpoint(self, path: Union[Path, str]) -> None:

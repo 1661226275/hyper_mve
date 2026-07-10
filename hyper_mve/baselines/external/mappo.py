@@ -12,7 +12,7 @@ this module is the plumbing layer that:
     via the injected ``env_fn`` factory (no direct ``ResourceCommonsEnv``
     construction — pkg-07 spec 04 §10);
   * implements ``train(cfg, env_fn)`` and overrides ``evaluate(env_fn,
-    c_grid, episodes)`` with deterministic per-c rollouts that populate
+    regime_grid, episodes)`` with deterministic per-regime rollouts that populate
     the locked 32-field :class:`hyper_mve.eval.eval_report.EvalReport`.
 
 Per-impl tuning constants (mlp_hidden_dim, K_epochs, batch_size, etc.) live
@@ -34,6 +34,7 @@ from hyper_mve.baselines.external._lzj_mappo.mappo import MAPPO_MPE
 from hyper_mve.baselines.external._lzj_mappo.normalization import Normalization
 from hyper_mve.baselines.external._lzj_mappo.replay_buffer import ReplayBuffer
 from hyper_mve.configs import V4Config
+from hyper_mve.baselines.external.base import split_seen_unseen_regimes
 from hyper_mve.eval.eval_report import EvalReport
 
 
@@ -240,17 +241,17 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
         args: SimpleNamespace,
         replay_buffer: Optional[ReplayBuffer],
         evaluate: bool,
-        c_override: Optional[float] = None,
+        g_override: Optional[int] = None,
     ) -> int:
         """Run a single episode; returns the number of steps actually taken.
 
         When ``evaluate=True``, ``replay_buffer`` is unused (``None`` allowed)
         and actions are deterministic argmax samples.
-        When ``c_override`` is set, the env is reset with ``options={"c": c}``
-        — used by ``evaluate()`` to pin the rule per c-grid row.
+        When ``g_override`` is set, the env is reset with ``options={"g": g}``
+        — used by ``evaluate()`` to pin the relationship regime per grid row.
         """
         n_agents = args.N
-        reset_options = {"c": float(c_override)} if c_override is not None else None
+        reset_options = {"g": int(g_override)} if g_override is not None else None
         obs_dict, info = env.reset(options=reset_options)
         _check_forbidden_info(info)
         obs_n = _obs_dict_to_array(obs_dict, n_agents)
@@ -299,17 +300,17 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
     def evaluate(
         self,
         env_fn: Callable[[], Any],
-        c_grid: tuple[float, ...],
+        regime_grid: tuple[int, ...],
         episodes: int,
     ) -> EvalReport:
-        """Per-c deterministic rollouts; assemble the locked 32-field EvalReport.
+        """Per-regime deterministic rollouts; assemble the locked rel-v1 EvalReport.
 
         Args:
             env_fn: factory returning ``ResourceCommonsPettingZooEnv`` with
                 ``oracle_mode=False, eval_info_mode=True`` (eval-time contract,
                 pkg-07 spec 04 §10).
-            c_grid: c-values to sweep (tuple of floats; pkg-07 spec 08 §4.1).
-            episodes: episode count per c-value (pkg-07 spec 08 §4.1).
+            regime_grid: regime ids to sweep (tuple of ints; v5).
+            episodes: episode count per regime (pkg-07 spec 08 §4.1).
         """
         if self._agent is None:
             # Train was never called; build a randomly-initialised agent so
@@ -337,14 +338,14 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
 
         t0 = time.time()
         env = env_fn()
-        return_per_c: dict[float, float] = {}
-        return_per_c_sem: dict[float, float] = {}
-        episodes_per_c: dict[float, int] = {}
+        return_per_regime: dict[int, float] = {}
+        return_per_regime_sem: dict[int, float] = {}
+        episodes_per_regime: dict[int, int] = {}
         all_returns: list[float] = []
         env_steps_total = 0
 
-        for c in c_grid:
-            c_returns: list[float] = []
+        for g in regime_grid:
+            g_returns: list[float] = []
             for _ in range(int(episodes)):
                 episode_steps = self._run_one_episode(
                     env=env,
@@ -352,33 +353,22 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
                     args=args,
                     replay_buffer=None,
                     evaluate=True,
-                    c_override=float(c),
+                    g_override=int(g),
                 )
-                c_returns.append(float(self._last_episode_return))
+                g_returns.append(float(self._last_episode_return))
                 env_steps_total += int(episode_steps)
-            return_per_c[float(c)] = float(np.mean(c_returns)) if c_returns else 0.0
+            return_per_regime[int(g)] = float(np.mean(g_returns)) if g_returns else 0.0
             sem = (
-                float(np.std(c_returns) / max(np.sqrt(len(c_returns)), 1.0))
-                if len(c_returns) > 1 else 0.0
+                float(np.std(g_returns) / max(np.sqrt(len(g_returns)), 1.0))
+                if len(g_returns) > 1 else 0.0
             )
-            return_per_c_sem[float(c)] = sem
-            episodes_per_c[float(c)] = int(len(c_returns))
-            all_returns.extend(c_returns)
+            return_per_regime_sem[int(g)] = sem
+            episodes_per_regime[int(g)] = int(len(g_returns))
+            all_returns.extend(g_returns)
         env.close()
 
-        # Zero-shot seen / unseen / gap (pkg-08 spec 02 §2 + spec 01 §3.1).
-        zs_train = set(float(c) for c in self.cfg.eval.zero_shot_train_c)
-        zs_unseen = set(float(c) for c in self.cfg.eval.zero_shot_unseen_c)
-        seen_returns = [return_per_c[c] for c in return_per_c if c in zs_train]
-        unseen_returns = [return_per_c[c] for c in return_per_c if c in zs_unseen]
-        zs_seen = float(np.mean(seen_returns)) if seen_returns else 0.0
-        zs_unseen_v = float(np.mean(unseen_returns)) if unseen_returns else 0.0
-
-        # c-segment + bell-curve aggregation: left empty here; pkg-08 spec 01
-        # §6.3 spells out that the unified evaluator's external branch
-        # post-aggregates these fields if the runner returns empty mappings.
-        segments = tuple(self.cfg.eval.c_segments)
-        ratios = tuple(self.cfg.eval.bell_curve_type_ratios)
+        # Zero-shot seen / unseen / gap (v5: train_regime_ids split).
+        zs_seen, zs_unseen_v = split_seen_unseen_regimes(self.cfg, return_per_regime)
 
         return_mean = float(np.mean(all_returns)) if all_returns else 0.0
         return_sem = (
@@ -392,23 +382,14 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
             config_hash="0" * 40,
             eval_mode="planner",
             eval_planner_mode=self.cfg.eval.eval_planner_mode,
-            c_visible=bool(self.cfg.env.c_visible),
             return_mean=return_mean,
             return_sem=return_sem,
             return_zero_shot_seen=zs_seen,
             return_zero_shot_unseen=zs_unseen_v,
             return_zero_shot_gap=zs_seen - zs_unseen_v,
-            return_per_c=MappingProxyType(return_per_c),
-            return_per_c_sem=MappingProxyType(return_per_c_sem),
-            episodes_per_c=MappingProxyType(episodes_per_c),
-            return_per_segment=MappingProxyType({seg: 0.0 for seg in segments}),
-            return_per_segment_sem=MappingProxyType({seg: 0.0 for seg in segments}),
-            return_per_type_ratio=MappingProxyType({r: 0.0 for r in ratios}),
-            return_per_type_ratio_sem=MappingProxyType({r: 0.0 for r in ratios}),
-            regret_per_c=MappingProxyType({c: 0.0 for c in c_grid}),
-            regret_mean=0.0,
-            oracle_ceiling_per_c=MappingProxyType({c: 0.0 for c in c_grid}),
-            oracle_ceiling_cache_hit=MappingProxyType({c: False for c in c_grid}),
+            return_per_regime=MappingProxyType(return_per_regime),
+            return_per_regime_sem=MappingProxyType(return_per_regime_sem),
+            episodes_per_regime=MappingProxyType(episodes_per_regime),
             # External runners have no MVE planner; pkg-08 spec 01 §6.2 says
             # set planner-prior gap to 0 and the two mode-means to return_mean.
             planner_prior_return_gap=0.0,

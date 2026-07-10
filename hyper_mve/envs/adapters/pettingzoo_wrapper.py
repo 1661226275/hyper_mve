@@ -1,18 +1,18 @@
-"""ResourceCommonsPettingZooEnv — N-parametric PettingZoo ParallelEnv wrapper.
+"""RelationCommonsPettingZooEnv — N-parametric PettingZoo ParallelEnv wrapper (v5).
 
-Pkg-07 spec 04 — load-bearing for every external baseline runner. The two
-constructor flags (``oracle_mode`` + ``eval_info_mode``) gate two orthogonal
-information surfaces (spec 04 §7):
+Pkg-07 spec 04 (v5 form) — load-bearing for every external baseline runner.
+The two constructor flags (``oracle_mode`` + ``eval_info_mode``) gate two
+orthogonal information surfaces (spec 04 §7):
 
-  * ``oracle_mode=True`` exposes ``info["c_true"]`` and ``info["types"]``
-    (ground-truth context + per-agent type labels). Permitted *only* on the
-    internal hyper ``oracle_only`` curriculum-override path; **no external
-    runner ever flips this flag**.
+  * ``oracle_mode=True`` exposes ``info["g_true"]`` and ``info["rows"]``
+    (ground-truth regime id + all agents' relationship rows). Permitted
+    *only* on the internal oracle-supervision path; **no external runner
+    ever flips this flag** — externals must infer the hidden regime from
+    behavior, exactly like hyper's BeliefNet.
 
-  * ``eval_info_mode=True`` exposes ``info["hotspot_centers"]`` and
-    ``info["resource_state"]`` (eval-only diagnostic metric scaffolding).
-    Permitted *only* on the pkg-08 unified evaluator path; **never** at
-    training time.
+  * ``eval_info_mode=True`` exposes ``info["resource_state"]`` (eval-only
+    diagnostic scaffolding). Permitted *only* on the unified evaluator path;
+    **never** at training time.
 
 Schema markers (``_info_schema_version``, ``_oracle_fields``,
 ``_eval_only_fields``) are unconditionally stripped — they leak the *names* of
@@ -27,15 +27,15 @@ from gym.spaces import Box, Discrete
 from pettingzoo.utils.env import ParallelEnv
 
 from hyper_mve.configs.env_config import EnvConfig
-from hyper_mve.envs.resource_commons.env import ResourceCommonsEnv
-from hyper_mve.schemas import ObservationLayout
+from hyper_mve.envs.relation_commons import RelationCommonsEnv
+from hyper_mve.schemas import RelationObservationLayout
 
 
 _VALID_N: tuple[int, ...] = (2, 4, 8)
 
 
-class ResourceCommonsPettingZooEnv(ParallelEnv):
-    """N-parametric PettingZoo ``ParallelEnv`` wrapper around ``ResourceCommonsEnv``.
+class RelationCommonsPettingZooEnv(ParallelEnv):
+    """N-parametric PettingZoo ``ParallelEnv`` wrapper around ``RelationCommonsEnv``.
 
     Agent ids are the literal strings ``"agent_0"`` .. ``f"agent_{N-1}"``,
     where N is read from ``env_cfg.N`` (locked preset domain {2, 4, 8}).
@@ -43,7 +43,7 @@ class ResourceCommonsPettingZooEnv(ParallelEnv):
     inherited from ``hyper_mve.envs.resource_commons.spaces.make_action_space``).
     """
 
-    metadata = {"render_modes": ["rgb_array"], "name": "resource_commons_v4"}
+    metadata = {"render_modes": ["rgb_array"], "name": "relation_commons_v5"}
 
     def __init__(
         self,
@@ -51,9 +51,9 @@ class ResourceCommonsPettingZooEnv(ParallelEnv):
         oracle_mode: bool = False,
         eval_info_mode: bool = False,
     ) -> None:
-        # ResourceCommonsEnv.__init__ already raises TypeError on a non-EnvConfig
-        # input (env.py:81); no extra check needed here.
-        self._env = ResourceCommonsEnv(env_cfg)
+        # RelationCommonsEnv.__init__ already raises TypeError on a non-EnvConfig
+        # input; no extra check needed here.
+        self._env = RelationCommonsEnv(env_cfg)
         self._oracle_mode: bool = bool(oracle_mode)
         self._eval_info_mode: bool = bool(eval_info_mode)
         self._N: int = self._env.N
@@ -66,7 +66,7 @@ class ResourceCommonsPettingZooEnv(ParallelEnv):
         self.agents: list[str] = list(self.possible_agents)
 
         # Per-agent space sizes (constant; cached for the spec contract).
-        obs_dim = ObservationLayout.total_dim(self._N, self._env.K)
+        obs_dim = RelationObservationLayout.total_dim(self._N, self._env.K)
         self._obs_dim: int = obs_dim
         self._action_space_per_agent: Discrete = Discrete(int(self._env.A))
         self._observation_space_per_agent: Box = Box(
@@ -148,11 +148,16 @@ class ResourceCommonsPettingZooEnv(ParallelEnv):
         """
         drop: set[str] = set()
         if not self._oracle_mode:
-            drop.update(info.get("_oracle_fields", ()))         # ('c_true', 'types')
+            drop.update(info.get("_oracle_fields", ()))         # ('g_true', 'rows')
         if not self._eval_info_mode:
-            drop.update(info.get("_eval_only_fields", ()))      # ('hotspot_centers', 'resource_state')
+            drop.update(info.get("_eval_only_fields", ()))      # ('resource_state',)
         drop.update({"_info_schema_version", "_oracle_fields", "_eval_only_fields"})
         kept = {k: v for k, v in info.items() if k not in drop}
         if per_agent:
             return {f"agent_{i}": kept for i in range(self._N)}
         return kept
+
+
+# Legacy import alias (v4 name) — kept until Stage-6 cleanup; new code should
+# import RelationCommonsPettingZooEnv.
+ResourceCommonsPettingZooEnv = RelationCommonsPettingZooEnv

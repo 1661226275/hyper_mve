@@ -2,7 +2,7 @@
 
 Each runner implements :class:`ExternalBaselineRunner` (the abstract base
 class declared in :mod:`hyper_mve.baselines.external.base`) and consumes
-``ResourceCommonsPettingZooEnv`` via an ``env_fn`` factory.
+``RelationCommonsPettingZooEnv`` via an ``env_fn`` factory.
 
 Implementation status:
   * ``MAPPOAlgorithm`` — Tier-1 real port from ``D:\\RL\\lzj\\MAPPO``
@@ -39,8 +39,13 @@ from .base import ExternalBaselineRunner
 # pkg-07 spec 06 §6.1 + Lock 3 — single source of truth for the four
 # runner modules. The literal frozenset({...}) lives ONLY here; runners
 # import it via ``from hyper_mve.baselines.external import _FORBIDDEN_INFO_KEYS``.
+# v5 (Pkg-09): oracle fields are the regime id + all-agent rows; the legacy
+# c_true/types names are kept in the guard until Stage-6 cleanup (harmless —
+# the v5 env never emits them).
 _FORBIDDEN_INFO_KEYS: Final[frozenset[str]] = frozenset({
-    "c_true", "types", "resource_state", "hotspot_centers",
+    "g_true", "rows",
+    "resource_state",
+    "c_true", "types", "hotspot_centers",   # legacy v4 names (defence in depth)
 })
 
 # Defer concrete-class imports until after _FORBIDDEN_INFO_KEYS is bound, so

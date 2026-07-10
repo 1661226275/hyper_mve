@@ -3,12 +3,12 @@
 pkg-07 spec 05 §4 / spec 06 §2.3 lock the four-method protocol:
 
     - train(cfg, env_fn, *, total_env_steps, lr, seed) -> None
-    - evaluate(env_fn, c_grid, episodes) -> EvalReport
+    - evaluate(env_fn, regime_grid, episodes) -> EvalReport   (v5: regime ids)
     - save_checkpoint(path: Path | str) -> None
     - load_checkpoint(path: Path | str) -> None
 
 Subclasses bring their own trainer/buffer/loss (no MuZeroTrainer reuse) and
-consume :class:`hyper_mve.envs.adapters.pettingzoo_wrapper.ResourceCommonsPettingZooEnv`
+consume :class:`hyper_mve.envs.adapters.pettingzoo_wrapper.RelationCommonsPettingZooEnv`
 via the injected ``env_fn`` factory. ``train`` accepts ``**kwargs`` for
 forward-compat / adapter-port slack: each concrete runner may consume
 extra kwargs (e.g. ``max_train_steps`` aliasing ``total_env_steps`` for the
@@ -57,41 +57,31 @@ class ExternalBaselineRunner(abc.ABC):
     def evaluate(
         self,
         env_fn: Callable[[], Any],
-        c_grid: tuple[float, ...],
+        regime_grid: tuple[int, ...],
         episodes: int,
     ) -> EvalReport:
-        """Evaluate the trained runner; returns the locked-schema EvalReport.
+        """Evaluate the trained runner; returns the locked rel-v1 EvalReport.
 
         Default implementation returns a zero-valued, schema-complete report.
         Concrete real-port subclasses (MAPPO/QMIX/MA-MuZero-GH) override
         this with the actual evaluation logic.
         """
         t0 = time.time()
-        segments = tuple(self.cfg.eval.c_segments)
-        ratios = tuple(self.cfg.eval.bell_curve_type_ratios)
+        grid = tuple(int(g) for g in regime_grid)
         return EvalReport(
             variant=type(self).__name__,
             seed=0,
             config_hash="0" * 40,
             eval_mode="planner",
             eval_planner_mode=self.cfg.eval.eval_planner_mode,
-            c_visible=bool(self.cfg.env.c_visible),
             return_mean=0.0,
             return_sem=0.0,
             return_zero_shot_seen=0.0,
             return_zero_shot_unseen=0.0,
             return_zero_shot_gap=0.0,
-            return_per_c=MappingProxyType({c: 0.0 for c in c_grid}),
-            return_per_c_sem=MappingProxyType({c: 0.0 for c in c_grid}),
-            episodes_per_c=MappingProxyType({c: 0 for c in c_grid}),
-            return_per_segment=MappingProxyType({seg: 0.0 for seg in segments}),
-            return_per_segment_sem=MappingProxyType({seg: 0.0 for seg in segments}),
-            return_per_type_ratio=MappingProxyType({r: 0.0 for r in ratios}),
-            return_per_type_ratio_sem=MappingProxyType({r: 0.0 for r in ratios}),
-            regret_per_c=MappingProxyType({c: 0.0 for c in c_grid}),
-            regret_mean=0.0,
-            oracle_ceiling_per_c=MappingProxyType({c: 0.0 for c in c_grid}),
-            oracle_ceiling_cache_hit=MappingProxyType({c: False for c in c_grid}),
+            return_per_regime=MappingProxyType({g: 0.0 for g in grid}),
+            return_per_regime_sem=MappingProxyType({g: 0.0 for g in grid}),
+            episodes_per_regime=MappingProxyType({g: 0 for g in grid}),
             planner_prior_return_gap=0.0,
             direct_inference_return_mean=0.0,
             planner_full_return_mean=0.0,
@@ -123,4 +113,23 @@ class ExternalBaselineRunner(abc.ABC):
         return 0
 
 
-__all__ = ["ExternalBaselineRunner"]
+def split_seen_unseen_regimes(cfg: V4Config, return_per_regime) -> tuple[float, float]:
+    """v5 zero-shot split: "seen" = regimes in ``cfg.env.train_regime_ids``
+    (all evaluated regimes when None), "unseen" = the rest. Returns
+    (seen_mean, unseen_mean); 0.0 for an empty side. Shared by the three
+    real external runners + the unified evaluator."""
+    train_ids = cfg.env.train_regime_ids
+    vals = {int(g): float(v) for g, v in return_per_regime.items()}
+    if train_ids is None:
+        seen = list(vals.values())
+        unseen = []
+    else:
+        train = {int(i) for i in train_ids}
+        seen = [v for g, v in vals.items() if g in train]
+        unseen = [v for g, v in vals.items() if g not in train]
+    zs_seen = float(sum(seen) / len(seen)) if seen else 0.0
+    zs_unseen = float(sum(unseen) / len(unseen)) if unseen else 0.0
+    return zs_seen, zs_unseen
+
+
+__all__ = ["ExternalBaselineRunner", "split_seen_unseen_regimes"]
