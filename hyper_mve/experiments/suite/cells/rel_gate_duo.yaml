@@ -1,0 +1,29 @@
+# v5 决策点 1 (relation gate): rel_duo N=2, hidden-regime mixed training.
+# Hyper vs MA-MuZero (主对照) vs no_belief (无 ToM 消融) vs oracle/infer 课程角点
+# + 3 external baselines. Metric: eval planner/return_total (+ per-regime) and
+# belief/regime_accuracy. p=0 (research point 1): regime resampled per episode.
+meta:
+  id: rel_gate_duo
+  title: "v5 relation gate — rel_duo N=2 混合 regime 主对照 (决策点 1)"
+  tier: must_have
+  size: easy
+  deliverables: ["Table 6.1 (rel gate)", "Fig 6.1 (per-regime returns)"]
+  assertion: "Hyper > MA-MuZero on mixed hidden regimes; no_belief degraded (belief path load-bearing)"
+  runs_subdir: rel_gate_duo
+  blocked_on: []
+variants:
+  - hyper
+  - baseline_ma_muzero
+  - no_belief
+  - external_mappo
+  - external_qmix
+  - external_ma_muzero_gh
+seeds: [0, 1, 2]
+preset: rel_duo
+overrides:
+  - {}
+max_steps: 200000
+eval_planner_mode: planner_full
+max_parallel: 2
+n_gpus: 2
+ablation_cell_id: rel_gate_duo

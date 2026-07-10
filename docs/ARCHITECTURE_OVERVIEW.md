@@ -1,399 +1,325 @@
-# Hyper-MuZero v4 代码主视图（Pkg-01 ~ Pkg-05 + 优化阶段）
+# Hyper-MuZero v5 代码主视图（Pkg-01 ~ Pkg-09：动态角色关系版）
 
-> 面向「开始实验」的导读：先看 §1 核心思想 → §2 分层架构 → §5 怎么训练 → **§11 优化阶段（gen_scope / LoRA / sweep）**。
-> 权威规格见 `sdd/pkg-0X-*/`，本文件是代码侧的速查地图。理论复审与文档↔代码审计见 `docs/Review_v4_TheoryAudit_2026-06.md`。
-
----
-
-## 1. 一句话 + 核心思想（view = perspective）
-
-把**环境规则**与**智能体身份/信念**统一成一个 **80 维增广上下文** `C_aug`，
-喂给一个 **双超网络（DualHyperNetwork）**，由它**动态生成**三个小功能网的权重。
-换 agent 视角 = 重新生成权重，而不是换网络结构。
-
-```
-C_aug = [ c_ctx(16) | role(32) | belief(32) ]   = 80 维
-          规则丰度    身份(id+type+cap)  信念(ĉ + ẑ)
-              │            │                │
-              ▼            ▼                ▼
-       hyper_trans     hyper_rew        hyper_pred      (DualHyperNetwork, Pkg-04)
-              │            │                │
-            θ_state      θ_rew^i          θ_pred^i        (动态权重)
-              │            │                │
-      StateTransNet   RewardHead      PredictionNet      (功能网, Pkg-04)
-       s,a → s'        s,a → r          s → π, v
-        客观           主观(每个agent)   主观(每个agent)
-```
-
-- **客观流**：`hyper_trans` 只吃 `c_ctx`（规则），生成 `θ_state`，所有 agent 共享 → 世界状态转移与「谁在看」无关。
-- **主观流**：`hyper_rew / hyper_pred` 吃完整 80 维，per-agent 生成 `θ_rew^i / θ_pred^i` → 奖励、策略、价值随视角变化。
+> 面向「开始实验」的导读：先看 §1 核心思想 → §2 分层架构 → §5 怎么训练 → §8 规划器。
+> 权威规格见 `sdd/pkg-0X-*/`（v5 变更集中在 `sdd/pkg-09-dynamic-relations/design.md`）。
+> 本文件是代码侧的速查地图。v4（resource_commons / c_t / 类型系统）已在 2026-07 的
+> Pkg-09 重构中整体退役，历史记录见 git history 与 `docs/中期报告_old.md`。
 
 ---
 
-## 2. 分层架构与依赖（Pkg-01 → Pkg-05）
+## 1. 一句话 + 核心思想（关系 = 角色）
+
+研究命题：**动态角色关系下的不完全信息博弈**。角色不再是离散类型（α/β），而是
+**关系矩阵 W(g) 的一行**：regime g 从有限族 G 中抽取，`w_ij` 表示 agent i 对 j 的
+福利权重。agent 只知道**自己的行** w_i·（私有信息），g 与他人的行需要**推断**。
 
 ```
-Pkg-01 基础 Schema + 配置        hyper_mve/schemas/ , hyper_mve/configs/
-   │  AgentType / CapabilityVector / TimeStepRecord / ObservationLayout / V4Config
+关系型奖励（Pkg-09 唯一公式）:
+    R_i = (u_i + Σ_{j≠i} w_ij·u_j) / (1 + Σ_{j≠i}|w_ij|) − ε·1[moved_i]
+
+C_aug = [ role(32) | belief(32) ]   = 64 维
+          身份(id8+row24)  信念(regime 后验 ĝ)
+              │                │
+              ▼                ▼
+          hyper_rew        hyper_pred          (DualHyperNetwork：仅主观路)
+              │                │
+            θ_rew^i          θ_pred^i            (动态生成权重)
+              │                │
+         RewardHead      PredictionNet          (功能网)
+          s,a → r           s → π, v
+        主观(每个agent)    主观(每个agent)
+
+         TransitionNet  s,a_joint → s'          (普通共享 nn.Module，SGD 训练)
+              客观：所有 agent 权重共享 = 视角不变性
+```
+
+- **客观流**：物理规则固定（常数再生率 α），转移网是**普通共享网络**——权重共享本身
+  就保证「世界演化与谁在看无关」。（v4 的 hyper_trans/c_ctx 已删除；未来做环境迁移时
+  可重新给客观路挂条件输入，是预留钩子而非现役代码。）
+- **主观流**：`hyper_rew / hyper_pred` 吃 64 维 C_aug，per-agent 生成 θ → 奖励、
+  策略、价值随「我是谁（row）+ 我认为局势是什么（belief over g）」变化。
+
+**Regime 动力学**：reset 时 `g_0 ~ ρ`（均匀）；每步以概率 p 切换（`κ` 均匀重采样）。
+`p=0` = 研究点 1（贝叶斯/Harsanyi 博弈，局内静态）；`p>0` = 研究点 2（隐 Markov
+切换博弈）。一套 kernel 两个研究点，由 `EnvConfig.regime_switch_prob` 控制。
+
+---
+
+## 2. 分层架构与依赖
+
+```
+Pkg-01/09 Schema + 配置          hyper_mve/schemas/ , hyper_mve/configs/
+   │  relation.py(Regime/RegimeFamily/关系奖励) / TimeStepRecord / V4Config
    ▼
-Pkg-02 ResourceCommons 环境      hyper_mve/envs/resource_commons/
-   │  gym.Env：reset/step/info(三段：Public/Oracle/EvalOnly)
+Pkg-09 RelationCommons 环境      hyper_mve/envs/relation_commons/
+   │  gym.Env：reset(options={"g":k})/step/info(Public/Oracle/EvalOnly 三段)
    ▼
-Pkg-03 三路上下文编码 + 信念网    hyper_mve/models/  (belief_*, *_encoder, tri_context_encoder)
-   │  BeliefNet(GRU→ĉ,ẑ) + TriContextEncoder(→ctx_aug 80) + belief_losses
+Pkg-03/09 上下文编码 + 信念网     hyper_mve/models/  (belief_*, *_encoder, tri_context_encoder)
+   │  BeliefNet(GRU→ĝ) + TriContextEncoder(→ctx_aug 64) + belief_losses(L_regime/L_div)
    ▼
-Pkg-04 双超网络 + HyperMuZero     hyper_mve/models/  (hyper_*, functional_nets, representation_net, grad_gating)
-   │  HyperMuZeroModel(7 API) + DualHyperNetwork + 功能三网 + RepNet + 梯度门控
+Pkg-04/09 超网络 + HyperMuZero    hyper_mve/models/  (hyper_*, transition_net, functional_nets, ...)
+   │  HyperMuZeroModel(6 API) + DualHyperNetwork(仅主观) + TransitionNet + RepNet + 梯度门控
    ▼
-Pkg-05 训练器 & Worker           hyper_mve/training/ , hyper_mve/planning/ , hyper_mve/scripts/
+Pkg-05/08 训练器 & Worker & 套件  hyper_mve/training/ , planning/ , scripts/ , experiments/
       MuZeroTrainer / Worker / EpisodeReplayBuffer / CurriculumScheduler /
-      compose_total_loss / MVEPlanner / train_main.py
+      compose_total_loss / MVEPlanner / train_main.py / run_suite / sweep
 ```
 
 ---
 
 ## 3. 各包模块职责速查
 
-### Pkg-01 — 基础 Schema + 配置（`schemas/` + `configs/`）
+### Schema + 配置（`schemas/` + `configs/`）
 | 文件 | 作用 |
 |------|------|
-| `schemas/agent_type.py` | `AgentType`：`ALPHA=0`(自利) / `BETA=1`(Fehr-Schmidt 不公平厌恶) |
-| `schemas/capability.py` | `CapabilityVector(eta,phi_fov,nu,zeta)` 采集速度/视野/移动可靠性/容量 + `normalize()` |
-| `schemas/buffer_record.py` | `TimeStepRecord`（12 字段：o,a,r,delta,pi_mve,v,tau,cap,c_hat,z_hat,t,done）|
-| `schemas/observation.py` | `ObservationLayout.total_dim(N,K)` 六块观测布局 |
-| `configs/v4_config.py` | `V4Config`（env/model/train/mup/eval/legacy）+ `from_preset` / `to_dict` |
-| `configs/presets/{easy,medium,hard}.py` | 三档难度参考配置（medium 是主对照）|
-| `configs/presets/duo*.py, medium_*lora*.py` | **[v4-opt]** duo 诊断族(N=2, 1α+1β, random_walk)与 gen_scope/LoRA 预设矩阵(§11)|
+| `schemas/relation.py` | `Regime(id,name,W)` / `RegimeFamily` / `build_g2·g4·g4_ext(λ)` / `sample_initial_regime` / `step_regime` / **`compute_relational_rewards`**（论文公式的唯一实现）|
+| `schemas/buffer_record.py` | `TimeStepRecord` v5（10 字段：o,a,r,pi_mve,v,row,g_hat,g,t,done）|
+| `schemas/observation.py` | `RelationObservationLayout.total_dim(N,K) = 5+3K+10(N−1)`（rel_duo N=2,K=8 → 39）|
+| `configs/env_config.py` | `relation_family/relation_intensity/regime_prior/regime_switch_prob/train_regime_ids/alpha` |
+| `configs/presets/rel_duo.py` | `rel_duo`（N=2, g2, p=0, 200K 主对照）+ `rel_duo_holdout`（train_regime_ids=(0,1,4)，留出非对称 regime 做零样本）|
 
-### Pkg-02 — ResourceCommons 环境（`envs/resource_commons/`）
+**g2 族（N=2, |G|=5）**：0 mutual_coop(+λ,+λ) / 1 mutual_comp(−λ,−λ) /
+2 asym_exploit / 3 asym_exploited / 4 neutral(0,0)。g4 与 g4_ext（N=4，5/9 个 regime）同文件。
+
+### RelationCommons 环境（`envs/relation_commons/`）
 | 文件 | 作用 |
 |------|------|
-| `env.py` | `ResourceCommonsEnv`（gym.Env）：`reset()→(obs,info)`、`step(a)→(obs,r,done,trunc,info)` |
-| `dynamics.py` | 资源 logistic 再生 + fair-share 采集 |
-| `rewards.py` | 类型相关奖励（ALPHA 自利；BETA 不公平厌恶 Δ）|
-| `observations.py` | 六块联合观测 `(N, obs_dim)` |
-| `context_evolution.py` | 规则丰度 `c_t` 演化（static / drift）|
-| `state.py` / `spawn.py` | 状态容器 / patchy 资源生成 |
+| `env.py` | `RelationCommonsEnv`：reset 时 `g_0~ρ`（受 `train_regime_ids` 限制；`options={"g":k}` 可钉死）；step = 确定性移动 + fair-share 采集 + 常数 α 再生 + `step_regime` + 关系奖励 |
+| `observations.py` | 五块观测：self(4) \| resource(3K) \| neighbor(9(N−1)) \| global(1) \| **row(N−1)=自己的 w_i·** |
+| `dynamics.py` / `spawn.py` / `rewards.py` / `state.py` | fair-share 采集（复用）/ 均匀重生成 / 关系奖励薄包装 / `W(N,N)+g` 状态容器 |
 
-> **info 三段分组（载荷契约）**：`Public`(caps/deltas/step_idx/harvests) 模型可用；
-> `Oracle`(c_true/types) **只给训练监督，绝不进 model.forward**；`EvalOnly`(hotspot/resource_state) 仅评估可视化。
+> **info 三段分组（载荷契约，`_info_schema_version="v5.0"`）**：`Public`(harvests/step_idx)
+> 模型可用；`Oracle`(g_true/rows) **只给训练监督，绝不进 model.forward**（worker 遵守
+> row-i-only-for-agent-i 纪律）；`EvalOnly`(resource_state) 仅评估可视化。
+> 外部基线经 `envs/adapters/pettingzoo_wrapper.py` 消费，`_FORBIDDEN_INFO_KEYS` 运行时护栏。
 
-### Pkg-03 — 三路上下文编码 + 信念网（`models/`）
+### 上下文编码 + 信念网（`models/`）
 | 文件 | 作用 |
 |------|------|
-| `belief_net.py` | `BeliefNet`：共享 GRU + `head_c`(sigmoid 标量 ĉ) + `head_opp`(对手类型 2 分类 softmax ẑ)。`step()` 在线单步 / `forward()` 序列 |
-| `belief_losses.py` | `l_c`(MSE) / `l_opp`(Oracle CE) / `l_div`(hinge 方差防坍缩) / `belief_loss` / `build_oracle_z_seq` |
-| `c_encoder.py` | `CEncoder`：`c_t` → `c_ctx`(16) |
-| `role_encoder.py` | `RoleEncoder`：id_emb + 自身 type_emb + cap → `role`(32)（Self-Info：只用自己的 type）|
-| `belief_encoder.py` | `BeliefEncoder`：ĉ + 池化(ẑ) → `belief_vec`(32) |
-| `tri_context_encoder.py` | `TriContextEncoder`：拼三路 → `ctx_aug`(80)，含三路 LayerNorm |
+| `belief_net.py` | `BeliefNet`：共享 GRU + `head_regime`（|G| 路 softmax）→ 每 agent 对 g 的后验 ĝ。`step()` 在线单步 / `forward()` 序列 |
+| `belief_losses.py` | `l_regime`(oracle-g CE) / `l_div`(hinge 方差防坍缩) / `belief_loss` / `build_oracle_g_seq`(one-hot) |
+| `role_encoder.py` | `RoleEncoder`：id_emb(8) + row_mlp(N−1→16→24) → `role`(32)（Self-Info：只用自己的 row）|
+| `belief_encoder.py` | `BeliefEncoder`：`Linear(|G|,32)+ReLU` → `belief_vec`(32) |
+| `tri_context_encoder.py` | 拼两路 → `ctx_aug`(64)，含分路 LayerNorm |
 
-### Pkg-04 — 双超网络 + HyperMuZero 模型（`models/`）
+### 超网络 + HyperMuZero 模型（`models/`）
 | 文件 | 作用 |
 |------|------|
-| `hyper_muzero_model.py` | `HyperMuZeroModel`：**7 个对外 API**（见 §4）|
-| `hyper_network.py` | `DualHyperNetwork`：`forward_trans(c_ctx)→θ_state`、`forward_subjective(ctx_aug)→(θ_rew,θ_pred)`；`detach_pred_context=True` 时只让 reward 梯度回流 ctx_aug |
-| `functional_nets.py` | `FunctionalStateTransNet`(Δs 残差+AdaLN)、`FunctionalRewardHead`、`FunctionalPredictionNet`（权重外部注入）|
-| `representation_net.py` | `RepresentationNet`(obs→s 客观潜状态) + `Projector`(BYOL 一致性) |
-| `grad_gating.py` | `BeliefGradGating`：前 `belief_grad_gating_steps`(=5000) 步把 belief 梯度 detach（双层），让 BeliefNet 先由 L_belief 专项训练 |
+| `hyper_muzero_model.py` | `HyperMuZeroModel`：**6 个对外 API**（见 §4）+ API lock 注释块 |
+| `hyper_network.py` | `DualHyperNetwork`：`forward_subjective(ctx_aug)→(θ_rew,θ_pred)`；`detach_pred_context=True` 时只让 reward 梯度回流 ctx_aug（v4 的 `forward_trans` 已删）|
+| `transition_net.py` | **`TransitionNet`：普通共享残差网** `(s, a_joint_onehot)→s'`，SGD 训练 |
+| `functional_nets.py` | `FunctionalRewardHead` / `FunctionalPredictionNet`（权重外部注入）|
+| `representation_net.py` | `RepresentationNet`(obs→s) + `Projector`(BYOL 一致性) |
+| `grad_gating.py` | 前 `belief_grad_gating_steps`(=5000) 步把 belief 梯度 detach，BeliefNet 先由 L_belief 专项预热 |
 
-### Pkg-05 — 训练器 & Worker（`training/` + `planning/` + `scripts/`）
+### 训练器 & Worker & 评估（`training/` + `planning/` + `eval/` + `scripts/`）
 | 文件 | 作用 |
 |------|------|
-| `training/muzero_trainer.py` | `MuZeroTrainer`：单一 `train_step` + EMA target(τ=0.99) + warmup_cosine LR + n-step return + v4 checkpoint |
-| `training/worker.py` | `Worker.collect_episode`：`BeliefNet.step` 在线推断 + 7-API 选动作 + MVE planner → `TimeStepRecord` |
-| `training/episode_buffer.py` | `EpisodeReplayBuffer`：TimeStepRecord 容器 + 分层采样(stratified) |
-| `training/curriculum.py` | `CurriculumScheduler`：3 stage + `oracle_z_mixing_weight` + `lambda_b` |
-| `training/loss_composition.py` | `compose_total_loss`：main loss + L_belief **双路径** backward |
-| `planning/mve_planner.py` | `MVEPlanner`：CRN(共同随机数) + 坐标下降，产出 `π_mve` 搜索策略 |
-| `scripts/train_main.py` | **统一训练入口**（`--preset/--variant/--override/...`）|
+| `training/muzero_trainer.py` | 单一 `train_step` + EMA target + warmup_cosine LR + n-step return + checkpoint |
+| `training/worker.py` | 向量化采集：`BeliefNet.step` 在线推断 + 6-API 选动作 + MVE planner → `TimeStepRecord(g,row,g_hat)` |
+| `training/episode_buffer.py` | TimeStepRecord 容器 + **按 regime 分层采样** |
+| `training/curriculum.py` | 3 stage oracle-g 混合权重 + `lambda_b` |
+| `training/loss_composition.py` | main loss + L_belief 双路径 backward；`g_main = w·onehot(g)+(1−w)·ĝ` 课程混合 |
+| `training/evaluation.py` | 训练内周期评估：**逐 regime**（`reset(options={"g":gid})`）双模式（prior/planner）+ `belief/regime_accuracy` |
+| `planning/mve_planner.py` | CRN + 坐标下降 + 主观 θ-cache，产出 `π_mve` |
+| `eval/eval_report.py` | 冻结 `EvalReport`（28 字段，`schema_version="rel-v1"`：per-regime returns/sem/episodes + regime_accuracy/nll + 4 福利指标）|
+| `eval/game_metrics.py` | **博弈论指标（离线）**：NashConv（DQN 最优反应，下界）+ 经验 PoA（`Eff(g)=W_phys/Ŵ*`）；CLI `scripts/eval_game_metrics.py` |
+| `scripts/train_main.py` | 统一训练入口（`--preset/--variant/--override/...`）|
+| `scripts/run_suite.py` | 套件驱动（`experiments/suite/manifest.yaml`：rel_gate_duo / rel_zero_shot_duo）|
 
 ---
 
-## 4. HyperMuZeroModel 的 7 个 API（训练/采集都靠它们拼装）
+## 4. HyperMuZeroModel 的 6 个 API（v5：`set_context_objective` 已删除）
 
 ```python
-model.update_step(global_step)                      # 1) 更新内部 step（驱动梯度门控阈值）
-model.set_context_objective(c_t)                    # 2) 由规则 c_t 算 θ_state（每次 unroll 起点 1 次）
-model.set_context_subjective(agent_id, cap_i, belief)  # 3) 由 (cap, ĉ, ẑ) 算 θ_rew^i / θ_pred^i（每个 agent 切一次）
-s   = model.encode(obs)                             # 4) RepNet：obs → 潜状态 s
-s2  = model.transition(s, action_onehot)            # 5) 客观转移：s,a → s'（用 θ_state）
-r   = model.predict_reward(s, action_onehot)        # 6) 主观奖励（用当前 agent 的 θ_rew）
-pi,v= model.predict(s)                              # 7) 主观策略+价值（用当前 agent 的 θ_pred）
+model.update_step(global_step)                        # 1) 驱动梯度门控阈值
+model.set_context_subjective(agent_id, row_i, belief) # 2) row_i (B,N−1)、belief (B,|G|) → θ_rew^i/θ_pred^i
+s    = model.encode(obs)                              # 3) RepNet：obs → 潜状态 s
+s2   = model.transition(s, action_onehot)             # 4) 客观转移（普通共享网，无需上下文）
+r    = model.predict_reward(s, action_onehot)         # 5) 主观奖励（当前 agent 的 θ_rew）
+pi,v = model.predict(s)                               # 6) 主观策略+价值（当前 agent 的 θ_pred）
 ```
 
-**调用顺序（硬约束）**：`update_step → set_context_objective(一次) → for k in N: set_context_subjective(k) + 前向`。
-注意 reward/value 是**标量变换空间**（MuZero `scalar_transform`），算 loss 时目标也要变换。
+**调用顺序（硬约束）**：`update_step → for k in N: set_context_subjective(k) + 前向`。
+v4 的 `set_context_objective(c_t)` 及其一切调用点已删除（迁移测试
+`test_no_v4_objective_context_calls` 把关）。reward/value 仍在 MuZero
+`scalar_transform` 空间，算 loss 时目标同变换。
 
 ---
 
 ## 5. 训练数据流（一个 iteration）
 
 ```
-[采集] Worker.collect_episode(env)            # 不反传，BeliefNet.step 在线推断
-   每步：obs → belief_net.step → ĉ,ẑ
-         encode(obs)=s；set_context_objective(c_true)
-         for k in N: set_context_subjective(k,cap_k,(ĉ_k,ẑ_k)) → predict
-         (可选) MVEPlanner.sample_mve_plan → π_mve
-         ε-greedy 选 a → env.step → 写 TimeStepRecord(+ c_t)
-         ↓
-[存储] buffer.store_episode(records, c_t_seq)      # FIFO + 分层
+[采集] Worker.collect_episodes(envs)           # 向量化 lockstep，不反传
+   每步：obs → belief_net.step → ĝ (N, |G|)
+         encode(obs)=s
+         for k in N: set_context_subjective(k, row_k, ĝ_k) → predict
+         (默认) MVEPlanner.sample_mve_plan → π_mve
+         ε-greedy 选 a → env.step → TimeStepRecord(o,a,r,π_mve,v,row,ĝ,g,t,done)
+         ↓  row 来自 oracle info["rows"]，但 agent k 只拿第 k 行（纪律同 v4 的 cap）
+[存储] buffer.store_episode(records)                # FIFO + 按 regime 分层
 
-[训练] buffer.sample_batch(B=256,K=5) → batch       # (B, K+1, N, ...)
+[训练] buffer.sample_batch(B,K) → batch             # (B, K+1, N, ...)
    trainer.train_step(batch, step):
-     model/target.update_step(step)
      compose_total_loss:
-       ① belief_net.forward(obs) → (hidden, ĉ_pred, ẑ_pred)        [带梯度]
-       ② L_belief = belief_loss(预测值, c_true, types)              [始终训练 BeliefNet]
-       ③ 课程混合：w=oracle_z_mixing_weight(step)；z_main = w·oracle + (1-w)·ẑ_pred
-       ④ set_context_objective(c_t)；K 步展开，对 N 个 agent：
-              set_context_subjective → predict/predict_reward
-              累积 L_policy(CE) + L_value(n-step,MSE) + L_reward(MSE) + L_consist(BYOL)
+       ① belief_net.forward(obs) → (hidden, ĝ_pred)            [带梯度]
+       ② L_belief = λ_regime·L_regime(ĝ_pred, g_true) + λ_div·L_div   [始终训练 BeliefNet]
+       ③ 课程混合：w=oracle_mixing(step)；g_main = w·onehot(g_true) + (1−w)·ĝ_pred
+       ④ K 步展开，对 N 个 agent：set_context_subjective(k, row_k, g_main_k)
+              → 累积 L_policy(CE vs π_mve) + L_value(n-step) + L_reward + L_consist(BYOL)
        ⑤ L_total = L_main + λ_b·L_belief
-     L_total.backward() → clip → optimizer.step → lr_scheduler.step → EMA 更新 target
+     backward → clip → optimizer.step → EMA target
 ```
 
-**双路径梯度（关键）**：`L_belief` 始终直接训练 BeliefNet；main loss 经 `set_context_subjective`
-进入模型，前 5000 步被 `grad_gating` detach（BeliefNet 先专项预热），5000 步后才让 main loss
-（实际上只有 reward 路，因 `detach_pred_context=True`）也回流 BeliefNet。
+**双路径梯度（不变的关键设计）**：`L_belief` 始终直接训练 BeliefNet；main loss 经
+`set_context_subjective` 进入模型，前 5000 步被 `grad_gating` 双层 detach，之后仅
+reward 路回流（`detach_pred_context=True` 时）。禁止反模式：先 detach 再算 L_belief。
 
-**课程 3 阶段**（medium，max=1,000,000）：
-| 阶段 | 区间 | oracle 注入权重 w | 含义 |
-|------|------|------------------|------|
-| Stage 1 Pure Oracle | 0 – 300k | 1.0 | 主路 belief 用真值 type（ẑ 注入 oracle）|
-| Stage 2 Anneal | 300k – 700k | 1.0 → 0.0 线性 | 逐步切到 BeliefNet 推断 |
-| Stage 3 Pure Inference | 700k – 1M | 0.0 | 完全靠 BeliefNet 自己推 |
+**课程 3 阶段（rel_duo，max=200K）**：Stage 1 Pure Oracle（0–30%，w=1：主路用真值 g）
+→ Stage 2 Anneal（30–70%，线性 1→0）→ Stage 3 Pure Inference（70–100%，w=0）。
+belief 是承载研究点的路（隐 regime 推断），rel_duo **不再**沿用 duo 的
+`belief_grad_gating_steps=1e9`，恢复默认 5000。
 
 ---
 
 ## 6. 怎么开始训练
 
-> 在 Linux 训练机、`lightzero` 环境、仓库根目录（`hyper_mve/__init__.py` 的上一层）运行。
+> Linux 训练机、`lightzero` 环境、仓库根目录运行。GPU 0/1 政策禁用，测试用 2,3。
 
 ```bash
 cd /home/data/zhengwenbo/hyper_mve
 conda activate lightzero
 
-# 0) 先跑一个最小冒烟，确认全链路通（几分钟）
-python hyper_mve/scripts/train_main.py --preset medium --variant hyper \
-    --max_steps 200 \
-    --override "train.min_buffer_size=4" --override "train.batch_size=16" \
-    --override "env.T_max=60" --ckpt_dir checkpoints/smoke --seed 0
+# 0) 最小冒烟（几分钟）
+python hyper_mve/scripts/train_main.py --preset rel_duo --variant hyper \
+    --max_steps 500 \
+    --override "train.min_buffer_size=12" --override "train.batch_size=32" \
+    --ckpt_dir checkpoints/smoke --seed 0
 
-# 1) 正式训练（medium 主配置，1M 步；先 collect 1000 集再训，耗时较长）
-python hyper_mve/scripts/train_main.py --preset medium --variant hyper \
-    --max_steps 1000000 --seed 0 \
-    --log_dir runs/exp1_hyper --ckpt_dir checkpoints/exp1_hyper
+# 1) 正式训练（rel_duo 主配置，200K 步）
+python hyper_mve/scripts/train_main.py --preset rel_duo --variant hyper \
+    --max_steps 200000 --seed 0 \
+    --log_dir runs/rel_duo_hyper --ckpt_dir checkpoints/rel_duo_hyper
 
-# 2) 续训
-python hyper_mve/scripts/train_main.py --preset medium --variant hyper \
-    --resume_from checkpoints/exp1_hyper/step_50000.pt --seed 0
+# 2) 零样本 regime 留出（训练只见 {coop, comp, neutral}）
+python hyper_mve/scripts/train_main.py --preset rel_duo_holdout --variant hyper ...
+
+# 3) 套件（决策点 1 + 2）
+python -m hyper_mve.scripts.run_suite --list
+python -m hyper_mve.scripts.run_suite --only rel_gate_duo
+
+# 4) 博弈论指标（离线，冻结 checkpoint 上）
+python -m hyper_mve.scripts.eval_game_metrics --ckpt checkpoints/.../best.pt \
+    --preset rel_duo --out runs/rel_duo_hyper/game_metrics.json
 ```
 
-**命令行参数**：
-- `--preset {easy,medium,hard, duo,duo_basegen, duo_film_lora,duo_film_lora_fc2,duo_base_lora, medium_film_lora,medium_film_lora_fc2,medium_base_lora}`：难度/诊断/gen_scope 档（medium 是主对照；duo 族与 *_lora 族见 §11）
-- `--no_collect_planner`：**仅调试**——采集关规划器会触发 ln(A) 自蒸馏退化不动点（Ch5.9.1b），训练采集默认 planner-on
-- `--variant`：目前 Pkg-05 仅 `hyper` 可用；`oracle_only/infer_only` 因 TrainConfig 约束（0<s1<s2<1）留待 Pkg-08；`baseline_*` 留待 Pkg-06（会 `NotImplementedError`）
-- `--max_steps INT`：覆盖 `train.max_train_steps`
-- `--override "section.field=value"`（可重复）：任意 cfg 覆盖，例：
-  - `--override "train.lr=3e-4"` `--override "train.batch_size=128"`
-  - `--override "train.use_crn=False"`（消融 CRN）/ `--override "train.use_coord_desc=False"`（消融坐标下降）
-  - `--override "train.stratified_sampling=False"`（消融分层采样）
-  - `--override "env.type_assignment=[0,0,0,0]"`（全 α，类型扫描）
-- `--resume_from PATH` / `--seed INT` / `--log_dir PATH`(TensorBoard) / `--ckpt_dir PATH`
+**常用 override**：
+- `--override "env.regime_switch_prob=0.05"`：切到研究点 2（局内非平稳）
+- `--override "env.train_regime_ids=[0,1,4]"`：regime 留出
+- `--override "train.use_crn=False"` / `"train.use_coord_desc=False"`：规划器消融
+- `--override "train.stratified_sampling=False"`：分层采样消融
 
-**关键默认（medium）**：N=4(2α+2β), A=6, T_max=200, latent=64, ctx_aug=80,
-batch=256, unroll_K=5, n_step=5, γ=0.95, lr=1e-4(warmup 5k→cosine), ema_τ=0.99,
-buffer=5000(min 1000), 损失权重 π=1.0/v=0.25/r=3.0/consist=0.5/belief=1.0。
-
-**产物**：TensorBoard 日志 → `--log_dir`；checkpoint 每 10000 步 → `--ckpt_dir/step_*.pt`。
-日志标量含 `total/main/belief/policy/value/reward/consist/belief_c/belief_opp/belief_div/lambda_b/lr`。
+**关键默认（rel_duo）**：N=2, A=6, T_max=100, K=8 资源, latent=64, **ctx_aug=64**,
+`hyper_gen_scope="film_head"`, rew/pred `output_scale_init=0.1`, `mve_temperature=0.5`,
+损失权重 π/v/r/consist/belief = 1.0/0.25/3.0/0.5/1.0。
 
 ---
 
-## 7. 实验/消融建议（与 cfg 开关对应）
-- **主线 vs 课程边界**：`--override "train.curriculum_stage_1_end_frac=0.1"` 等（注意需满足 0<s1<s2<1）。
-- **2×2 规划消融**：`use_crn` × `use_coord_desc`（CLAUDE.md 强调 CRN 是载荷算法，关掉会让 π_mve 退化）。
-- **类型扫描**：`env.type_assignment`（全 α / 全 β / 混合）。
-- **采样消融**：`train.stratified_sampling`。
-- 验证脚本：`python scripts/run_test_checklist_pkg4_5.py`（Pkg-04/05）、`python scripts/run_test_checklist.py`（Pkg-01~03）。
+## 7. 评估体系（三层）
+
+1. **训练内周期评估**（`training/evaluation.py`，每 `eval.evaluate_freq` 步）：
+   逐 regime 钉死 `{"g": gid}` 的确定性双模式（prior=蒸馏 π̂ argmax / planner=π_mve
+   argmax）episodes；TB 标签 `eval/{prior,planner}/...` 按 regime 细分 +
+   `belief/regime_accuracy`（|G2|=5 时机会水平 0.2）+ 4 个福利指标
+   （welfare_physical / sustainability / fairness / tragedy_index）。
+2. **冻结 EvalReport**（`eval/eval_report.py`，`rel-v1` 28 字段）：套件/sweep 的每 run
+   产物；per-regime returns + zero-shot seen/unseen 切分（由 `train_regime_ids` 定义）。
+   外部基线经统一 `evaluate(env_fn, regime_grid, episodes)` 合同产出同 schema。
+3. **离线博弈论指标**（`eval/game_metrics.py`，不进 EvalReport——BR 训练太贵）：
+   - **NashConv(g)** = Σ_i max(0, V_i(BR_i, π_{−i}) − V_i(π))：冻结策略走蒸馏先验，
+     每 (agent, regime) 训一个 double-DQN 最优反应（同信息条件：见 row 不见 g）。
+     BR 是近似 ⇒ 报告值是真实可利用度的**下界**，预算随值一并报告。
+   - **经验 PoA**：`Eff(g) = W_phys(π,g) / Ŵ*`，Ŵ* 为合作最优参考福利（all_coop
+     regime 训出的策略；物理与 regime 无关 ⇒ 一个 Ŵ* 服务所有 g）。Ŵ* 是估计，
+     Eff 可 >1，报告其来历。
 
 ---
 
 ## 8. MVE Planner 细粒度数据流（`planning/mve_planner.py`）
 
-作用：在世界模型里做**前瞻规划**，为每个 agent 产出搜索策略 `π_mve`（作为 worker 选动作的依据 +
-训练时 policy 的监督目标）。核心是 **CRN（共同随机数）+ 坐标下降**。
-（维度示例 medium：N=4, A=6, S=mve_samples=50, `spa=S//A=8`, `M=A*spa=48`, K=mve_depth=5）
+作用不变：在世界模型里做前瞻规划，为每个 agent 产出 `π_mve`（worker 选动作依据 +
+policy 蒸馏目标）。核心仍是 **CRN（共同随机数）+ 坐标下降**。
+（维度示例 rel_duo：N=2, A=6, S=mve_samples, `spa=S//A`, `M=A*spa`, K=mve_depth）
 
-```
-输入  root_s (B,64)，cap{i:(B,4)}，belief{i:((B,),(B,N-1,2))}，c_t (B,)
-  │  dict→packed: cap(B,N,4), c_hat(B,N), z_hat(B,N,N-1,2)
-  │  gen ← crn_rng（可复现采样）；agent_order ← crn_rng.permutation(N)（use_coord_desc=False 则 0..N-1）
-  ▼
-外层：坐标下降  for j in agent_order:      （逐个 agent 优化；已优化 agent 从其 π_mve 采样=协调）
-  │
-  ├ Phase 1  CRN 预采样（场景粒度 B*spa）
-  │    s_scenarios = root_s ⊗ spa                      # (B*spa, 64)
-  │    set_context_objective(c_t ⊗ spa)                # θ_state for B*spa
-  │    for i≠j:  step0[i] ← 采样一次 (B*spa,)           # 已优化→π_mve[i]，否则→policy 网络
-  │
-  ├ Phase 2  展开候选（BM=B*spa*A；布局＝场景外·候选内 → 关键!）
-  │    s_exp = s_scenarios ⊗ A                          # (B*M, 64)
-  │    set_context_objective(c_t ⊗ spa*A)               # θ_state for B*M
-  │    first_action_j = [0..A-1] 重复 B*spa  (B*M,)      # agent j 枚举的候选首动作
-  │    step0_expanded[i] = step0[i] ⊗ A      (B*M,)      # ★其他 agent 跨 A 候选【共享】=CRN
-  │
-  ├ Phase 3  K 步 rollout（折扣累积 agent j 的回报）
-  │    for step in K:
-  │       for i in N:
-  │          step0 且 i==j        → first_action_j        （枚举候选）
-  │          step0 且 i≠j 且 CRN  → step0_expanded[i]      （★共享，噪声相消）
-  │          其余                 → policy 网络独立采样     （状态已发散）
-  │       joint(B*M,N) → onehot(B*M,N*A)
-  │       s' = model.transition(s, onehot)                （客观 θ_state，复用）
-  │       set_context_subjective(j) → r_j = inv_scalar(predict_reward)   （主观，只为 j）
-  │       cum_return_j += γ^step · r_j ;  s = s'
-  │
-  ├ Phase 3b  终值   set_context_subjective(j) → v_j = inv_scalar(predict);  cum_return_j += γ^K · v_j
-  │
-  └ Phase 4  CRN 聚合
-       cum_return_j (B*M,) → reshape (B, spa, A) → mean over spa → Q (B,A)   # 场景维平均=蒙特卡洛去噪
-       Q 标准化(去均值/标准差) → softmax(Q / temperature) → π_mve[:, j]  (B,A)
+v5 变化（仅接口/缓存，算法不动）：
+- 输入 `cap{i}` → `row{i:(B,N−1)}`；`belief{i}` = regime 后验张量 `(B,|G|)`；`c_t` 删除。
+- **θ-cache 只剩主观路**：per-(agent, 上下文) 缓存 θ_rew/θ_pred，rollout/坐标下降内
+  复用（客观转移是普通网络，天然无需缓存）。
+- 客观转移在 K 步 rollout 内直接 `model.transition`；主观 reward/value 仅为当前
+  优化的 agent j 生成。
+- `p>0` 时：想象 rollout 内 **W 冻结在当前信念**（文档化近似，研究点 2 落地时再议）。
 
-输出  π_mve (B, N, A)
-```
-
-**为什么 CRN 是载荷算法（勿删）**：评估 agent j 的 A 个候选时，候选之间**唯一应有的差异**是「j 的首动作不同」。
-若其他 agent 的动作每个候选各自随机采，巨大噪声淹没信号（SNR≈0.02 → softmax 退化为均匀分布）；
-CRN 让其他 agent 的 step-0 动作**每场景采一次、在 A 个候选间共享** → 候选间噪声相消，信号显现
-（布局 `(B, spa, A)`，最后对 `spa` 维平均做蒙特卡洛去噪）。
-
-- **坐标下降**：随机 agent 顺序逐个优化；已优化 agent 从其 `π_mve` 采样（协调），未优化从先验策略采样。
-- **确定性（C5-P1）**：`agent_order` 与动作采样都由 `self.crn_rng` 派生 → 重置 seed 输出复现；
-  `crn_rng` 跨 episode 持续（worker 持有同一 planner 实例）。
-- **开关（消融）**：`use_crn=False` → step-0 不共享（独立采样，忠实的 −CRN 格子）；`use_coord_desc=False` → **仅**固定顺序 `0..N-1`（坐标下降本体仍运行——已优化 agent 仍按 π_mve 行动；**不是** Joint 联合枚举,见 §10 缺口与 Ch6.7 三轴重定义）。
-- reward/value 经 `inverse_scalar_transform` 从标量变换空间还原后再累积折扣回报。
+CRN 仍是载荷算法（勿删）：评估 agent j 的 A 个候选时，其他 agent 的 step-0 动作
+每场景采一次、跨 A 个候选共享 → 噪声相消。`(B, spa, A)` 布局对 spa 维平均去噪，
+Q 标准化后 softmax(/temperature) 得 `π_mve[:, j]`；`mve_qstd_floor`(=0.01) 护栏：
+q_std 过低的行回退均匀目标。确定性：`agent_order` 与采样均由 `crn_rng` 派生。
 
 ---
 
 ## 9. 双路径梯度细粒度数据流（`loss_composition.py` + `grad_gating.py`）
 
-一次 `BeliefNet.forward` 的输出**同时**喂两条 autograd 路径，最后 **一次 backward** 反传：
-
 ```
 batch.obs (B,K+1,N,obs_dim)
-   │  一次前向（带梯度，两路共用，数值一致）
+   │  一次前向（带梯度，两路共用）
    ▼
-BeliefNet.forward → hidden(B,K+1,N,128), ĉ_pred(B,K+1,N), ẑ_pred(B,K+1,N,N-1,2)
-   │                                              │
-   │ 【路径A：L_belief，始终训练，不受门控】          │ 【路径B：main，经 set_context_subjective】
-   ▼                                              ▼
-belief_loss(ĉ_pred, ẑ_pred, hidden, c_true, types)   课程混合: z_main = w·oracle + (1-w)·ẑ_pred
- = w_c·L_c + w_opp·L_opp + w_div·L_div                         c_main = ĉ_pred  (c 不注入 oracle)
-   │  直接反传                                         │
-   ▼                                              set_context_subjective(agent, cap, (c_main, z_main))
-GRU + head_c + head_opp  ✅梯度                       │   ┌ grad_gating.apply_raw(ĉ,ẑ, step)      （切断→GRU/heads）
-                                                   │   └ grad_gating.apply_ctx(ctx_aug, step, [48:80]) （切断→BeliefEncoder 投影）
-                                                   │       step<5000：两层都 detach → main 不回流 BeliefNet
-                                                   │       step≥5000：透传
-                                                   ▼
-                                          ctx_aug(80)=[c_ctx16 | role32 | belief32]
-                                                   │  ┌ hyper_rew(ctx_aug)          → θ_rew   （reward 路，回流 ctx_aug→belief）
-                                                   │  └ hyper_pred(ctx_aug.detach()) → θ_pred  （policy/value 路，★detach_pred_context 不回流）
-                                                   ▼
-                                          RewardHead / PredictionNet → L_reward + L_policy + L_value (+ BYOL L_consist)
-                                                   │  仅 reward 路、且 step≥5000 时
-                                                   ▼  reward → hyper_rew → ctx_aug[48:80] → ẑ_pred/ĉ_pred
-                                          小量回流 BeliefNet
+BeliefNet.forward → hidden(B,K+1,N,128), ĝ_pred(B,K+1,N,|G|)
+   │                                        │
+   │ 【路径A：L_belief，始终训练】             │ 【路径B：main，经 set_context_subjective】
+   ▼                                        ▼
+belief_loss(ĝ_pred, hidden, g_true)          课程混合: g_main = w·onehot(g_true) + (1−w)·ĝ_pred
+ = λ_regime·L_regime + λ_div·L_div            │
+   │  直接反传                                 set_context_subjective(k, row_k, g_main_k)
+   ▼                                          │   grad_gating: step<5000 双层 detach；≥5000 透传
+GRU + head_regime  ✅梯度                      ▼
+                                       ctx_aug(64)=[role32 | belief32]
+                                              │  ┌ hyper_rew(ctx_aug)           → θ_rew  （回流）
+                                              │  └ hyper_pred(ctx_aug.detach()) → θ_pred （detach_pred_context 不回流）
+                                              ▼
+                                       RewardHead / PredictionNet → L_reward + L_policy + L_value (+ L_consist)
 
-L_total = L_main + λ_b · L_belief   →   L_total.backward()   （单次 backward 同时反传 A、B 两路）
+L_total = L_main + λ_b·L_belief  →  一次 backward 同时反传 A、B 两路
 ```
 
-**梯度门控真值表**（测试时 monkeypatch `mixing=0`，隔离「门控阈值」与「课程阶段」两套 step 机制）：
-
-| step | L_belief → BeliefNet | main → BeliefNet | 谁在训练 BeliefNet |
-|------|----------------------|------------------|--------------------|
-| `< 5000`（门控预热）| ✅ L_c/L_opp/L_div | ❌ 双层 detach | 仅 L_belief（专项预热）|
-| `≥ 5000` | ✅ | ✅ 但**仅 reward 路**（policy/value 因 `detach_pred_context=True` 被切）| L_belief + reward 小量 |
-
-> **[v4-opt] 真值表脚注**：上表第二行的「仅 reward 路」以默认 `detach_pred_context=True` 为前提。**duo 族与 *_lora 族预设取 False**（理由：film_head 系的功能网主干已是稳定共享 SGD 网络，放开 policy/value 梯度通达上下文编码器以解饿，见 `presets/duo.py` docstring 与 Ch4.3.5）——此时 step≥5000 后 policy/value 路也回流 BeliefNet/编码器。该开关已成为 **gen_scope 依赖**的选择。
-
-**关键设计点**：
-- 一次 `BeliefNet.forward` 供两路共用，不重复前向（数值一致、省算）。
-- `L_belief` 用**预测** `ẑ_pred`（而非 oracle）计算 → 即便 Stage 1 注入 oracle，`head_opp` 仍被训练。
-- **禁止反模式**：先 `detach` 再算 `L_belief`；或先 `set_context_subjective` 再算 `L_belief`（那时张量已被 model 内部 detach）。
-- 单测验证（compose 级，与 Pkg-04 `grad_gating` 对齐）：`pre-5k` main 路对 BeliefNet 梯度 **== 0**；`post-5k` **> 0**。
+诊断：类型基诊断（cos_pred_cross 按 α/β 分组）已被 **pairwise θ 诊断**取代
+（regime/row 条件下 θ 的跨 agent 余弦）。
 
 ---
 
-## 10. 已知缺口（开始实验前知悉）[v4-opt 2026-06 更新]
-- ~~**超网络参数量超预算**~~：**已由输出层 LoRA 解决**——film_head+LoRA(r=32) 把 HyperNet 参数从 3.09M 压到 ~694k（§11），无需 chunked hypernet。
-- **变体未接全**：`oracle_only/infer_only`(Pkg-08；curriculum.py 已留退化边界钩子) 与 `baseline_*`(Pkg-06) 尚未实现——**Pkg-06 是决策点 1 的阻塞项**。
-- **c_t 隐藏模式缺失**：Ch3.7 模式 B（观测中 c_t 替换为常数，BeliefNet ĉ 头的核心检验场景）无环境开关；当前可见-c 下 ĉ 是恒等读出（复审 M12，Pkg-02 待补 `c_visible`）。
-- **Joint 联合枚举缺失**：消融 4 的"−协调下降"格子无代码路径；现 `use_coord_desc=False` 仅取消顺序随机化（复审 M8,Ch6.7 三轴重定义,Pkg-08 待实现 Easy N=2 Joint 模式）。
-- 这些都不影响 `--variant hyper` 主线训练。
+## 10. 已知缺口 / 注意事项（v5）
+
+- **QMIX 训练在求和奖励上**：mutual_comp 里 Σ_i R_i ≡ 0（零和，至多差移动罚），
+  混合 regime 训练对 QMIX 是信号饥饿的——外部基线对比时注明（冒烟测试钉 regime 0）。
+- **NashConv 依赖 BR 质量**：预算固定并随值报告；是下界不是点估计。
+- **研究点 2（p>0）**：env/kernel/config 从第一天就支持，但 planner 的 W-冻结近似、
+  适应性/动态 regret 指标、切换检测评估都未建——留待研究点 1 结果落地后。
+- **Stage-6 清理未完成期间**：`envs/resource_commons/`、`schemas/{agent_type,capability}.py`
+  等 v4 遗留文件仍在树上但已无消费者，勿新增依赖（将整体删除）。
+- 旧 `runs/` 结果属于 v4 设计，与 v5 不可比（已接受）。
 
 ---
 
-## 11. 优化阶段总览（`e5a9e17..dc5bbcd`,2026-06）[v4-opt 新增]
+## 11. v4 优化阶段遗产（2026-06，仍现役的部分）
 
-> 时间线与理论影响见 Roadmap Part 3.5;事实底稿见 `docs/Review_v4_TheoryAudit_2026-06.md`。本节是代码侧速查。
+> v4 完整记录见 git history（`docs/Review_v4_TheoryAudit_2026-06.md`）。下面只列
+> **在 v5 里仍然载荷**的机制：
 
-### 11.1 两个实测失败模式与修复
-
-| 失败 | 指纹 | 修复 |
-|---|---|---|
-| 采集无规划信号 → 策略熵钉死 ln(A)=1.79 | `diag/pi_mve_entropy` 不动 | planner-on 采集默认(`worker.collect_episode(use_planner=True)`);`--no_collect_planner` 仅调试 |
-| FULL 全量生成 → 角色坍缩 | `diag/cos_pred_cross` 0.61→0.998 | `hyper_gen_scope` 部分生成 + 分组 RMS 归一(见下) |
-
-### 11.2 gen_scope 四档(`ModelConfig.hyper_gen_scope`)
-
-| 档 | fc1 | fc2 | 头 | HyperNet 参数(medium,+LoRA r=32) |
-|---|---|---|---|---|
-| `full`(legacy 默认) | 全生成 | 全生成 | 生成 | ~3.09M(无 LoRA) |
-| `film_head` | SGD 权重+生成 FiLM | 同左 | 生成 | **~694k** |
-| `lora_fc2` | SGD+FiLM | SGD+FiLM+**ΔW=B_f A_f**(r=8) | 生成 | **~896k** |
-| `base_gen` | 纯 SGD 基座(无 FiLM) | 全生成 | 生成 | ~2.30M |
-
-配套机制(`models/hyper_network.py` + `functional_nets.py`):
-- **分组 RMS 归一**(`output_groups=[film 段, weight 段]`):整向量 L2 会把 FiLM γ 稀释到 scale/√dim(≈4e-3,调制失效);分组 RMS 使每生成元 ≈ output_scale → 部分生成预设三路 scale 统一 0.1;
-- **输出层 LoRA**(`hyper_output_rank=32`,三路统一):A 正交、B small_init(std=0.01,**不可为 0**——分组 RMS 的 1e-8 下限会在 step-0 产生 ~1e4 梯度尖峰);
-- **ΔW 尺度律**(lora_fc2 守门):ΔW ≈ output_scale²·√r;`ModelConfig.__post_init__` 强制 scale ≥ 0.05、base_gen 禁 lora_fc2、LoRA×share_subjective_trunk 抛 NotImplementedError;
-- **share_subjective_trunk**:hyper_rew/pred 合一 trunk 双头(detach 在 trunk 输出处,语义更强);LoRA 线暂弃该轴。
-
-### 11.3 预设矩阵与 sweep(决策门 0,在飞)
-
-`scripts/run_lora_experiments.py`:3 建模情形 × 2 环境 = 6 runs;GPU 池默认 {2,3,4}(**0/1 政策禁用**),每 run 单卡 `CUDA_VISIBLE_DEVICES` 钉卡;落盘 `<env>/<model>[/<gen_scope>]/tb|ckpt|train.log`。判定准则(预注册):熵离开 ln A、cos_pred_cross<0.95 为硬门槛,过门槛 cell 按 medium 福利选 thesis-default gen_scope。duo 族(random_walk)结论只作机制存活性证据,断言 B′ 正式判定落在 medium static(复审 Q6 决议)。
-
-### 11.4 诊断设施
-
-- TB 命名空间:`diag_*`→`diag/`,`*_raw`→`loss_raw/`,其余→`loss/`(train_main.py 路由);
-- 关键诊断:`diag/pi_mve_entropy`(对照 ln A)、`diag/pi_pred_entropy`、`diag/cos_{pred,rew}_{cross,same}`(角色分化;断言 A 在线证据);
-- 离线探针:`scripts/diagnose_mve.py`(checkpoint → 逐 agent returns_per_action / q_normalized)。
-
-### 11.5 2agent 三连跑诊断与修复(2026-06-11)[v4-opt 2026-06b]
-
-> 数据源:`2agent/{basegen, film_head/{on,off}}` 三 run(seed 0,~11k 步)。诊断结论与修复一并落码。
-
-**实测发现:**
-
-| 发现 | 证据 | 修复 |
-|---|---|---|
-| 吞吐瓶颈:0.08 train-steps/s(1M 步 ≈ 135 天) | event 时间戳;采集 B=1 → 每 env step ~70 次小 GPU 调用 | **向量化采集**:`Worker.collect_episodes` 以 n_envs=episodes_per_iter(8)lockstep 推进,planner 批量 B=8 |
-| 零可观测:无回报、无评估(22 个 TB 标签全为损失/诊断) | TB 标签清单 | **`eval/*` + `collect/*` + `perf/*` 三族**(见下) |
-| policy loss U 形(~6000 步谷底后回升),H_pi_mve 同步回升 | 三 run 一致 | 三个混杂因素分别处理(下三行) |
-| warmup 1000 episodes 存自蒸馏 π 目标(planner-off ⇒ pi_mve=自身先验),~4000 步才被 FIFO 逐出 | worker.py 旧 95-96 行 | **planner_on 掩蔽**:buffer per-episode 元数据 + 策略 CE masked mean |
-| belief 闸门(5000)与 LR warmup 终点(5000)重合 ⇒ 双 regime change 混杂 | grad_gating.py / train_config | duo 族预设 `belief_grad_gating_steps=1e9`(N=2 belief 损失本就平凡;L_belief 仍训 BeliefNet) |
-| z-score 把近等候选回报的采样噪声放大为单位尺度目标 | mve_planner Phase 4 仅 1e-8 下限 | **`mve_qstd_floor`(默认 0.01)**:q_std 低于阈值的行回退均匀目标 |
-| `cos_*_same` N=2 恒 NaN(无同类型对) | loss_composition `_role_cosine` | TB writer 跳过 NaN 标签(语义本就正确,纯日志卫生) |
-| `cos_rew_cross`≈0.98(奖励头几乎不随上下文分化;FS 项 ~5% 奖励尺度被淹没) | basegen/film_on TB | 暂记录;靠新评估族判断是否实际损害回报 |
-
-**新 TB 标签族:**
-- `eval/{prior,planner}/return_{total,alpha,beta}[_c{0.2,0.5,0.8}]`、`eval/planner_prior_gap`、`eval/planner/{pi_mve_entropy,q_std,uniform_frac}` —— 每 `eval.evaluate_freq`(默认 1000)步一次,双模式(prior=蒸馏策略 argmax π̂ / planner=真实智能体 argmax π_mve)确定性评估,static-c 网格 + 固定种子 + 固定 planner CRN(跨评估可比);best ckpt 按 `planner/return_total` 存 `best.pt`;
-- `collect/{return_total,return_alpha,return_beta,epsilon,H_pi_mve_fresh,q_std,q_gap,uniform_frac}` —— 采集侧滚动均值(近 32 episodes);
-- `perf/{collect_sec_per_iter,train_sec_per_iter,env_steps_per_sec}`;`diag/target_age_steps`(采样目标陈旧度)。
-
-**验证脚本:**`scripts/test_vectorized_worker.py`(B=1/B=8、确定性重复、掩蔽路径)、`scripts/test_eval_runner.py`(标签集、有限性、确定性)。
-
-**采集后修订 1**:确定性评估 argmax 在均匀概率行(噪声护栏回退或自然平局)上会恒选 action 0(ResourceCommons 中 = NOOP) ⇒ planner-mode eval 系统性低估。修复:`Worker.collect_episodes` 新增 `tiebreak_rng` 参数,均匀行用随机化 argmax(`np.random.choice(flatnonzero(p == p.max()))`);`run_eval` 以固定种子 1234567 注入(CRN 跨评估)。`planner_prior_gap` 改为按 c 网格逐点取均值再做差,消除两模式 episode 数不对称带来的偏置。
+- **gen_scope 部分生成**（`ModelConfig.hyper_gen_scope`）：`film_head`（SGD 权重 +
+  生成 FiLM + 生成头，rel_duo 默认）/ `lora_fc2` / `base_gen` / `full`。配套
+  分组 RMS 归一 + 输出层 LoRA（A 正交、B small_init≠0）+ ΔW 尺度律守门,全部保留——
+  只是现在只作用于主观路（客观路已是普通网络，不再有 hyper_trans 档位）。
+- **向量化采集**（`Worker.collect_episodes`，n_envs lockstep）+ planner-on 采集默认
+  （planner-off 触发 ln(A) 自蒸馏退化不动点）+ warmup 自蒸馏目标的 planner_on 掩蔽。
+- **评估三标签族** `eval/* collect/* perf/*` + 均匀行随机化 argmax tiebreak
+  （固定种子 1234567）+ `mve_qstd_floor` 噪声护栏。
+- **诊断离线探针** `scripts/diagnose_mve.py`（checkpoint → 逐 agent
+  returns_per_action / q_normalized）。

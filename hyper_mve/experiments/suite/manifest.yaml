@@ -1,42 +1,22 @@
-# Thesis experiment suite manifest (pkg-08+ / Ch6 + Roadmap).
+# Thesis experiment suite manifest (v5 Pkg-09 / Ch6).
 #
 # Lists every cell in DECISION-GATE order. Paths resolve relative to THIS file's
-# directory (experiments/suite/), so they point at both the new cells/*.yaml and
-# the in-place ../ablations/*.yaml. `run_suite --list` prints status; `run_suite
-# --only <id>` runs a subset; cheap Easy gates precede the expensive Medium runs.
+# directory (experiments/suite/). `run_suite --list` prints status; `run_suite
+# --only <id>` runs a subset.
 #
 # tiers: must_have (必保) / degradable (可降级, 3 seeds) / cuttable (可砍, supplementary)
+#
+# v5 (Pkg-09): the suite is rebuilt around the RelationCommons regime design.
+# The v4 cells (lora_* gen_scope gates, abl*, main_comparison*, zero_shot_*)
+# belong to the retired resource_commons/c_t design; their YAML files are
+# removed in the Stage-6 cleanup and their results are non-comparable.
 #
 # NOTE: keep each entry a bare path on its own line — do NOT append an inline
 # "# comment" after the path (a `path#comment` with no leading space folds the
 # comment into the string). Use full-line comments like these for grouping.
 cells:
-  # 决策门 0: gen_scope 选型 (先于决策点 1 固定 Hyper 形态)
-  - cells/lora_duo_film.yaml
-  - cells/lora_duo_film_fc2.yaml
-  - cells/lora_duo_base.yaml
-  - cells/lora_medium_film.yaml
-  - cells/lora_medium_film_fc2.yaml
-  - cells/lora_medium_base.yaml
+  # 决策点 1 (生死判官): mixed hidden-regime gate — hyper vs baselines
+  - cells/rel_gate_duo.yaml
 
-  # 决策点 1 (生死判官) + 决策点 2: Easy gates
-  - cells/abl3_easy_n2.yaml
-  - cells/abl1_easy.yaml
-  - cells/zero_shot_easy.yaml
-  - cells/main_comparison_easy.yaml
-
-  # Medium headlines
-  - cells/abl3_type_heterogeneity.yaml
-  - ../ablations/abl1_gen_scope.yaml
-  - cells/zero_shot_generalization.yaml
-  - cells/main_comparison.yaml
-
-  # 其余消融
-  - ../ablations/abl4_crn_joint.yaml
-  - ../ablations/abl4_joint_easy_n2.yaml
-  - ../ablations/abl6_fehr_schmidt.yaml
-  - ../ablations/abl7_curriculum.yaml
-
-  # BLOCKED / supplementary
-  - cells/abl2_context_paths.yaml
-  - cells/lr_sweep.yaml
+  # 决策点 2: zero-shot regime holdout (线性值分解 thesis hook)
+  - cells/rel_zero_shot_duo.yaml

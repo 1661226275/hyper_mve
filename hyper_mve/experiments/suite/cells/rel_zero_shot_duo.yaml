@@ -1,0 +1,27 @@
+# v5 zero-shot regime holdout: train on the symmetric regimes {mutual_coop,
+# mutual_comp, neutral} = ids (0, 1, 4); evaluate on ALL regimes incl. the
+# held-out asymmetric pair (2, 3) via reset(options={"g": ...}) — the
+# relationship-linear value-decomposition claim (Pkg-09 thesis hook).
+# Uses the rel_duo_holdout preset (train_regime_ids=(0,1,4); eval grid = all).
+meta:
+  id: rel_zero_shot_duo
+  title: "v5 zero-shot — held-out asymmetric regimes (rel_duo_holdout)"
+  tier: must_have
+  size: easy
+  deliverables: ["Table 6.2 (regime holdout)", "Fig 6.2 (seen vs unseen)"]
+  assertion: "Hyper's held-out-regime return gap is small (linear recombination over W)"
+  runs_subdir: rel_zero_shot_duo
+  blocked_on: []
+variants:
+  - hyper
+  - baseline_ma_muzero
+  - no_belief
+seeds: [0, 1, 2]
+preset: rel_duo_holdout
+overrides:
+  - {}
+max_steps: 200000
+eval_planner_mode: planner_full
+max_parallel: 2
+n_gpus: 2
+ablation_cell_id: rel_zero_shot_duo
