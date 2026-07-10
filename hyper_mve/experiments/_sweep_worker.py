@@ -240,7 +240,7 @@ def main() -> None:
 
     # --- EVAL the SAME trained object ---
     try:
-        report = evaluate(runner, env_fn, cfg)
+        report = evaluate(runner, env_fn, cfg, variant=variant)
         _write_eval_report(report, pathlib.Path(payload["eval_report_path"]))
     except NotImplementedError as e:
         print(f"SKIP: {e}", file=sys.stderr, flush=True)

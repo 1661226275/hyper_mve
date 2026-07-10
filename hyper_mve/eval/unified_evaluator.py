@@ -30,6 +30,7 @@ def evaluate(
     runner,
     env_fn: Callable[[], Any],
     cfg: V4Config,
+    variant: str | None = None,
 ) -> EvalReport:
     """Run a unified evaluation pass and return the locked rel-v1 report.
 
@@ -44,12 +45,19 @@ def evaluate(
             with ``oracle_mode=False``.
         cfg: full ``V4Config`` (the evaluator reads ``cfg.eval`` and
             ``cfg.env.train_regime_ids``).
+        variant: sweep variant key recorded in ``EvalReport.variant``
+            (e.g. ``"hyper"``); falls back to the runner's class name.
     """
     info_gating_strict = _verify_env_fn_flags(env_fn)
 
     if _is_external_runner(runner):
-        return _evaluate_external(runner, env_fn, cfg, info_gating_strict)
-    return _evaluate_internal(runner, env_fn, cfg, info_gating_strict)
+        report = _evaluate_external(runner, env_fn, cfg, info_gating_strict)
+    else:
+        report = _evaluate_internal(runner, env_fn, cfg, info_gating_strict)
+    if variant is not None and report.variant != variant:
+        import dataclasses
+        report = dataclasses.replace(report, variant=variant)
+    return report
 
 
 # --------------------------------------------------------------- dispatch helpers
