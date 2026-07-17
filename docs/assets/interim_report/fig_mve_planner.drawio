@@ -1,0 +1,75 @@
+<mxfile host="app.diagrams.net" version="24.0.0">
+  <diagram id="mveplanner" name="MVE动作自举规划流程">
+    <mxGraphModel dx="1200" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1000" pageHeight="950" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="start" value="输入：当前隐状态 s（表征网络编码）、&#10;各智能体上下文 ctx_i 与主观参数 θ_rew^i、θ_pred^i" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#616161;" vertex="1" parent="1">
+          <mxGeometry x="280" y="30" width="380" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="order" value="以随机顺序排列 N 个智能体&#10;（坐标下降外循环开始）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1bee7;strokeColor=#8E24AA;" vertex="1" parent="1">
+          <mxGeometry x="330" y="130" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="pick" value="取下一个待优化智能体 i" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1bee7;strokeColor=#8E24AA;" vertex="1" parent="1">
+          <mxGeometry x="330" y="230" width="280" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="inner" value="内层：智能体 i 的候选动作评估" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;fontStyle=1;fontSize=13;fillColor=#faf4fb;strokeColor=#9C27B0;container=1;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="180" y="320" width="580" height="400" as="geometry"/>
+        </mxCell>
+        <mxCell id="crn2" value="固定情景采样（CRN）：采样 M 个情景，&#10;每个情景冻结一份「其余智能体首步动作」&#10;（已优化者依 π^mve，未优化者依当前策略）&#10;同一情景在全部 A 个候选间复用" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1bee7;strokeColor=#8E24AA;" vertex="1" parent="inner">
+          <mxGeometry x="140" y="40" width="310" height="95" as="geometry"/>
+        </mxCell>
+        <mxCell id="expand" value="对每个候选动作 a ∈ {1,…,A} × 每个情景 m：&#10;组成联合动作，沿世界模型转移网络滚动 K 步&#10;（后续步各智能体动作依策略采样，构型按当前信念冻结）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1bee7;strokeColor=#8E24AA;" vertex="1" parent="inner">
+          <mxGeometry x="140" y="165" width="310" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="score" value="逐步累积折扣收益（主观奖励头 r̂_i）&#10;第 K 步以价值头 v̂_i 自举截断：&#10;Q̂_i(a) = 情景均值[ Σ γ^k r̂_i + γ^K v̂_i ]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1bee7;strokeColor=#8E24AA;" vertex="1" parent="inner">
+          <mxGeometry x="140" y="285" width="310" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="in1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="crn2" target="expand">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="in2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="expand" target="score">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="softmax2" value="A 个候选得分组内标准化（z-score），&#10;经温度 softmax 得改进策略 π_i^mve" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3cd;strokeColor=#F9A825;" vertex="1" parent="1">
+          <mxGeometry x="330" y="760" width="280" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="alldone" value="全部智能体&#10;已优化？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8f0;strokeColor=#FF9800;" vertex="1" parent="1">
+          <mxGeometry x="390" y="855" width="160" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="out" value="输出：各智能体改进策略 π^mve&#10;① 依 π^mve 选取当前步动作；&#10;② π^mve 存入回放池作为策略蒸馏目标" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#616161;" vertex="1" parent="1">
+          <mxGeometry x="680" y="855" width="280" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="note" value="复杂度：每步仅评估 N×A 个候选&#10;（对比联合空间穷举 A^N）&#10;当前实现 K=5，每候选 8 个情景" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#424242;fillColor=none;strokeColor=#bdbdbd;dashed=1;rounded=1;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="130" width="230" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="f1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="start" target="order">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="f2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="order" target="pick">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="f3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="pick" target="crn2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="f4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="score" target="softmax2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="f5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="softmax2" target="alldone">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="f6" value="否：i 的 π_i^mve 冻结供后续智能体使用（坐标下降轮转）" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" edge="1" parent="1" source="alldone" target="pick">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="120" y="895"/>
+              <mxPoint x="120" y="255"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f7" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;" edge="1" parent="1" source="alldone" target="out">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

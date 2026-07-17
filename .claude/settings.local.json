@@ -41,7 +41,32 @@
       "Bash(py -3 -c ' *)",
       "Read(//d/RL/**)",
       "Bash(unzip -l docs/claude_plan.zip)",
-      "Bash(git status *)"
+      "Bash(git status *)",
+      "Bash(grep -B5 \"报告\\\\|report\\\\|\\\\.md$\")",
+      "Read(//home/zhengwenbo/.claude/plans/**)",
+      "Bash(python3 -c ' *)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:ojs.aaai.org)",
+      "WebFetch(domain:proceedings.iclr.cc)",
+      "WebFetch(domain:pubsonline.informs.org)",
+      "Bash(git *)",
+      "Bash(python3 *)",
+      "Bash(sort -t: -k2)",
+      "Bash(command -v claude)",
+      "Bash(/home/zhengwenbo/.conda/envs/lightzero/bin/python -m pytest tests/schemas tests/configs tests/envs tests/eval tests/integration tests/experiments -q -p no:cacheprovider)",
+      "Bash(/home/zhengwenbo/.conda/envs/lightzero/bin/python -m pytest tests/models tests/training tests/planning tests/migration tests/smoke -q -p no:cacheprovider -x --co)",
+      "Bash(/home/zhengwenbo/.conda/envs/lightzero/bin/python -m pytest tests/models/test_belief_losses.py tests/models/test_role_encoder.py -q -p no:cacheprovider)",
+      "Bash(CUDA_VISIBLE_DEVICES=2,3 /home/zhengwenbo/.conda/envs/lightzero/bin/python -m pytest tests/eval tests/integration tests/baselines/external/test_external_eval_contract.py tests/baselines/external/test_external_adapter_consumption.py tests/baselines/external/test_registry.py tests/baselines/external/test_stub_external_baselines.py -q -p no:cacheprovider)",
+      "Bash(export http_proxy=\"http://127.0.0.1:1080\" https_proxy=\"http://127.0.0.1:1080\" ALL_PROXY=\"socks5://127.0.0.1:1080\")",
+      "Bash(curl -s -o /dev/null -w \"with proxy: %{http_code}\\\\n\" --max-time 10 https://mcp.draw.io/mcp)",
+      "Bash(claude mcp *)",
+      "Bash(pdflatex -interaction=nonstopmode tabtest.tex)",
+      "Read(//dev/**)",
+      "Bash(texluac -v)",
+      "Bash(pdflatex -interaction=nonstopmode tabtest2.tex)",
+      "Bash(sed 's/3\\\\.32 & 3\\\\.75/3.316 \\\\& 3.752/; s/3\\\\.34 & 6\\\\.01/3.340 \\\\& 6.014/; s/5\\\\.49 & 5\\\\.58/5.486 \\\\& 5.576/; s/6\\\\.38 & 5\\\\.73/6.375 \\\\& 5.734/; s/3\\\\.47 & 4\\\\.05/3.469 \\\\& 4.046/' tabtest2.tex)",
+      "Bash(pdflatex -interaction=nonstopmode tabtest3.tex)"
     ]
   }
 }

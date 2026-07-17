@@ -18,6 +18,7 @@ variants:
   - external_mappo
   - external_qmix
   - external_ma_muzero_gh
+  - external_mamba
 seeds: [0, 1, 2]
 preset: rel_duo
 overrides:

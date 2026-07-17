@@ -42,6 +42,7 @@ from hyper_mve.baselines.external.mappo import MAPPOAlgorithm
 from hyper_mve.baselines.external.qmix import QMIXAlgorithm
 from hyper_mve.baselines.external.ma_muzero_gh import MAMuZeroGHAlgorithm
 from hyper_mve.baselines.external.mamba import MAMBAAlgorithm
+from hyper_mve.baselines.external.mazero_mixed import MAZeroMixedRunner
 from hyper_mve.baselines.external.stubs import MARIEStub, GAStub
 from hyper_mve.baselines.external.base import ExternalBaselineRunner
 
@@ -74,6 +75,9 @@ EXTERNAL_REGISTRY: Mapping[str, Callable[[V4Config], ExternalBaselineRunner]] = 
     "external_mamba":         MAMBAAlgorithm,
     "external_marie":         MARIEStub,
     "external_ga":            GAStub,
+    # THE METHOD (not a baseline): MAZero-fork mixed-game stack behind the
+    # same runner contract so the sweep/eval spine drives it unchanged.
+    "mazero_mixed":           MAZeroMixedRunner,
 })
 
 # Merged read-only view consumed by pkg-08 sweep harness (pkg-07 spec 01 §3.2).

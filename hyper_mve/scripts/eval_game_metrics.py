@@ -31,9 +31,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="v5 game-theoretic metrics (NashConv + PoA)")
-    p.add_argument("--ckpt", required=True, help="MuZeroTrainer checkpoint (.pt)")
+    p.add_argument("--ckpt", required=True,
+                   help="checkpoint (.pt): MuZeroTrainer ckpt (internal, default) "
+                        "or an external runner ckpt when --external is given")
     p.add_argument("--preset", default="rel_duo")
     p.add_argument("--variant", default="hyper", help="label recorded in the report")
+    p.add_argument("--external", default=None,
+                   choices=("external_mappo", "external_mamba"),
+                   help="[M3 extension 2026-07-10] evaluate an EXTERNAL baseline "
+                        "checkpoint instead of an internal model; --ckpt then "
+                        "points at the runner's save_checkpoint output")
     p.add_argument("--regimes", type=int, nargs="*", default=None,
                    help="regime ids (default: all in the preset family)")
     p.add_argument("--br-steps", type=int, default=20_000,
@@ -59,6 +66,37 @@ def _load_model(ckpt_path: str, cfg):
     model = HyperMuZeroModel(cfg)
     model.load_state_dict(ckpt["model_state"])
     return model
+
+
+def _load_external_frozen(variant: str, ckpt_path: str, cfg, device):
+    """Build an external runner from its checkpoint and wrap it as a
+    FrozenExternalPolicy (M3 extension, 2026-07-10)."""
+    import numpy as np
+
+    from hyper_mve.baselines import create_baseline
+    from hyper_mve.envs.adapters.pettingzoo_wrapper import RelationCommonsPettingZooEnv
+    from hyper_mve.eval.game_metrics import FrozenExternalPolicy
+
+    runner = create_baseline(cfg, variant)
+    if variant == "external_mappo":
+        # MAPPO's load_checkpoint needs the agent built first (env-derived
+        # obs_dim); evaluate() with episodes=0 is the sanctioned builder path.
+        env_fn = lambda: RelationCommonsPettingZooEnv(
+            cfg.env, oracle_mode=False, eval_info_mode=False,
+        )
+        runner.evaluate(env_fn, regime_grid=(0,), episodes=0)
+        runner.load_checkpoint(ckpt_path)
+
+        def act_fn(obs, t):
+            del t  # MLP policy — stateless
+            a_n, _ = runner._agent.choose_action(obs, evaluate=True)
+            return np.asarray(a_n)
+
+    else:  # external_mamba — load_checkpoint rebuilds the learner standalone
+        runner.load_checkpoint(ckpt_path)
+        act_fn = runner._probe_act
+
+    return FrozenExternalPolicy(act_fn, cfg, device=device)
 
 
 def _resolve_coop_ref(raw: str | None) -> tuple[float | None, str]:
@@ -87,7 +125,15 @@ def main(argv=None) -> None:
     cfg = V4Config.from_preset(args.preset)
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu")
-    model = _load_model(args.ckpt, cfg).to(device)
+
+    frozen = None
+    model = None
+    if args.external:
+        frozen = _load_external_frozen(args.external, args.ckpt, cfg, device)
+        if args.variant == "hyper":       # default label follows the runner
+            args.variant = args.external
+    else:
+        model = _load_model(args.ckpt, cfg).to(device)
 
     coop_ref, provenance = _resolve_coop_ref(args.coop_ref)
     br = BRConfig(env_steps=0 if args.welfare_only else args.br_steps)
@@ -100,7 +146,8 @@ def main(argv=None) -> None:
 
         family = get_regime_family(cfg.env)
         regime_ids = args.regimes if args.regimes is not None else list(range(family.size))
-        frozen = FrozenPriorPolicy(model, cfg, device=device)
+        if frozen is None:
+            frozen = FrozenPriorPolicy(model, cfg, device=device)
         report = GameMetricsReport(
             variant=args.variant, checkpoint=args.ckpt,
             regime_ids=list(regime_ids), br_env_steps=0,
@@ -126,6 +173,7 @@ def main(argv=None) -> None:
             coop_reference_welfare=coop_ref,
             coop_reference_provenance=provenance,
             device=device,
+            frozen=frozen,
         )
 
     out = pathlib.Path(args.out)

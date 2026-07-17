@@ -163,6 +163,10 @@ def _train_runner(cfg, runner, payload: dict[str, Any], seed: int) -> None:
             cfg, env_fn,
             total_env_steps=int(cfg.train.max_train_steps),
             seed=seed,
+            # Optional kwarg (base-contract **kwargs slack): runners that
+            # support the PeriodicEvalProbe write sample-efficiency TB curves
+            # into the row's tb/ dir; others swallow it.
+            tensorboard_dir=payload["tensorboard_dir"],
         )
         runner.save_checkpoint(pathlib.Path(payload["checkpoint_path"]))
     else:

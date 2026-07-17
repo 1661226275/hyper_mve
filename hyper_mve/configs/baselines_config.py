@@ -22,7 +22,9 @@ def _default_external_lr_sweep_grid() -> dict[str, tuple[float, ...]]:
         "external_mappo":         (1e-4, 3e-4, 1e-3),
         "external_qmix":          (1e-4, 3e-4, 1e-3),
         "external_ma_muzero_gh":  (1e-4, 3e-4, 1e-3),
-        # external_mamba added at sourcing time; external_marie/ga not swept (stubs).
+        # [2026-07-10] MAMBA sourced (spec 06 §4.4 amendment): actor/value LR grid.
+        "external_mamba":         (1e-4, 3e-4, 1e-3),
+        # external_marie/ga not swept (stubs).
     }
 
 

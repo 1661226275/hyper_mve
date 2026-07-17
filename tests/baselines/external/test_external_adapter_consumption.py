@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 
-_RUNNER_MODULES = ("mappo.py", "qmix.py", "ma_muzero_gh.py")
+_RUNNER_MODULES = ("mappo.py", "qmix.py", "ma_muzero_gh.py", "mamba.py")
 _RUNNER_DIR = Path(__file__).resolve().parents[3] \
     / "hyper_mve" / "baselines" / "external"
 

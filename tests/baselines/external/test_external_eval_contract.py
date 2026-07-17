@@ -12,7 +12,11 @@ from __future__ import annotations
 import pytest
 
 
-_TIER1_VARIANTS = ("external_mappo", "external_qmix", "external_ma_muzero_gh")
+_TIER1_VARIANTS = (
+    "external_mappo", "external_qmix", "external_ma_muzero_gh",
+    # [2026-07-10] MAMBA sourced (spec 06 §4.4 amendment).
+    "external_mamba",
+)
 
 
 @pytest.mark.parametrize("variant", _TIER1_VARIANTS)

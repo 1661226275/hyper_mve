@@ -16,6 +16,7 @@ import pytest
 from hyper_mve.baselines import create_baseline
 from hyper_mve.baselines.external import ExternalBaselineRunner
 from hyper_mve.baselines.external.ma_muzero_gh import MAMuZeroGHAlgorithm
+from hyper_mve.baselines.external.mamba import MAMBAAlgorithm
 from hyper_mve.baselines.external.mappo import MAPPOAlgorithm
 from hyper_mve.baselines.external.qmix import QMIXAlgorithm
 from hyper_mve.configs import V4Config
@@ -25,6 +26,8 @@ _TIER1_VARIANTS = [
     ("external_mappo", MAPPOAlgorithm),
     ("external_qmix", QMIXAlgorithm),
     ("external_ma_muzero_gh", MAMuZeroGHAlgorithm),
+    # [2026-07-10] MAMBA sourced (spec 06 §4.4 amendment) — now Tier-1-shaped.
+    ("external_mamba", MAMBAAlgorithm),
 ]
 
 

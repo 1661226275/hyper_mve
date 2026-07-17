@@ -173,6 +173,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
         lr: float = 0.0,
         seed: int = 0,
         max_train_steps: Optional[int] = None,
+        tensorboard_dir: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Train the MAPPO agent against ``ResourceCommonsPettingZooEnv``.
@@ -189,6 +190,10 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
             seed: pkg-07 spec 05 §4.2 canonical kwarg — one seed.
             max_train_steps: legacy alias for ``total_env_steps``; honoured
                 when ``total_env_steps`` is unset.
+            tensorboard_dir: when set (sweep harness passes the row's tb/ dir),
+                a :class:`~hyper_mve.baselines.external._probe.PeriodicEvalProbe`
+                writes deterministic per-regime eval returns keyed by cumulative
+                env steps (sample-efficiency curves).
             **kwargs: forward-compat slots; currently ignored.
         """
         del kwargs  # forward-compat
@@ -215,6 +220,22 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
         replay_buffer = ReplayBuffer(args, self._device)
         self._reward_norm = Normalization(shape=n_agents) if args.use_reward_norm else None
 
+        probe = None
+        tb_writer = None
+        if tensorboard_dir:
+            from torch.utils.tensorboard import SummaryWriter
+
+            from hyper_mve.baselines.external._probe import PeriodicEvalProbe
+
+            tb_writer = SummaryWriter(tensorboard_dir)
+
+            def _probe_act(obs: np.ndarray, t: int) -> np.ndarray:
+                del t  # MLP policy — no recurrent state to reset
+                a_n, _ = self._agent.choose_action(obs, evaluate=True)
+                return np.asarray(a_n)
+
+            probe = PeriodicEvalProbe(env_fn, cfg, tb_writer, act_fn=_probe_act)
+
         total_steps = 0
         while total_steps < budget:
             episode_steps = self._run_one_episode(
@@ -230,7 +251,14 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
                 self._agent.train(replay_buffer, total_steps)
                 replay_buffer.reset_buffer()
 
+            if probe is not None:
+                probe.maybe_run(total_steps)
+
         env.close()
+        if probe is not None:
+            probe.close()
+        if tb_writer is not None:
+            tb_writer.flush()
 
     # ----------------------------------------------------------- one-episode
 
@@ -343,6 +371,9 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
         episodes_per_regime: dict[int, int] = {}
         all_returns: list[float] = []
         env_steps_total = 0
+        # Per-episode returns stashed for distribution views (box plots);
+        # same episodes that produce the report means.
+        self._eval_episode_returns: dict[int, list[float]] = {}
 
         for g in regime_grid:
             g_returns: list[float] = []
@@ -357,6 +388,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
                 )
                 g_returns.append(float(self._last_episode_return))
                 env_steps_total += int(episode_steps)
+            self._eval_episode_returns[int(g)] = list(g_returns)
             return_per_regime[int(g)] = float(np.mean(g_returns)) if g_returns else 0.0
             sem = (
                 float(np.std(g_returns) / max(np.sqrt(len(g_returns)), 1.0))

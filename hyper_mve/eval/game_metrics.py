@@ -99,6 +99,39 @@ class FrozenPriorPolicy:
         return float(inverse_scalar_transform(v).item())
 
 
+class FrozenExternalPolicy:
+    """Greedy joint policy adapter for an external-baseline checkpoint.
+
+    [2026-07-10, M3 extension] Exposes the same ``reset()`` /
+    ``joint_actions(obs, rows)`` / ``device`` surface that
+    :class:`FrozenPriorPolicy` gives ``train_best_response`` / ``_rollout``,
+    backed by a deterministic ``act_fn(obs, t)`` (the same signature the
+    sample-efficiency :class:`~hyper_mve.baselines.external._probe.PeriodicEvalProbe`
+    consumes): stacked ``(N, obs_dim)`` float32 obs + in-episode step index
+    (``t == 0`` ⇒ new episode, recurrent runners reset on it) → ``(N,)`` int
+    actions. The oracle ``rows`` argument is ignored — external policies act
+    from the raw per-agent observation alone, exactly as at train time.
+    """
+
+    def __init__(self, act_fn, cfg: V4Config, device: Optional[torch.device] = None):
+        self._act_fn = act_fn
+        self.cfg = cfg
+        self.N = cfg.env.N
+        self.A = cfg.env.A
+        self.device = device or torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu")
+        self._t = 0
+
+    def reset(self) -> None:
+        self._t = 0
+
+    def joint_actions(self, obs: np.ndarray, rows: np.ndarray = None) -> np.ndarray:
+        del rows  # externals never consume oracle rows
+        actions = self._act_fn(np.asarray(obs, dtype=np.float32), self._t)
+        self._t += 1
+        return np.asarray(actions, dtype=np.int64)
+
+
 # ---------------------------------------------------------------------------
 # Small double-DQN best responder
 # ---------------------------------------------------------------------------
@@ -312,13 +345,20 @@ def compute_game_metrics(
     coop_reference_welfare: Optional[float] = None,
     coop_reference_provenance: str = "",
     device: Optional[torch.device] = None,
+    frozen=None,
 ) -> GameMetricsReport:
-    """Compute NashConv + welfare (+ efficiency when a coop reference is given)."""
+    """Compute NashConv + welfare (+ efficiency when a coop reference is given).
+
+    ``frozen`` (optional): a pre-built frozen policy (``FrozenPriorPolicy`` or
+    ``FrozenExternalPolicy``); when given, ``model`` may be ``None`` — this is
+    the external-baseline entry point (M3 extension, 2026-07-10).
+    """
     br = br or BRConfig()
     family = get_regime_family(cfg.env)
     if regime_ids is None:
         regime_ids = list(range(family.size))
-    frozen = FrozenPriorPolicy(model, cfg, device=device)
+    if frozen is None:
+        frozen = FrozenPriorPolicy(model, cfg, device=device)
     N = cfg.env.N
 
     report = GameMetricsReport(
@@ -356,6 +396,7 @@ def compute_game_metrics(
 
 __all__ = [
     "BRConfig",
+    "FrozenExternalPolicy",
     "FrozenPriorPolicy",
     "GameMetricsReport",
     "compute_game_metrics",

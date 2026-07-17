@@ -1,0 +1,124 @@
+<mxfile host="app.diagrams.net" version="24.0.0">
+  <diagram id="algoflow" name="整体算法流程">
+    <mxGraphModel dx="1400" dy="850" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1250" pageHeight="830" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="env" value="RelationCommons 环境&lt;br&gt;关系构型 g 隐藏、回合间重采样&lt;br&gt;收益由 W(g) 加权聚合" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#616161;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="330" width="180" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="modA" value="角色感知模块（2.2.1）" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;fontStyle=1;fontSize=13;fillColor=#fff8f0;strokeColor=#FF9800;container=1;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="280" y="40" width="440" height="260" as="geometry"/>
+        </mxCell>
+        <mxCell id="roleenc" value="RoleEncoder&lt;br&gt;身份嵌入 ⊕ 行向量编码&lt;br&gt;→ 角色表征（32 维）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0b2;strokeColor=#FB8C00;" vertex="1" parent="modA">
+          <mxGeometry x="20" y="40" width="185" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="beliefnet" value="BeliefNet（GRU）&lt;br&gt;观测序列 → 构型后验 ĝ_i&lt;br&gt;课程：示教→退火→纯推断" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0b2;strokeColor=#FB8C00;" vertex="1" parent="modA">
+          <mxGeometry x="20" y="140" width="185" height="95" as="geometry"/>
+        </mxCell>
+        <mxCell id="beliefenc" value="BeliefEncoder&lt;br&gt;→ 信念表征（32 维）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe0b2;strokeColor=#FB8C00;" vertex="1" parent="modA">
+          <mxGeometry x="240" y="165" width="175" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="ctx" value="上下文向量&lt;br&gt;ctx_i = 角色 ⊕ 信念（64 维）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#FB8C00;" vertex="1" parent="modA">
+          <mxGeometry x="240" y="45" width="175" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ea1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="roleenc" target="ctx">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ea2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="beliefnet" target="beliefenc">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ea3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="beliefenc" target="ctx">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="modB" value="主观—客观分离的世界模型模块（2.2.1）" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;fontStyle=1;fontSize=13;fillColor=#f0f6ff;strokeColor=#1976D2;container=1;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="280" y="340" width="440" height="340" as="geometry"/>
+        </mxCell>
+        <mxCell id="hyper" value="DualHyperNetwork&lt;br&gt;按 ctx_i 生成&lt;br&gt;逐智能体主观参数" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce4ec;strokeColor=#C2185B;" vertex="1" parent="modB">
+          <mxGeometry x="20" y="40" width="185" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="rewhead" value="奖励预测头（主观）&lt;br&gt;r̂_i(s, a; θ_rew^i)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce4ec;strokeColor=#C2185B;" vertex="1" parent="modB">
+          <mxGeometry x="240" y="40" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="predhead" value="策略—价值头（主观）&lt;br&gt;π̂_i, v̂_i（θ_pred^i）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce4ec;strokeColor=#C2185B;" vertex="1" parent="modB">
+          <mxGeometry x="240" y="120" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="repnet" value="表征网络（客观、权重共享）&lt;br&gt;观测 o → 隐状态 s" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;" vertex="1" parent="modB">
+          <mxGeometry x="20" y="200" width="185" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="transnet" value="转移网络（客观、权重共享）&lt;br&gt;s′ = s + Δ(s, a)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;" vertex="1" parent="modB">
+          <mxGeometry x="20" y="270" width="185" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="eb1" value="θ_rew^i" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;fontSize=11;" edge="1" parent="1" source="hyper" target="rewhead">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="eb2" value="θ_pred^i" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;fontSize=11;" edge="1" parent="1" source="hyper" target="predhead">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="eb3" value="s" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;" edge="1" parent="1" source="repnet" target="transnet">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="modC" value="MVE 规划器模块（2.2.2）" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;fontStyle=1;fontSize=13;fillColor=#faf4fb;strokeColor=#9C27B0;container=1;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="780" y="250" width="310" height="360" as="geometry"/>
+        </mxCell>
+        <mxCell id="coord" value="逐智能体坐标下降轮转" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1bee7;strokeColor=#8E24AA;" vertex="1" parent="modC">
+          <mxGeometry x="25" y="40" width="260" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="crn" value="固定情景采样（CRN）&lt;br&gt;冻结其余智能体首步动作" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1bee7;strokeColor=#8E24AA;" vertex="1" parent="modC">
+          <mxGeometry x="25" y="110" width="260" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="rollout" value="K 步模型展开&lt;br&gt;累积折扣收益 + 价值自举" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1bee7;strokeColor=#8E24AA;" vertex="1" parent="modC">
+          <mxGeometry x="25" y="190" width="260" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="softmaxn" value="组内标准化 + softmax&lt;br&gt;→ 改进策略 π^mve" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1bee7;strokeColor=#8E24AA;" vertex="1" parent="modC">
+          <mxGeometry x="25" y="270" width="260" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="ec1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="coord" target="crn">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ec2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="crn" target="rollout">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="ec3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="rollout" target="softmaxn">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="replay" value="经验回放池&lt;br&gt;(o, a, r, π^mve)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#616161;" vertex="1" parent="1">
+          <mxGeometry x="790" y="720" width="230" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="trainer" value="联合训练器：单一优化器联合更新&lt;br&gt;（损失与梯度流见图 2-b）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#616161;" vertex="1" parent="1">
+          <mxGeometry x="450" y="720" width="250" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="观测 o_i、自身行向量 w_i·" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;" edge="1" parent="1" source="env" target="modA">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="观测 o_t" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;" edge="1" parent="1" source="env" target="repnet">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="ctx_i" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;" edge="1" parent="1" source="ctx" target="hyper">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="学习到的世界模型（转移 / 奖励 / 策略—价值）" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;strokeWidth=2;" edge="1" parent="1" source="modB" target="modC">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="动作 a_t" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;strokeWidth=2;" edge="1" parent="1" source="softmaxn" target="env">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="真实转移与收益" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;" edge="1" parent="1" source="env" target="replay">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="π^mve（蒸馏目标）" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;" edge="1" parent="1" source="modC" target="replay">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="训练批次" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=11;" edge="1" parent="1" source="replay" target="trainer">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="参数更新" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#c62828;fontColor=#c62828;fontSize=11;" edge="1" parent="1" source="trainer" target="modB">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="参数更新" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#c62828;fontColor=#c62828;fontSize=11;" edge="1" parent="1" source="trainer" target="modA">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

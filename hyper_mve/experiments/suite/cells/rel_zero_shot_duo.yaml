@@ -16,6 +16,9 @@ variants:
   - hyper
   - baseline_ma_muzero
   - no_belief
+  - external_mappo
+  - external_qmix
+  - external_mamba
 seeds: [0, 1, 2]
 preset: rel_duo_holdout
 overrides:
