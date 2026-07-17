@@ -255,6 +255,7 @@ class _RealMAMBA(ExternalBaselineRunner):
         checkpoint_every_env_steps: int = 25_000,
         **kwargs: Any,
     ) -> None:
+        unified_logger = kwargs.pop("unified_logger", None)
         del kwargs  # forward-compat
         if total_env_steps > 0:
             budget = int(total_env_steps)
@@ -275,12 +276,16 @@ class _RealMAMBA(ExternalBaselineRunner):
         self._build(obs_dim)
 
         probe = None
-        if tensorboard_dir:
-            from torch.utils.tensorboard import SummaryWriter
-
+        if tensorboard_dir or unified_logger is not None:
             from hyper_mve.comparison._probe import PeriodicEvalProbe
 
-            self._tb = SummaryWriter(tensorboard_dir)
+            if unified_logger is not None:
+                # duck-types SummaryWriter (native_step_unit="env")
+                self._tb = unified_logger
+            else:
+                from torch.utils.tensorboard import SummaryWriter
+
+                self._tb = SummaryWriter(tensorboard_dir)
             probe = PeriodicEvalProbe(env_fn, cfg, self._tb, act_fn=self._probe_act)
 
         # Periodic model checkpoints (env-step cadence) into the run dir, so a
@@ -297,6 +302,11 @@ class _RealMAMBA(ExternalBaselineRunner):
         while self._env_steps < budget:
             steps = self._run_one_episode(env, deterministic=False, collect=True)
             self._env_steps += steps
+            if unified_logger is not None:
+                # one learner update round per collected episode (the vendored
+                # DreamerLearner cadence) — proxy for the train_steps axis
+                unified_logger.set_progress(env_steps=self._env_steps)
+                unified_logger.advance(train_steps=1)
             if probe is not None:
                 probe.maybe_run(self._env_steps)
             if ckpt_dir is not None and self._env_steps >= next_ckpt:

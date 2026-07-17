@@ -196,6 +196,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
                 env steps (sample-efficiency curves).
             **kwargs: forward-compat slots; currently ignored.
         """
+        unified_logger = kwargs.pop("unified_logger", None)
         del kwargs  # forward-compat
         if total_env_steps > 0:
             budget = int(total_env_steps)
@@ -222,12 +223,17 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
 
         probe = None
         tb_writer = None
-        if tensorboard_dir:
-            from torch.utils.tensorboard import SummaryWriter
-
+        if tensorboard_dir or unified_logger is not None:
             from hyper_mve.comparison._probe import PeriodicEvalProbe
 
-            tb_writer = SummaryWriter(tensorboard_dir)
+            if unified_logger is not None:
+                # duck-types SummaryWriter; probe emissions carry env steps
+                # (native_step_unit="env" on the caller's logger)
+                tb_writer = unified_logger
+            else:
+                from torch.utils.tensorboard import SummaryWriter
+
+                tb_writer = SummaryWriter(tensorboard_dir)
 
             def _probe_act(obs: np.ndarray, t: int) -> np.ndarray:
                 del t  # MLP policy — no recurrent state to reset
@@ -250,6 +256,11 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
             if replay_buffer.episode_num == args.batch_size:
                 self._agent.train(replay_buffer, total_steps)
                 replay_buffer.reset_buffer()
+                if unified_logger is not None:
+                    # one PPO update round; keeps the canonical train_steps
+                    # axis honest for env-step-native emissions
+                    unified_logger.set_progress(env_steps=total_steps)
+                    unified_logger.advance(train_steps=1)
 
             if probe is not None:
                 probe.maybe_run(total_steps)

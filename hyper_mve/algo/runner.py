@@ -136,7 +136,12 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         game_config.model_path = os.path.join(game_config.exp_path, "model.p")
         os.makedirs(game_config.model_dir, exist_ok=True)
         os.makedirs(os.path.join(game_config.exp_path, "logs"), exist_ok=True)
-        summary_writer = SummaryWriter(tb_dir, flush_secs=30)
+        # UnifiedLogger duck-types SummaryWriter (native_step_unit="train":
+        # the fork's core/log.py logs at gradient steps and its
+        # train/transitions_collected scalar self-calibrates the env ratio).
+        summary_writer = kwargs.get("unified_logger")
+        if summary_writer is None:
+            summary_writer = SummaryWriter(tb_dir, flush_secs=30)
         model, weights = train_sync_serial(game_config, summary_writer, None)
         model.set_weights(weights)
         model.eval()
