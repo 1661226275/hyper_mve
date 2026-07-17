@@ -16,6 +16,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_FILES = (
     _REPO_ROOT / "hyper_mve" / "comparison" / "mappo.py",
     _REPO_ROOT / "hyper_mve" / "comparison" / "mamba.py",
+    _REPO_ROOT / "hyper_mve" / "comparison" / "happo.py",
 )
 _BASE_PY = _REPO_ROOT / "hyper_mve" / "comparison" / "base.py"
 

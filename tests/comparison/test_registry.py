@@ -19,6 +19,7 @@ _VARIANTS = [
     ("mazero_mixed", "hyper_mve.algo.runner", "MAZeroMixedRunner"),
     ("mappo", "hyper_mve.comparison.mappo", "MAPPOAlgorithm"),
     ("mamba", "hyper_mve.comparison.mamba", "MAMBAAlgorithm"),
+    ("happo", "hyper_mve.comparison.happo", "HAPPORunner"),
 ]
 
 

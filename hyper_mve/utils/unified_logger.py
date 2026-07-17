@@ -122,6 +122,10 @@ class UnifiedLogger:
         if env_step is not None:
             self.set_progress(env_steps=int(env_step))
             x = self.to_train_step(int(env_step))
+            # env-native emissions advance the canonical counter too, so a
+            # later default-x emit (e.g. the final eval report) lands at the
+            # run's end rather than at 0
+            self.set_progress(train_steps=x)
         else:
             x = int(train_step)
             self.set_progress(train_steps=x)

@@ -20,7 +20,8 @@ Permitted local edits (kept minimal, re-listed here when made):
 - `HARL/`: relation env branch — `harl/utils/envs_tools.py` (+2 `elif`),
   `harl/envs/relation/{relation_env,relation_logger}.py` (new files),
   `harl/envs/__init__.py` (logger registry entry),
-  `harl/configs/envs_cfgs/relation.yaml` (new file). *(phase 4)*
+  `harl/configs/envs_cfgs/relation.yaml` (new file),
+  `harl/utils/configs_tools.py` (`get_task_name` relation branch). *(phase 4 — DONE)*
 - `MBOM/`: `utils/rl_utils.py` — `"MBAM"` type-name check → accepts `MBOM`;
   coin-game-specific `info` keys guarded. *(phase 5)*
 - `m3w-marl/`, `mamba/`, `MAZero/`, `DIMA/`: **no edits.**
