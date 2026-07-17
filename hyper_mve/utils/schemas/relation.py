@@ -202,12 +202,54 @@ def build_g4_ext(lam: float = 1.0) -> RegimeFamily:
     return RegimeFamily(name="g4_ext", N=4, regimes=base.regimes + extra)
 
 
+def build_tag4(lam: float = 1.0) -> RegimeFamily:
+    """``tag4`` (N=4, regime-ified MPE simple_tag; phase-3 realignment).
+
+    Index convention: agents 0–2 are the predators (MPE ``adversary_*``),
+    agent 3 is the prey (MPE ``agent_0``). Five predator-coalition regimes
+    re-weight the raw per-agent physical tag rewards through ``W(g)``:
+
+    * 0 ``pred_full_coalition`` — +λ among all three predators
+    * 1 ``pred_pair_coalition`` — +λ between predators 0,1; predator 2 solo
+    * 2 ``all_solo``            — W = I ⇒ **raw simple_tag rewards exactly**
+      (the fixed-role calibration regime)
+    * 3 ``pred_rivalry``        — −λ among all three predators
+    * 4 ``prey_sympathizer``    — predators 0,1 keep +λ; predator 2 shares
+      the prey's utility (+0.8λ symmetric) — a defecting predator
+    """
+    _validate_intensity(lam)
+
+    def _w(entries: dict[tuple[int, int], float]) -> tuple[tuple[float, ...], ...]:
+        W = np.eye(4, dtype=np.float64)
+        for (i, j), w in entries.items():
+            W[i, j] = w
+            W[j, i] = w
+        return tuple(tuple(float(x) for x in row) for row in W)
+
+    lam = float(lam)
+    return RegimeFamily(
+        name="tag4",
+        N=4,
+        regimes=(
+            Regime(0, "pred_full_coalition",
+                   _w({(0, 1): +lam, (0, 2): +lam, (1, 2): +lam})),
+            Regime(1, "pred_pair_coalition", _w({(0, 1): +lam})),
+            Regime(2, "all_solo", _w({})),
+            Regime(3, "pred_rivalry",
+                   _w({(0, 1): -lam, (0, 2): -lam, (1, 2): -lam})),
+            Regime(4, "prey_sympathizer",
+                   _w({(0, 1): +lam, (2, 3): +0.8 * lam})),
+        ),
+    )
+
+
 def _validate_intensity(lam: float) -> None:
     if not (0.0 < lam <= 1.0):
         raise ValueError(f"relation_intensity λ={lam} ∉ (0, 1]")
 
 
-_BUILDERS = {"g2": build_g2, "g4": build_g4, "g4_ext": build_g4_ext}
+_BUILDERS = {"g2": build_g2, "g4": build_g4, "g4_ext": build_g4_ext,
+             "tag4": build_tag4}
 
 
 @functools.lru_cache(maxsize=None)

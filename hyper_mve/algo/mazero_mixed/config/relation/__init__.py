@@ -111,6 +111,9 @@ class GameConfig(BaseConfig):
         if override is not None:
             return override
 
+        if self.env_name in ("mpe_tag", "mpe_tag_fixed"):
+            return V4Config.from_preset(self.env_name).env
+
         base = V4Config.from_preset("rel_duo")
         env_cfg = base.env
         if self.env_name == "rel_duo_coop":
@@ -120,7 +123,7 @@ class GameConfig(BaseConfig):
         else:
             raise ValueError(
                 f"Unknown relation env_name {self.env_name!r}; "
-                "expected 'rel_duo' or 'rel_duo_coop'."
+                "expected 'rel_duo', 'rel_duo_coop', 'mpe_tag' or 'mpe_tag_fixed'."
             )
         return env_cfg
 
@@ -133,9 +136,16 @@ class GameConfig(BaseConfig):
         # oracle=True (self-play data collection only): g_true flows into info
         # for the belief supervision signal — train-time privileged info per
         # CTDE; evaluation games never get it.
-        env = RelationCommonsPettingZooEnv(
-            env_cfg, oracle_mode=bool(oracle), eval_info_mode=False
-        )
+        if getattr(env_cfg, "env_kind", "relation") == "mpe_tag":
+            from hyper_mve.envs.mpe_tag import MPETagRegimeEnv
+
+            env = MPETagRegimeEnv(
+                env_cfg, oracle_mode=bool(oracle), eval_info_mode=False
+            )
+        else:
+            env = RelationCommonsPettingZooEnv(
+                env_cfg, oracle_mode=bool(oracle), eval_info_mode=False
+            )
         game = RelationCommonsGame(env, T_max=env_cfg.T_max)
         if seed is not None:
             game.set_seed(seed)

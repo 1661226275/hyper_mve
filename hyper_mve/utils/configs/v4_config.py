@@ -12,7 +12,9 @@ from .mup_config import MupConfig
 from .train_config import TrainConfig
 
 
-_PRESET_NAMES: tuple[str, ...] = ("rel_duo", "rel_duo_holdout")
+_PRESET_NAMES: tuple[str, ...] = (
+    "rel_duo", "rel_duo_holdout", "mpe_tag", "mpe_tag_fixed",
+)
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,12 @@ class V4Config:
         if name == "rel_duo_holdout":
             from .presets.rel_duo import build_rel_duo_holdout_config
             return build_rel_duo_holdout_config()
+        if name == "mpe_tag":
+            from .presets.mpe_tag import build_mpe_tag_config
+            return build_mpe_tag_config()
+        if name == "mpe_tag_fixed":
+            from .presets.mpe_tag import build_mpe_tag_fixed_config
+            return build_mpe_tag_fixed_config()
         raise ValueError(
             f"Unknown preset: {name!r}. Valid: {_PRESET_NAMES}"
         )

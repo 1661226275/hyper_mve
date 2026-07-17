@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from hyper_mve.utils.schemas._constants import EPSILON_MOVE, Q_MAX
 
 
-_VALID_RELATION_FAMILIES: tuple[str, ...] = ("g2", "g4", "g4_ext")
+_VALID_RELATION_FAMILIES: tuple[str, ...] = ("g2", "g4", "g4_ext", "tag4")
 _VALID_REGIME_KERNELS: tuple[str, ...] = ("uniform",)
+_VALID_ENV_KINDS: tuple[str, ...] = ("relation", "mpe_tag")
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,14 @@ class EnvConfig:
     regime_switch_prob: float = 0.0     # p: 0 = point 1 (episodic), >0 = point 2
     regime_kernel: str = "uniform"      # κ
     train_regime_ids: tuple[int, ...] | None = None  # holdout restriction at reset
+
+    # Environment kind (phase-3 realignment): "relation" = RelationCommons
+    # (the fields above are its physics); "mpe_tag" = regime-ified MPE
+    # simple_tag (L/K/Q_max/alpha unused; W(g) re-weights the raw per-agent
+    # physical tag rewards). fixed_regime pins one regime for the entire run
+    # (the mpe_tag_fixed calibration config uses the W=I regime).
+    env_kind: str = "relation"
+    fixed_regime: int | None = None
 
     def __post_init__(self) -> None:
         if self.N < 1:
@@ -77,5 +86,11 @@ class EnvConfig:
                 )
         if self.train_regime_ids is not None and len(self.train_regime_ids) == 0:
             raise ValueError("train_regime_ids must be None or non-empty")
+        if self.env_kind not in _VALID_ENV_KINDS:
+            raise ValueError(
+                f"Unknown env_kind: {self.env_kind!r} (valid: {_VALID_ENV_KINDS})"
+            )
+        if self.fixed_regime is not None and self.fixed_regime < 0:
+            raise ValueError(f"fixed_regime must be ≥ 0, got {self.fixed_regime}")
         if not (0.0 < self.alpha <= 1.0):
             raise ValueError(f"alpha={self.alpha} ∉ (0, 1]")
