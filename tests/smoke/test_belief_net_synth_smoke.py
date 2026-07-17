@@ -45,9 +45,9 @@ def test_belief_net_synth_smoke():
     pytest.importorskip("torch")
     import numpy as np
     import torch
-    from hyper_mve.configs import V4Config
-    from hyper_mve.models import BeliefNet
-    from hyper_mve.models.belief_losses import belief_loss
+    from hyper_mve.utils.configs import V4Config
+    from hyper_mve.algo.modules import BeliefNet
+    from hyper_mve.algo.modules.belief_losses import belief_loss
 
     torch.manual_seed(0)
     np.random.seed(0)

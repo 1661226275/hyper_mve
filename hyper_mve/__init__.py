@@ -1,7 +1,9 @@
-"""hyper_mve — Hyper-MuZero (v5, dynamic role relationships) research package.
+"""hyper_mve — mixed-game MB-MARL research package (phase-2 layout).
 
-Public submodules:
-- ``hyper_mve.schemas``  — typed data contracts (RegimeFamily, relational reward, ...)
-- ``hyper_mve.configs``  — 5-layer config + rel_duo / rel_duo_holdout presets
-- ``hyper_mve._legacy_v4_7`` — frozen v4.7 working tree (deprecated, paper Ch6.12 only)
+Submodules:
+- ``hyper_mve.envs``        — RelationCommons + regime-ified MPE environments
+- ``hyper_mve.algo``        — THE METHOD: mazero_mixed fork + subjective modules + runner
+- ``hyper_mve.comparison``  — comparison runners + vendored upstream clones (``vendor/``)
+- ``hyper_mve.ablation``    — ablation arm definitions
+- ``hyper_mve.utils``       — configs, schemas, eval contracts, analysis, unified logger
 """

@@ -1,4 +1,4 @@
-"""Unit tests for ``hyper_mve.configs.v4_config`` (v5 Pkg-09)."""
+"""Unit tests for ``hyper_mve.utils.configs.v4_config`` (v5 Pkg-09)."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from hyper_mve.configs import ModelConfig, TrainConfig, V4Config
+from hyper_mve.utils.configs import ModelConfig, TrainConfig, V4Config
 
 
 def test_from_preset_rel_duo():

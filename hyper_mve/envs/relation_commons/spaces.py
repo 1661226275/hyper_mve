@@ -4,7 +4,7 @@ from __future__ import annotations
 import gym
 import numpy as np
 
-from hyper_mve.schemas import RelationObservationLayout
+from hyper_mve.utils.schemas import RelationObservationLayout
 
 
 def make_observation_space(N: int, K: int) -> gym.spaces.Box:

@@ -26,9 +26,9 @@ import numpy as np
 from gym.spaces import Box, Discrete
 from pettingzoo.utils.env import ParallelEnv
 
-from hyper_mve.configs.env_config import EnvConfig
+from hyper_mve.utils.configs.env_config import EnvConfig
 from hyper_mve.envs.relation_commons import RelationCommonsEnv
-from hyper_mve.schemas import RelationObservationLayout
+from hyper_mve.utils.schemas import RelationObservationLayout
 
 
 _VALID_N: tuple[int, ...] = (2, 4, 8)

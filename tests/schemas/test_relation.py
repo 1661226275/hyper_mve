@@ -1,4 +1,4 @@
-"""Unit tests for ``hyper_mve.schemas.relation`` (v5 Pkg-09).
+"""Unit tests for ``hyper_mve.utils.schemas.relation`` (v5 Pkg-09).
 
 Hard-gate contracts:
 
@@ -13,8 +13,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hyper_mve.configs.env_config import EnvConfig
-from hyper_mve.schemas import (
+from hyper_mve.utils.configs.env_config import EnvConfig
+from hyper_mve.utils.schemas import (
     Regime,
     RegimeFamily,
     build_g2,

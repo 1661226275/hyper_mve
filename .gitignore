@@ -17,16 +17,15 @@ summary.json
 .audit_*.js
 *_workflow.js
 
-# Vendored baseline clones (own .git; SHAs pinned in VENDOR.md)
-hyper_mve/baselines/DIMA/
-hyper_mve/baselines/HARL/
-hyper_mve/baselines/MAZero/
-hyper_mve/baselines/MBOM/
-hyper_mve/baselines/m3w-marl/
-hyper_mve/baselines/mamba/
+# Vendored baseline clones (own .git; SHAs pinned in comparison/vendor/VENDOR.md)
+hyper_mve/comparison/vendor/*
+!hyper_mve/comparison/vendor/VENDOR.md
 
 # mazero_mixed fork: run outputs + ctree build artifacts (rebuild via make.sh)
-hyper_mve/mazero_mixed/results/
-hyper_mve/mazero_mixed/core/mcts/ctree/build/
-hyper_mve/mazero_mixed/core/mcts/ctree/ctree_sampled/cytree.cpp
+hyper_mve/algo/mazero_mixed/results/
+hyper_mve/algo/mazero_mixed/core/mcts/ctree/build/
+hyper_mve/algo/mazero_mixed/core/mcts/ctree/ctree_sampled/cytree.cpp
 *.so
+
+# Run outputs under results/ (analysis CSVs stay tracked-optional)
+results/**/tb/

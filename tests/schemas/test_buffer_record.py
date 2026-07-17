@@ -1,4 +1,4 @@
-"""Unit tests for ``hyper_mve.schemas.buffer_record`` (v5 TimeStepRecord)."""
+"""Unit tests for ``hyper_mve.utils.schemas.buffer_record`` (v5 TimeStepRecord)."""
 from __future__ import annotations
 
 import pickle
@@ -7,7 +7,7 @@ from dataclasses import fields, replace
 import numpy as np
 import pytest
 
-from hyper_mve.schemas import TimeStepRecord
+from hyper_mve.utils.schemas import TimeStepRecord
 
 _G = 5  # |G| for the g2 family
 
@@ -70,7 +70,7 @@ def test_row_order_convention():
     Must match the observation ``row`` block and ``Regime.row(i)`` —
     mis-ordering silently corrupts the conditioning.
     """
-    from hyper_mve.schemas import build_g2
+    from hyper_mve.utils.schemas import build_g2
 
     fam = build_g2(1.0)
     reg = fam.regimes[2]  # asym_exploit: W = [[1,-1],[1,1]]

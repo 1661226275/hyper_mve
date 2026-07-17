@@ -2,7 +2,7 @@
 
 Public surface:
 
-    >>> from hyper_mve.configs import V4Config
+    >>> from hyper_mve.utils.configs import V4Config
     >>> from hyper_mve.envs.relation_commons import RelationCommonsEnv
     >>> cfg = V4Config.from_preset("rel_duo")
     >>> env = RelationCommonsEnv(cfg.env, seed=42)

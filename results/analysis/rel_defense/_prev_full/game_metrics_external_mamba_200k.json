@@ -1,0 +1,98 @@
+{
+  "schema_version": "game-metrics-v1",
+  "variant": "external_mamba",
+  "checkpoint": "runs/suite/rel_gate_duo/external_mamba_seed0_row0_f844ce9b/ckpt_final.pt",
+  "regime_ids": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "br_env_steps": 20000,
+  "eval_episodes": 10,
+  "v_pi": {
+    "0": [
+      22.746457063406705,
+      22.70745707079768
+    ],
+    "1": [
+      -1.3567273069173098,
+      1.1947273245081305
+    ],
+    "2": [
+      -0.9777202039957047,
+      16.21788318362087
+    ],
+    "3": [
+      27.177626118808984,
+      -1.227167224138975
+    ],
+    "4": [
+      5.692607333697379,
+      32.147429775632915
+    ]
+  },
+  "v_br": {
+    "0": [
+      9.445774774439633,
+      16.575544164329767
+    ],
+    "1": [
+      -14.350760137103498,
+      -11.723090278543532
+    ],
+    "2": [
+      -1.8466496476903558,
+      13.831670054607093
+    ],
+    "3": [
+      12.793320430070162,
+      -11.218502007983625
+    ],
+    "4": [
+      18.508215001411735,
+      0.9440000057220459
+    ]
+  },
+  "exploitability": {
+    "0": [
+      0.0,
+      0.0
+    ],
+    "1": [
+      0.0,
+      0.0
+    ],
+    "2": [
+      0.0,
+      0.0
+    ],
+    "3": [
+      0.0,
+      0.0
+    ],
+    "4": [
+      12.815607667714357,
+      0.0
+    ]
+  },
+  "nashconv": {
+    "0": 0.0,
+    "1": 0.0,
+    "2": 0.0,
+    "3": 0.0,
+    "4": 12.815607667714357
+  },
+  "welfare_physical": {
+    "0": 45.68291398286819,
+    "1": 27.90024784207344,
+    "2": 32.69976615309715,
+    "3": 54.55725209712982,
+    "4": 37.99803710579872
+  },
+  "efficiency": {},
+  "coop_reference_welfare": null,
+  "coop_reference_provenance": "",
+  "note": "BR is an approximate best response (independent double-DQN, budget br_env_steps) => NashConv values are LOWER BOUNDS on true exploitability. Frozen policy acts via its distilled prior (argmax prediction net), not the MVE planner."
+}

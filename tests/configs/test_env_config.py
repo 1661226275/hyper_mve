@@ -1,9 +1,9 @@
-"""Unit tests for ``hyper_mve.configs.env_config`` (v5 Pkg-09)."""
+"""Unit tests for ``hyper_mve.utils.configs.env_config`` (v5 Pkg-09)."""
 from __future__ import annotations
 
 import pytest
 
-from hyper_mve.configs import EnvConfig
+from hyper_mve.utils.configs import EnvConfig
 
 
 def test_construct_minimum():

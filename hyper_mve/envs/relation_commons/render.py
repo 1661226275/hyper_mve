@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from hyper_mve.schemas._constants import Q_MAX
+from hyper_mve.utils.schemas._constants import Q_MAX
 
 from .state import RelationCommonsState
 

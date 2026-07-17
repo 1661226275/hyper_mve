@@ -24,9 +24,9 @@ from typing import Any, Optional, Tuple
 import gym
 import numpy as np
 
-from hyper_mve.configs.env_config import EnvConfig
-from hyper_mve.schemas import get_regime_family, sample_initial_regime, step_regime
-from hyper_mve.schemas.relation import compute_relational_rewards
+from hyper_mve.utils.configs.env_config import EnvConfig
+from hyper_mve.utils.schemas import get_regime_family, sample_initial_regime, step_regime
+from hyper_mve.utils.schemas.relation import compute_relational_rewards
 
 from .dynamics import fair_share_harvest, step_dynamics
 from .observations import build_joint_observation
@@ -83,7 +83,7 @@ class RelationCommonsEnv(gym.Env):
         if not isinstance(cfg, EnvConfig):
             raise TypeError(
                 f"cfg must be EnvConfig, got {type(cfg).__name__}; "
-                "construct via hyper_mve.configs.V4Config.from_preset(...)."
+                "construct via hyper_mve.utils.configs.V4Config.from_preset(...)."
             )
         self.cfg: EnvConfig = cfg
 

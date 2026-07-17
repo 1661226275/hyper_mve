@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from hyper_mve.configs import V4Config
+from hyper_mve.utils.configs import V4Config
 
 
 def test_rel_duo_preset_table():
@@ -63,14 +63,14 @@ def test_rel_duo_holdout_differs_only_in_train_regime_ids():
 
 def test_base_gen_forbids_lora_fc2_rank():
     """ModelConfig.__post_init__ rejects lora_fc2_rank on base_gen (Delta_W redundant)."""
-    from hyper_mve.configs.model_config import ModelConfig
+    from hyper_mve.utils.configs.model_config import ModelConfig
     with pytest.raises(AssertionError, match="base_gen"):
         ModelConfig(hyper_gen_scope="base_gen", lora_fc2_rank=8)
 
 
 def test_lora_fc2_requires_expressive_output_scale():
     """lora_fc2 with the default 0.01 pred scale fails the >= 0.05 guardrail."""
-    from hyper_mve.configs.model_config import ModelConfig
+    from hyper_mve.utils.configs.model_config import ModelConfig
     with pytest.raises(AssertionError, match="output_scale_init"):
         ModelConfig(hyper_gen_scope="lora_fc2", lora_fc2_rank=8)
 

@@ -1,6 +1,6 @@
 """Five-block v5 observation construction (Pkg-09).
 
-Follows :class:`hyper_mve.schemas.RelationObservationLayout` exactly and
+Follows :class:`hyper_mve.utils.schemas.RelationObservationLayout` exactly and
 reuses the Pkg-01 padding helpers. Differences from v4: no FOV filtering
 (all resource cells in index order; all neighbors visible with
 ``presence_flag = 1``), ``global`` is ``(time_remaining_ratio,)`` only, and
@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from hyper_mve.schemas import (
+from hyper_mve.utils.schemas import (
     RelationObservationLayout,
     pad_neighbor_block,
     pad_resource_block,
 )
-from hyper_mve.schemas._constants import Q_MAX
+from hyper_mve.utils.schemas._constants import Q_MAX
 
 from .dynamics import ETA
 from .state import RelationCommonsState

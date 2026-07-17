@@ -11,9 +11,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hyper_mve.configs.env_config import EnvConfig
+from hyper_mve.utils.configs.env_config import EnvConfig
 from hyper_mve.envs.relation_commons import RelationCommonsEnv, make_relation_commons
-from hyper_mve.schemas import RelationObservationLayout, slice_relation_block
+from hyper_mve.utils.schemas import RelationObservationLayout, slice_relation_block
 
 NOOP, HARVEST = 0, 5
 

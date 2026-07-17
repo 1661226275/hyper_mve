@@ -1,0 +1,16 @@
+run,last_step,diag/pi_mve_entropy
+duo_base/hyper_seed0_row0_74fd892a,300000,0.723525881767273
+duo_base/hyper_seed1_row1_6572478a,82800,0.7705274820327759
+duo_base/hyper_seed2_row2_5bc3c71b,47900,0.7923922538757324
+duo_film/hyper_seed0_row0_3d4ff0f7,300000,0.7299138307571411
+duo_film/hyper_seed1_row1_636cc98d,300000,0.775214433670044
+duo_film/hyper_seed2_row2_548f63bb,178700,0.7340637445449829
+duo_film_fc2/hyper_seed0_row0_1d8756ae,300000,0.7397080659866333
+duo_film_fc2/hyper_seed1_row1_76f743bf,300000,0.7741979360580444
+duo_film_fc2/hyper_seed2_row2_22d090b8,300000,0.726891279220581
+medium_base/hyper_seed0_row0_fd7ae6e2,127300,1.4006474018096924
+medium_base/hyper_seed1_row1_f3bf2b6b,127300,1.415388822555542
+medium_base/hyper_seed2_row2_23999baf,127300,1.4368281364440918
+medium_film/hyper_seed0_row0_2bde16d1,73400,1.4261891841888428
+medium_film/hyper_seed1_row1_f1b412bd,71700,1.443731427192688
+medium_film/hyper_seed2_row2_daa322bc,47700,1.423584222793579

@@ -1,0 +1,16 @@
+run,last_step,diag/cos_pred_cross
+duo_base/hyper_seed0_row0_74fd892a,300000,0.08990442752838135
+duo_base/hyper_seed1_row1_6572478a,82800,0.07479707896709442
+duo_base/hyper_seed2_row2_5bc3c71b,47900,0.11589539051055908
+duo_film/hyper_seed0_row0_3d4ff0f7,300000,0.056258827447891235
+duo_film/hyper_seed1_row1_636cc98d,300000,0.016491323709487915
+duo_film/hyper_seed2_row2_548f63bb,178700,0.1275101602077484
+duo_film_fc2/hyper_seed0_row0_1d8756ae,300000,-0.03311116248369217
+duo_film_fc2/hyper_seed1_row1_76f743bf,300000,0.053019583225250244
+duo_film_fc2/hyper_seed2_row2_22d090b8,300000,0.06538824737071991
+medium_base/hyper_seed0_row0_fd7ae6e2,127300,0.21269412338733673
+medium_base/hyper_seed1_row1_f3bf2b6b,127300,0.155546635389328
+medium_base/hyper_seed2_row2_23999baf,127300,0.1795644760131836
+medium_film/hyper_seed0_row0_2bde16d1,73400,0.37560099363327026
+medium_film/hyper_seed1_row1_f1b412bd,71700,0.48772144317626953
+medium_film/hyper_seed2_row2_daa322bc,47700,0.437754362821579

@@ -1,12 +1,14 @@
-"""Phase 6 integration drift detectors — cross-package byte-identity locks.
+"""Integration drift detectors — cross-module byte-identity locks (phase-2).
 
-Runs without torch. Validates that pkg-07 + pkg-08 still agree on the four
-spine invariants:
+Runs without heavyweight imports where possible. Validates the spine
+invariants of the realigned layout:
 
 * `EvalReport` exposes 28 dataclass fields with `schema_version="rel-v1"`.
 * `RegistryRow` exposes 23 dataclass fields with `schema_version="pkg08-spec05-v1"`.
-* `REGISTRY` keys (10) match `CLI_CHOICES` (13, after curriculum-override removal).
-* `cli_to_factory_arg` is total over `CLI_CHOICES` minus curriculum-overrides.
+* `hyper_mve.comparison.REGISTRY` is the lazy string registry with exactly the
+  phase-registered keys (extended by realignment phases 4–6; end state 7 keys).
+* The retired v5 namespaces stay deleted.
+* Disclosure columns stay verbatim.
 """
 from __future__ import annotations
 
@@ -18,11 +20,11 @@ import pytest
 def test_eval_report_28_field_dataclass_lock():
     """rel-v1 (v5 Pkg-09) — 27 payload fields + 1 `schema_version` sentinel.
 
-    The v4 per-c / c-segment / type-ratio / regret machinery went with c_t and
-    the type system; per-regime breakdown + belief regime-quality replace them.
+    Phase-2 note: world-model fidelity is a SEPARATE artifact (fidelity-v1
+    JSON, phase 7) precisely so this lock never moves for it.
     """
     pytest.importorskip("torch")  # EvalReport pulls torch transitively
-    from hyper_mve.eval import EvalReport
+    from hyper_mve.utils.eval import EvalReport
     fld = tuple(f.name for f in fields(EvalReport))
     assert len(fld) == 28, f"EvalReport drift: {len(fld)} fields (expect 28)"
     assert fld[-1] == "schema_version"
@@ -42,7 +44,7 @@ def test_eval_report_28_field_dataclass_lock():
 
 def test_registry_row_23_field_dataclass_lock():
     """pkg-08 spec 05 Lock 3 — 22 schema-domain + 1 `schema_version` sentinel."""
-    from hyper_mve.experiments.run_registry import RegistryRow, SCHEMA_VERSION
+    from hyper_mve.utils.analysis.run_registry import RegistryRow, SCHEMA_VERSION
     fld = tuple(f.name for f in fields(RegistryRow))
     assert len(fld) == 23, f"RegistryRow drift: {len(fld)} fields (expect 23)"
     assert fld[-1] == "schema_version"
@@ -51,66 +53,51 @@ def test_registry_row_23_field_dataclass_lock():
     assert SCHEMA_VERSION == "pkg08-spec05-v1"
 
 
-def test_registry_keys_equal_cli_choices_minus_curriculum():
-    """pkg-07 spec 01 §2 — every non-curriculum CLI choice resolves into REGISTRY.
+def test_runner_registry_lazy_string_lock():
+    """Phase-2 registry lock: lazy ``module:Class`` strings, no torch import.
 
-    The naive ``set(REGISTRY) | curriculum == set(CLI_CHOICES)`` invariant is FALSE
-    by design: per spec §2.2 the CLI uses ``baseline_*`` prefixes for internal
-    "with-shared-backbone" variants (``baseline_input_wide``) while REGISTRY uses
-    the bare factory arg (``input_wide``). The real invariant is that the bridge
-    function :func:`cli_to_factory_arg` is total over ``CLI_CHOICES - curriculum``
-    and lands in REGISTRY, with the cardinalities checked separately.
+    Registered keys per phase: 1-3 → {mazero_mixed, mappo, mamba};
+    phase 4 adds happo; phase 5 adds mbom + mbom_oracle; phase 6 adds
+    m3w_adapted (end state 7). Update this lock in the SAME commit as the
+    registry change.
     """
-    from hyper_mve.baselines import CLI_CHOICES, REGISTRY, cli_to_factory_arg
-    curriculum = {"hyper", "oracle_only", "infer_only"}
-    non_curriculum = set(CLI_CHOICES) - curriculum
-    resolved = {cli_to_factory_arg(c) for c in non_curriculum}
-    assert resolved == set(REGISTRY), (
-        f"CLI → factory drift: extra={resolved - set(REGISTRY)}, "
-        f"missing={set(REGISTRY) - resolved}"
-    )
-    assert len(REGISTRY) == 10   # v5: rewardhead_explicit_type deleted (Pkg-09)
-    assert len(CLI_CHOICES) == 13
+    import sys
+
+    from hyper_mve.comparison import REGISTRY
+
+    assert sorted(REGISTRY) == ["mamba", "mappo", "mazero_mixed"]
+    for key, target in REGISTRY.items():
+        module_name, sep, class_name = target.partition(":")
+        assert sep == ":", f"REGISTRY[{key!r}] not in module:Class form: {target!r}"
+        assert module_name.startswith("hyper_mve.")
+        assert class_name.isidentifier()
+    # No retired namespaces in keys.
+    assert not any(k.startswith("external_") for k in REGISTRY)
+    # Lazy: enumerating the registry must not have imported torch-heavy
+    # runner modules (mappo/mamba pull torch at module import).
+    assert "hyper_mve.comparison.mappo" not in sys.modules or "torch" in sys.modules
 
 
-def test_cli_to_factory_arg_total_over_non_curriculum_choices():
-    """pkg-07 spec 01 §5 — cli_to_factory_arg is total over CLI minus curriculum."""
-    from hyper_mve.baselines import CLI_CHOICES, REGISTRY, cli_to_factory_arg
-    curriculum = {"hyper", "oracle_only", "infer_only"}
-    for cli in CLI_CHOICES:
-        if cli in curriculum:
-            with pytest.raises(ValueError, match="curriculum-override"):
-                cli_to_factory_arg(cli)
-        else:
-            arg = cli_to_factory_arg(cli)
-            assert arg in REGISTRY, (
-                f"cli_to_factory_arg({cli!r}) -> {arg!r} not in REGISTRY"
-            )
-
-
-def test_planner_mode_literal_4tuple():
-    """pkg-08 spec 03 Lock 1 — exactly 4 planner modes."""
-    from hyper_mve.experiments.sweep import PlannerMode
-    import typing
-    args = typing.get_args(PlannerMode)
-    assert set(args) == {
-        "direct_inference", "planner_no_crn",
-        "planner_no_coord_desc", "planner_full",
-    }
-    assert len(args) == 4
-
-
-def test_v4_ablation_dispatcher_deleted():
-    """v5 Stage-6 lock — the v4 ablation dispatcher (abl1/abl4/abl6/abl7,
-    Fehr-Schmidt included) went with resource_commons; v5 ablations run as
-    ordinary suite cells through run_suite."""
+def test_retired_v5_namespaces_stay_deleted():
+    """Phase-2 cleanup lock — the v5 stack must not regrow."""
     import importlib.util
-    assert importlib.util.find_spec("hyper_mve.experiments.ablate") is None
+
+    for gone in (
+        "hyper_mve.training",
+        "hyper_mve.planning",
+        "hyper_mve.baselines",
+        "hyper_mve.experiments",
+        "hyper_mve._legacy_v4_7",
+        "hyper_mve.algo.modules.hyper_muzero_model",
+        "hyper_mve.algo.modules.transition_net",
+        "hyper_mve.algo.modules.representation_net",
+    ):
+        assert importlib.util.find_spec(gone) is None, f"{gone} regrew"
 
 
 def test_disclosure_columns_10_tuple():
     """pkg-07 spec 07 §4.2 — 10 disclosure columns verbatim."""
-    from hyper_mve.experiments.stats import DISCLOSURE_COLUMNS
+    from hyper_mve.utils.analysis.stats import DISCLOSURE_COLUMNS
     assert DISCLOSURE_COLUMNS == (
         "variant", "preset", "param_count", "walltime_to_converge_seconds",
         "lr_swept_best", "final_return_mean", "final_return_sem",

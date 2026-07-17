@@ -1,7 +1,7 @@
-"""Unit tests for ``hyper_mve.configs.legacy_config``."""
+"""Unit tests for ``hyper_mve.utils.configs.legacy_config``."""
 from __future__ import annotations
 
-from hyper_mve.configs import LegacyConfig, V4Config
+from hyper_mve.utils.configs import LegacyConfig, V4Config
 
 
 def test_default_disabled():
