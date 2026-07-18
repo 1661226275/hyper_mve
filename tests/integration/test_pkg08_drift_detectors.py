@@ -65,7 +65,9 @@ def test_runner_registry_lazy_string_lock():
 
     from hyper_mve.comparison import REGISTRY
 
-    assert sorted(REGISTRY) == ["happo", "mamba", "mappo", "mazero_mixed"]
+    assert sorted(REGISTRY) == [
+        "happo", "mamba", "mappo", "mazero_mixed", "mbom", "mbom_oracle",
+    ]
     for key, target in REGISTRY.items():
         module_name, sep, class_name = target.partition(":")
         assert sep == ":", f"REGISTRY[{key!r}] not in module:Class form: {target!r}"

@@ -23,5 +23,15 @@ Permitted local edits (kept minimal, re-listed here when made):
   `harl/configs/envs_cfgs/relation.yaml` (new file),
   `harl/utils/configs_tools.py` (`get_task_name` relation branch). *(phase 4 — DONE)*
 - `MBOM/`: `utils/rl_utils.py` — `"MBAM"` type-name check → accepts `MBOM`;
-  coin-game-specific `info` keys guarded. *(phase 5)*
+  coin-game-specific `info` keys guarded. `policy/MBOM.py` — `om_phis`
+  construction: `np.array()` over ragged parameter-tensor lists relied on
+  numpy<1.24 object-array coercion (torch>=1 tensors also refuse `__array__`
+  with grad); replaced by an equivalent plain list of parameter-lists
+  (same indexing/assignment surface, no behavior change). *(phase 5 — DONE)*
+  Adapter-side conventions (no clone edit): agents constructed with
+  `device=None` (the clone's only working device path —
+  `Base_ActorCritic.change_device` raises for any non-None device) and
+  `args.true_prob=True` (matches the shipped `base/MLP.py`, whose active
+  return is the "trub prob" line; upstream couples the flag to that
+  hand-toggled line per `main.py --true_prob` help).
 - `m3w-marl/`, `mamba/`, `MAZero/`, `DIMA/`: **no edits.**
