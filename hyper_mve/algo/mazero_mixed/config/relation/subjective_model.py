@@ -120,6 +120,8 @@ class HyperMAMuZeroNet(BaseNet):
         n_regimes: int = 5,
         belief_point_estimate: bool = False,
         belief_grad_gating_steps: int = 5000,
+        conditioning: str = "hyper",
+
         proj_hid: int = 256, proj_out: int = 256,
         pred_hid: int = 64, pred_out: int = 256,
         use_feature_norm: bool = True,
@@ -154,13 +156,30 @@ class HyperMAMuZeroNet(BaseNet):
             hidden_dim=128, gen_scope="film_head",
         )
         self.value_head = FunctionalValueHead(global_dim, hidden_dim=128)
-        self.hyper = DualHyperNetwork(
-            ctx_aug_dim=self.ctx_encoder.d_ctx_aug,
-            rew_param_count=self.reward_head.generated_param_count,
-            pred_param_count=self.value_head.generated_param_count,
-            rew_output_groups=self.reward_head.gen_groups,
-            pred_output_groups=self.value_head.gen_groups,
-        )
+        if conditioning == "hyper":
+            self.hyper = DualHyperNetwork(
+                ctx_aug_dim=self.ctx_encoder.d_ctx_aug,
+                rew_param_count=self.reward_head.generated_param_count,
+                pred_param_count=self.value_head.generated_param_count,
+                rew_output_groups=self.reward_head.gen_groups,
+                pred_output_groups=self.value_head.gen_groups,
+            )
+        else:
+            # phase-7 conditioning-swap ablation arms (moe_router / film):
+            # same ctx input + forward_subjective contract, θ-generation
+            # mechanism swapped (controlled Direction-1 comparison).
+            from hyper_mve.algo.modules.conditioning_variants import (
+                build_conditioner,
+            )
+            self.hyper = build_conditioner(
+                conditioning,
+                ctx_aug_dim=self.ctx_encoder.d_ctx_aug,
+                rew_param_count=self.reward_head.generated_param_count,
+                pred_param_count=self.value_head.generated_param_count,
+                rew_output_groups=self.reward_head.gen_groups,
+                pred_output_groups=self.value_head.gen_groups,
+            )
+        self.conditioning = conditioning
         self.gating = BeliefGradGating(belief_grad_gating_steps)
 
         # policy: shared SGD head on [own latent ‖ ctx_i] (point-estimate ctx)

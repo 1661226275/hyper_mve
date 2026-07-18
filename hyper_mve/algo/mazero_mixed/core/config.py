@@ -170,6 +170,12 @@ def parse_args(args):
     groups.add_argument("--belief_point_estimate", action="store_true", default=False,
                         help="Ablation arm: leaf values from a single posterior-blended head "
                              "instead of the Bayes average over the regime family.")
+    groups.add_argument("--conditioning", type=str, default="hyper",
+                        choices=("hyper", "moe_router", "film"),
+                        help="Subjective θ-generation mechanism (phase-7 ablation arms): "
+                             "'hyper' = DualHyperNetwork (the method); 'moe_router' = top-k "
+                             "routing over parameter-vector experts; 'film' = base θ with "
+                             "per-group ctx FiLM modulation. Same ctx input in all three.")
     groups.add_argument("--belief_oracle_steps", type=int, default=2000,
                         help="Curriculum stage 1: training steps with pure oracle one-hot belief.")
     groups.add_argument("--belief_anneal_steps", type=int, default=3000,
@@ -343,6 +349,7 @@ class BaseConfig(ABC):
         self.decoupled_selection = args.decoupled_selection
         self.subjective_model = args.subjective_model
         self.belief_point_estimate = args.belief_point_estimate
+        self.conditioning = args.conditioning
         self.belief_oracle_steps = args.belief_oracle_steps
         self.belief_anneal_steps = args.belief_anneal_steps
         self.belief_loss_coeff = args.belief_loss_coeff

@@ -436,6 +436,46 @@ class _RealMAMBA(ExternalBaselineRunner):
             + sum(p.numel() for p in self._learner.critic.parameters())
         )
 
+    # --------------------------------------------------------- fidelity hook
+    def predict_rewards(self, episode) -> Optional[np.ndarray]:
+        """fidelity-v1 hook: one-step per-agent reward predictions (T, N).
+
+        Replicates the vendored ``loss.py:model_loss`` convention exactly:
+        RSSM posterior rollout over the real (obs, action) sequence, then
+        ``reward_model(cat([post.stoch, deters]))`` scores ``reward[1:]`` —
+        MAMBA's own alignment cannot score a sequence's FIRST transition,
+        so row 0 is NaN (masked by the metric, coverage disclosed).
+        """
+        if self._learner is None:
+            return None
+        from hyper_mve.comparison._mamba.rnns import rollout_representation
+
+        model = self._learner.model
+        device = self._mcfg.DEVICE
+        obs_seq = np.asarray(episode["obs"][:-1], dtype=np.float32)  # (T,N,D)
+        actions = np.asarray(episode["actions"], dtype=np.int64)     # (T,N)
+        T, n = actions.shape
+        a_size = int(self._mcfg.ACTION_SIZE)
+
+        model.eval()
+        with torch.no_grad():
+            obs_t = torch.as_tensor(obs_seq, device=device).unsqueeze(1)
+            action_t = F.one_hot(
+                torch.as_tensor(actions, device=device), a_size
+            ).float().unsqueeze(1)                                # (T,1,N,A)
+            done_t = torch.zeros(T, 1, n, 1, device=device)
+            embed = model.observation_encoder(
+                obs_t.reshape(-1, n, obs_t.shape[-1]))
+            embed = embed.reshape(T, 1, n, -1)
+            prev_state = model.representation.initial_state(1, n, device=device)
+            _, post, deters = rollout_representation(
+                model.representation, T, embed, action_t, prev_state, done_t)
+            feat = torch.cat([post.stoch, deters], -1)            # (T-1,1,N,F)
+            r_hat = model.reward_model(feat)                      # (T-1,1,N,1)
+        preds = np.full((T, n), np.nan, dtype=np.float64)
+        preds[1:] = r_hat.reshape(T - 1, n).cpu().numpy()
+        return preds
+
 
 # pkg-07 spec 06 §4.6 byte-identical class-binding:
 MAMBAAlgorithm = _RealMAMBA if IS_SOURCED else _MAMBAStub

@@ -337,3 +337,30 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
             return 0
         return int(sum(p.numel() for p in self._wm.parameters())
                    + sum(p.numel() for p in self._sac.parameters()))
+
+    # ------------------------------------------------------- fidelity hook
+    def predict_rewards(self, episode) -> Optional[np.ndarray]:
+        """fidelity-v1 hook: one-step per-agent reward predictions (T, N)
+        from the SparseMoE reward model, conditioned on the episode's GIVEN
+        regime ID (the disclosed oracle-ID protocol)."""
+        if self._wm is None:
+            return None
+        import torch
+
+        was_training = self._wm.training
+        self._wm.eval()
+        try:
+            with torch.no_grad():
+                obs = torch.as_tensor(
+                    np.asarray(episode["obs"][:-1], dtype=np.float32),
+                    device=self._device)                       # (T, N, D)
+                a = torch.as_tensor(
+                    np.asarray(episode["actions"], dtype=np.int64),
+                    device=self._device)                       # (T, N)
+                g = torch.full((obs.shape[0],), int(episode["g"]),
+                               dtype=torch.long, device=self._device)
+                pred = self._wm.predict_rewards(self._wm.encode(obs, g), a)
+            return pred.cpu().numpy().astype(np.float64)
+        finally:
+            if was_training:
+                self._wm.train()

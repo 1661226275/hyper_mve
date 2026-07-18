@@ -184,6 +184,7 @@ def run_one(*, algo: str, env_id: str, seed: int, total_env_steps: int,
         cfg, env_fn,
         total_env_steps=int(total_env_steps), lr=float(lr), seed=int(seed),
         tensorboard_dir=str(tb_dir), unified_logger=logger,
+        ablation=ablation,
     )
     train_walltime = time.time() - t0
 
@@ -193,8 +194,25 @@ def run_one(*, algo: str, env_id: str, seed: int, total_env_steps: int,
     grid = cfg.eval.eval_regime_grid
     if grid is None:
         grid = tuple(range(get_regime_family(cfg.env).size))
-    report = runner.evaluate(env_fn, tuple(int(g) for g in grid), int(episodes))
+    grid = tuple(int(g) for g in grid)
+    report = runner.evaluate(env_fn, grid, int(episodes))
     logger.log_eval_report(report)
+
+    # metric ① — world-model fidelity (fidelity-v1, SEPARATE artifact from
+    # the rel-v1 EvalReport). None for model-free / supplied-model runners.
+    from hyper_mve.utils.eval.fidelity import compute_fidelity_report
+
+    fidelity = compute_fidelity_report(
+        runner, env_fn, grid, episodes=max(2, int(episodes)), seed=1234)
+    if fidelity is not None:
+        (run_dir / "fidelity.json").write_text(
+            json.dumps(fidelity, indent=2), encoding="utf-8")
+        logger.log_scalar("fidelity/reward_mae",
+                          float(fidelity["reward_mae"]),
+                          train_step=logger.train_steps)
+        for g, v in fidelity["reward_mae_per_regime"].items():
+            logger.log_scalar(f"fidelity/reward_mae_regime_{g}", float(v),
+                              train_step=logger.train_steps)
     logger.close()
 
     (run_dir / "eval_report.json").write_text(
@@ -218,6 +236,8 @@ def run_one(*, algo: str, env_id: str, seed: int, total_env_steps: int,
         "return_zero_shot_seen": report.return_zero_shot_seen,
         "return_zero_shot_unseen": report.return_zero_shot_unseen,
         "return_zero_shot_gap": report.return_zero_shot_gap,
+        "fidelity_reward_mae": (float(fidelity["reward_mae"])
+                                if fidelity is not None else None),
         "run_dir": str(run_dir),
     })
     registry_path = out_root / "registry.jsonl"

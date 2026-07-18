@@ -57,6 +57,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         self.cfg = cfg
         self._model = None            # torch nn.Module (HyperMAMuZeroNet)
         self._game_config = None
+        self._ablation = "none"       # phase-7 arm name (fork-argv seam)
         self._eval_episode_returns: dict[int, list[float]] = {}
 
     # ------------------------------------------------------------ internals
@@ -87,6 +88,10 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             "--use_priority", "--use_max_priority",
             "--subjective_model", "--decoupled_selection",
         ]
+        if self._ablation and self._ablation != "none":
+            from hyper_mve.ablation.arms import apply_arm_argv
+
+            argv = apply_arm_argv(argv, self._ablation)
         args = core_config.parse_args(argv)
         relation_pkg = importlib.import_module("config.relation")
 
@@ -113,6 +118,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
     def train(self, cfg, env_fn, *, total_env_steps: int = 0, lr: float = 0.0,
               seed: int = 0, **kwargs) -> None:
         self.cfg = cfg
+        self._ablation = str(kwargs.get("ablation") or "none")
         _ensure_fork_on_path()
         import torch
         from torch.utils.tensorboard import SummaryWriter
@@ -173,14 +179,18 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
                 for ep in range(int(episodes)):
                     obs_dict, _ = env.reset(seed=10_000 + 97 * int(g) + ep,
                                             options={"g": int(g)})
-                    hidden = model.belief_net.init_hidden(1, N, device="cpu")
+                    # plain-MAZero ablation (no_subjective) has no belief net
+                    subjective = hasattr(model, "belief_net")
+                    hidden = (model.belief_net.init_hidden(1, N, device="cpu")
+                              if subjective else None)
                     ep_ret, steps = 0.0, 0
                     done = False
                     while not done:
                         obs = np.stack([obs_dict[a] for a in agents]).astype(np.float32)
                         obs_t = torch.from_numpy(obs).unsqueeze(0)      # (1, N, obs)
-                        hidden, g_hat = model.belief_net.step(obs_t, hidden)
-                        model.set_belief(g_hat)
+                        if subjective:
+                            hidden, g_hat = model.belief_net.step(obs_t, hidden)
+                            model.set_belief(g_hat)
                         out = model.initial_inference(obs_t)
                         logits = np.asarray(out.policy_logits).reshape(N, -1)
                         acts = {a: int(np.argmax(logits[i])) for i, a in enumerate(agents)}
@@ -249,3 +259,35 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
     def param_count(self) -> int:
         model = self._lazy_model()
         return int(sum(p.numel() for p in model.parameters()))
+
+    # --------------------------------------------------------- fidelity hook
+    def predict_rewards(self, episode):
+        """fidelity-v1 hook: one-step per-agent reward predictions (T, N).
+
+        Oracle-free: the belief GRU runs over the real observation prefix
+        (exactly the strict-CTDE eval path), then the learned reward head
+        scores the realized joint action via ``recurrent_inference``.
+        Plain-MAZero ablation models (no ``belief_net``) are N/A → None.
+        """
+        import torch
+
+        model = self._lazy_model()
+        if not hasattr(model, "belief_net"):
+            return None
+        model.eval()
+        obs_seq = np.asarray(episode["obs"], dtype=np.float32)   # (T+1, N, D)
+        actions = np.asarray(episode["actions"], dtype=np.int64)  # (T, N)
+        T, N = actions.shape
+        preds = np.zeros((T, N), dtype=np.float64)
+        with torch.no_grad():
+            hidden = model.belief_net.init_hidden(1, N, device="cpu")
+            for t in range(T):
+                obs_t = torch.from_numpy(obs_seq[t]).unsqueeze(0)  # (1, N, D)
+                hidden, g_hat = model.belief_net.step(obs_t, hidden)
+                model.set_belief(g_hat)
+                out = model.initial_inference(obs_t)
+                a_t = torch.from_numpy(actions[t]).reshape(1, N)
+                out2 = model.recurrent_inference(
+                    torch.as_tensor(out.hidden_state), a_t)
+                preds[t] = np.asarray(out2.reward).reshape(N)
+        return preds
