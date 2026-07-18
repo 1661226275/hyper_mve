@@ -27,6 +27,7 @@ REGISTRY: Mapping[str, str] = MappingProxyType({
     "happo":        "hyper_mve.comparison.happo:HAPPORunner",
     "mbom":         "hyper_mve.comparison.mbom:MBOMRunner",
     "mbom_oracle":  "hyper_mve.comparison.mbom:MBOMOracleRunner",
+    "m3w_adapted":  "hyper_mve.comparison.m3w_adapted.runner:M3WAdaptedRunner",
 })
 
 

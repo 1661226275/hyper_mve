@@ -18,6 +18,7 @@ _RUNNER_FILES = (
     _REPO_ROOT / "hyper_mve" / "comparison" / "mamba.py",
     _REPO_ROOT / "hyper_mve" / "comparison" / "happo.py",
     _REPO_ROOT / "hyper_mve" / "comparison" / "mbom.py",
+    _REPO_ROOT / "hyper_mve" / "comparison" / "m3w_adapted" / "runner.py",
 )
 _BASE_PY = _REPO_ROOT / "hyper_mve" / "comparison" / "base.py"
 
