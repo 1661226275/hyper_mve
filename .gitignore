@@ -29,3 +29,9 @@ hyper_mve/algo/mazero_mixed/core/mcts/ctree/ctree_sampled/cytree.cpp
 
 # Run outputs under results/ (analysis CSVs stay tracked-optional)
 results/**/tb/
+results/**/harl_raw/
+results/_logs/
+# Checkpoints are large binaries (~5 MB each x ~72 grid runs). The small JSON
+# artifacts next to them (eval_report/fidelity/meta/registry) stay trackable —
+# those ARE the results.
+results/**/ckpt.pt

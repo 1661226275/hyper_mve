@@ -102,9 +102,21 @@ class HAPPORunner(ExternalBaselineRunner):
         if lr and lr > 0:
             algo_args["model"]["lr"] = float(lr)
             algo_args["model"]["critic_lr"] = float(lr)
-        algo_args["logger"]["log_dir"] = log_dir or tempfile.mkdtemp(
-            prefix="happo_harl_"
-        )
+        # HARL builds its OWN tensorboardX SummaryWriter under this dir
+        # (utils/configs_tools.py) and emits the full actor/critic scalar set
+        # against env steps. Pointing it at the run's tb/ therefore buries a
+        # second, differently-x-axed event tree inside the UnifiedLogger's
+        # directory, which TensorBoard then loads as extra runs. Keep HARL's
+        # raw tree OUTSIDE tb/ (as a sibling, so it is still inspectable) —
+        # the canonical scalars reach tb/ through the unified funnel via
+        # relation_logger.py.
+        if log_dir:
+            harl_dir = os.path.join(os.path.dirname(os.path.normpath(log_dir)),
+                                    "harl_raw")
+            os.makedirs(harl_dir, exist_ok=True)
+        else:
+            harl_dir = tempfile.mkdtemp(prefix="happo_harl_")
+        algo_args["logger"]["log_dir"] = harl_dir
         # JSON-safe env_args (HARL's save_config dumps them); live objects go
         # through the module side channel read by the clone's relation files.
         env_args = {

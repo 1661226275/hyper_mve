@@ -18,6 +18,27 @@ from typing import Iterable
 
 import numpy as np
 
+# ``envs/mpe_tag`` pads every raw simple_tag observation to this width before
+# appending the agent's own W-row, so that the row block stays at a fixed
+# trailing offset (the mazero_mixed subjective model extracts rows as the
+# trailing N-1 dims). Defined here so the env and the models that size their
+# input layers share one source of truth.
+MPE_TAG_PAD_DIM: int = 16
+
+
+def per_agent_obs_dim(env_cfg) -> int:
+    """Per-agent observation width for ANY registered env kind.
+
+    Models must size their input layers from this rather than assuming the
+    RelationCommons five-block layout: ``mpe_tag`` wraps simple_tag and emits
+    ``MPE_TAG_PAD_DIM + (N-1)`` dims, which is unrelated to ``total_dim(N, K)``
+    (N=4 gives 19 vs 35). Getting this wrong is silent until the first forward
+    pass, where it surfaces as a shape-mismatch deep inside the encoder.
+    """
+    if getattr(env_cfg, "env_kind", "relation") == "mpe_tag":
+        return MPE_TAG_PAD_DIM + (int(env_cfg.N) - 1)
+    return RelationObservationLayout.total_dim(int(env_cfg.N), int(env_cfg.K))
+
 
 class RelationObservationLayout:
     """Five-block v5 observation layout (Pkg-09, ``envs.relation_commons``).

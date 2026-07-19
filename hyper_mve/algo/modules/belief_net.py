@@ -31,7 +31,11 @@ import torch
 import torch.nn as nn
 
 from hyper_mve.utils.configs import EnvConfig, ModelConfig
-from hyper_mve.utils.schemas import RelationObservationLayout, get_regime_family
+from hyper_mve.utils.schemas import (
+    RelationObservationLayout,
+    get_regime_family,
+    per_agent_obs_dim,
+)
 from hyper_mve.algo.modules._belief_obs_encoder import BeliefObsEncoder
 
 
@@ -53,7 +57,9 @@ class BeliefNet(nn.Module):
 
         self.N = env_cfg.N
         self.n_regimes = get_regime_family(env_cfg).size
-        self.obs_dim = RelationObservationLayout.total_dim(env_cfg.N, env_cfg.K)
+        # dispatch on env_kind — mpe_tag's width is PAD+N-1, not the
+        # RelationCommons five-block total_dim (19 vs 35 at N=4)
+        self.obs_dim = per_agent_obs_dim(env_cfg)
         self.gru_input_dim = 64                     # internal, not exposed in ModelConfig
         self.gru_hidden = model_cfg.belief_gru_hidden       # 128
 

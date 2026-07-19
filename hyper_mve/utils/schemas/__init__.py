@@ -14,10 +14,12 @@ from __future__ import annotations
 from . import _constants
 from .buffer_record import TimeStepRecord
 from .observation import (
+    MPE_TAG_PAD_DIM,
     ObservationLayout,
     RelationObservationLayout,
     pad_neighbor_block,
     pad_resource_block,
+    per_agent_obs_dim,
     slice_relation_block,
 )
 from .relation import (
@@ -40,6 +42,8 @@ __all__ = [
     "RegimeFamily",
     "RelationObservationLayout",
     "ObservationLayout",            # Stage-6 alias of RelationObservationLayout
+    "MPE_TAG_PAD_DIM",
+    "per_agent_obs_dim",
     "slice_relation_block",
     "build_g2",
     "build_g4",

@@ -48,7 +48,11 @@ from hyper_mve.utils.schemas.relation import (
     step_regime,
 )
 
-_PAD_DIM = 16          # max native obs dim over simple_tag_v3 default agents
+from hyper_mve.utils.schemas.observation import MPE_TAG_PAD_DIM
+
+# max native obs dim over simple_tag_v3 default agents. Shared with the models
+# via schemas.observation so an encoder can size itself without building an env.
+_PAD_DIM = MPE_TAG_PAD_DIM
 _TAG_N = 4             # 3 predators + 1 prey (simple_tag_v3 defaults)
 
 
