@@ -28,10 +28,22 @@ Permitted local edits (kept minimal, re-listed here when made):
   numpy<1.24 object-array coercion (torch>=1 tensors also refuse `__array__`
   with grad); replaced by an equivalent plain list of parameter-lists
   (same indexing/assignment surface, no behavior change). *(phase 5 — DONE)*
-  Adapter-side conventions (no clone edit): agents constructed with
-  `device=None` (the clone's only working device path —
-  `Base_ActorCritic.change_device` raises for any non-None device) and
-  `args.true_prob=True` (matches the shipped `base/MLP.py`, whose active
-  return is the "trub prob" line; upstream couples the flag to that
-  hand-toggled line per `main.py --true_prob` help).
+  **CUDA enablement** *(post-phase-7)*: `baselines/Base_ActorCritic.py` —
+  `change_device` was an abstract `raise NotImplementedError` and `PPO` never
+  overrode it, so `MBOM.__init__` (which calls `change_device` for any non-None
+  device) failed before allocating a tensor; implemented to move `a_net`/`v_net`
+  and migrate existing Adam state (`nn.Module.to` mutates `Parameter.data`
+  in place, so the optimizers built in `__init__` stay valid), plus the
+  `import torch` it needs. `policy/MBOM.py` — `_rollout`'s opponent-action
+  enumeration used the CPU-typed `torch.LongTensor` constructor with no
+  `.to(self.device)`; it only worked because `RelationDuoEnvModel.step`
+  re-uploads its inputs. `Opponent_Model.change_device` and `OM_Buffer` were
+  already device-correct and are unchanged.
+  Adapter-side conventions (no clone edit): device selected by the
+  `MBOM_DEVICE` env var (default `cpu` — these are 39-dim/[64,32] MLPs run at
+  batch 1–36, so CUDA costs ~17% wall-clock and buys CPU occupancy; measured
+  1200-step train 32.6s CPU vs 38.1s CUDA), and `args.true_prob=True`
+  (matches the shipped `base/MLP.py`, whose active return is the "trub prob"
+  line; upstream couples the flag to that hand-toggled line per
+  `main.py --true_prob` help).
 - `m3w-marl/`, `mamba/`, `MAZero/`, `DIMA/`: **no edits.**

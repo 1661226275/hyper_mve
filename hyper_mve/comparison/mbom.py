@@ -305,11 +305,19 @@ class MBOMRunner(ExternalBaselineRunner):
         from policy.MBOM import MBOM
         from utils.Logger import Logger
 
-        # The clone's only working device path is device=None (implicit CPU):
-        # Base_ActorCritic.change_device raises NotImplementedError for any
-        # non-None device, and the opponent-model mixing is CUDA-unsafe.
-        # The nets are tiny 39-dim MLPs — CPU is the upstream-faithful device.
-        self._device = torch.device("cpu")
+        # Device is now selectable: the clone's Base_ActorCritic.change_device
+        # (which used to raise NotImplementedError and forced this baseline
+        # onto the CPU) is implemented in our vendor patch — see VENDOR.md.
+        #
+        # NOTE on the default: these are tiny MLPs (39-dim input, [64,32]
+        # hidden) driven at batch 1 in choose_action and batch 36 in the
+        # rollout, so CUDA is not automatically faster per-run — it trades
+        # kernel-launch latency for CPU occupancy. Use MBOM_DEVICE=cuda when
+        # CPU contention across concurrent runs is the binding constraint,
+        # MBOM_DEVICE=cpu for the lowest single-run latency.
+        self._device = torch.device(os.environ.get("MBOM_DEVICE", "cpu"))
+        if self._device.type == "cuda" and not torch.cuda.is_available():
+            self._device = torch.device("cpu")
         args = self._make_args(eps_per_epoch=eps_per_epoch, max_epoch=max_epoch)
         conf_ppo, conf_mbom = _build_confs(
             self.cfg.env, lr=(lr if lr and lr > 0 else 0.001),
@@ -318,14 +326,18 @@ class MBOMRunner(ExternalBaselineRunner):
         logger = Logger(log_root, "mbom_runner", 0)
         self._env_model = RelationDuoEnvModel(
             self.cfg.env, self._device, self._reward_mode)
+        dev = self._device
         ppo = PPO(args, conf_ppo, name="relation_rank0", logger=logger,
-                  actor_rnn=False, device=None)
+                  actor_rnn=False, device=dev)
+        # PPO.__init__ only records self.device; Base_ActorCritic builds the
+        # nets on the CPU regardless, so move them explicitly.
+        ppo.change_device(dev)
         mbom = MBOM(args=args, conf=conf_mbom, name="relation", logger=logger,
                     agent_idx=1, actor_rnn=False, env_model=self._env_model,
-                    device=None)
+                    device=dev)
         buffers = [
             PPO_Buffer(args=args, conf=agent.conf, name=agent.name,
-                       actor_rnn=False, device=None)
+                       actor_rnn=False, device=dev)
             for agent in (ppo, mbom)
         ]
         return args, [ppo, mbom], buffers
@@ -488,13 +500,16 @@ class MBOMRunner(ExternalBaselineRunner):
                 lr=0.001, eps_per_epoch=4, max_epoch=1,
                 log_root=tempfile.mkdtemp(prefix="mbom_load_"),
             )
-        ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
+        ckpt = torch.load(str(path), map_location=self._device,
+                          weights_only=False)
         ppo, mbom = self._agents
         ppo.a_net.load_state_dict(ckpt["ppo"]["a_net"])
         ppo.v_net.load_state_dict(ckpt["ppo"]["v_net"])
         mbom.a_net.load_state_dict(ckpt["mbom"]["a_net"])
         mbom.v_net.load_state_dict(ckpt["mbom"]["v_net"])
-        mbom.om_phis[0] = ckpt["mbom"]["om_phi0"]
+        # om_phis feeds soft_update, which builds its accumulator from the
+        # first phi's device — a CPU phi here would poison every later mix.
+        mbom.om_phis[0] = [p.to(self._device) for p in ckpt["mbom"]["om_phi0"]]
 
     def param_count(self) -> int:
         if self._agents is None:

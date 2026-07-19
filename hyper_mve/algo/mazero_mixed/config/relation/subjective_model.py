@@ -77,6 +77,36 @@ class FunctionalValueHead(nn.Module):
         x = adaln_modulate(self.fc2(x), g2, b2)
         return functional_linear(x, w3, bias3)      # (B*, 1)
 
+    def forward_multi(self, global_state, flat_params_stacked):
+        """Evaluate |G| parameter sets against ONE shared ``global_state``.
+
+        Numerically identical to looping :meth:`forward` over the regime axis
+        and stacking, but issues a constant number of kernels instead of one
+        set per regime — the Bayes-averaged leaf evaluation is on the MCTS hot
+        path (every ``initial_inference`` / ``recurrent_inference``), so the
+        per-launch overhead dominated the batch-1 search cost.
+
+        ``fc1`` is regime-independent (it consumes only ``global_state``), so
+        it is evaluated once and broadcast; only the FiLM modulation and the
+        generated output layer are genuinely per-regime.
+
+        Args:
+            global_state:        (B*, global_dim)
+            flat_params_stacked: (G, B*, P)
+        Returns:
+            (B*, 1, G) — the regime axis LAST, ready to multiply by beliefs.
+        """
+        G = flat_params_stacked.shape[0]
+        Bn = global_state.shape[0]
+        flat = flat_params_stacked.reshape(G * Bn, -1)
+        (g1, b1), (g2, b2), (w3, bias3) = split_generated(flat, self.gen_spec)
+        # (B*, hid) -> (G*B*, hid), tiled to match flat's [g0 rows; g1 rows; …]
+        h1 = self.fc1(global_state).repeat(G, 1)
+        x = adaln_modulate(h1, g1, b1)
+        x = adaln_modulate(self.fc2(x), g2, b2)
+        out = functional_linear(x, w3, bias3)           # (G*B*, 1)
+        return out.reshape(G, Bn, 1).permute(1, 2, 0)   # (B*, 1, G)
+
 
 class ObjectiveDynamics(nn.Module):
     """Inherited objective transition: attention communication + residual
@@ -259,10 +289,10 @@ class HyperMAMuZeroNet(BaseNet):
         if self.belief_point_estimate:
             v = self.value_head(gs, self._theta_val)             # (B*N, 1)
             return v.reshape(B, self.num_agents, 1)
-        vals = []
-        for g in range(self.n_regimes):
-            vals.append(self.value_head(gs, self._theta_val_G[g]))   # (B*N, 1)
-        v_g = torch.stack(vals, dim=-1)                          # (B*N, 1, |G|)
+        # one batched pass over the regime family (see forward_multi) — the
+        # per-regime Python loop this replaces was ~38% of search step time
+        v_g = self.value_head.forward_multi(
+            gs, torch.stack(self._theta_val_G, dim=0))           # (B*N, 1, |G|)
         b = self._belief_probs.reshape(B * self.num_agents, 1, self.n_regimes)
         v = (v_g * b).sum(-1)                                    # (B*N, 1)
         return v.reshape(B, self.num_agents, 1)

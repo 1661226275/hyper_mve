@@ -43,6 +43,28 @@ _FORK_DIR = Path(__file__).resolve().parent / "mazero_mixed"
 # the fork smoke ratio 5000/320 ≈ 16).
 _ENV_STEPS_PER_GRAD = 16
 
+# Number of MCTS trees searched in parallel by the selfplay worker. This is the
+# inference BATCH SIZE on the search hot path: the fork evaluates all leaves of
+# all trees in one forward per simulation, so num_pmcts=B turns B batch-1
+# forwards into one batch-B forward.
+#
+# It does NOT change the env-steps-per-gradient-step ratio — core/train.py
+# paces gradient steps as
+#     target_steps = training_steps * transitions_collected / total_transitions
+# so total env steps and total gradient steps are invariant to this value. It
+# only makes collection chunkier (more transitions per collect round, hence
+# more gradient steps between behaviour-policy refreshes), which the off-policy
+# replay buffer + reanalyze worker are designed to absorb.
+#
+# Measured on this env (39-dim obs, 1.26M params, 25 sims/step, GPU 5):
+#   num_pmcts   CUDA ms/step   CUDA ms/tree
+#           1           60.8          60.81
+#          16           62.5           3.91
+#          32           63.5           1.99
+# i.e. CUDA wall-time is essentially flat in B — the search is kernel-launch
+# bound, not compute bound — so raising this is close to free throughput.
+_DEFAULT_NUM_PMCTS = 1
+
 
 def _ensure_fork_on_path() -> None:
     p = str(_FORK_DIR)
@@ -58,7 +80,18 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         self._model = None            # torch nn.Module (HyperMAMuZeroNet)
         self._game_config = None
         self._ablation = "none"       # phase-7 arm name (fork-argv seam)
+        self._num_pmcts = _DEFAULT_NUM_PMCTS
         self._eval_episode_returns: dict[int, list[float]] = {}
+
+    @staticmethod
+    def _device_of(model):
+        """The device the model actually lives on (eval/fidelity follow it)."""
+        try:
+            return next(model.parameters()).device
+        except StopIteration:  # pragma: no cover - parameterless model
+            import torch
+
+            return torch.device("cpu")
 
     # ------------------------------------------------------------ internals
     def _build_game_config(self, *, total_env_steps: int, lr: float, seed: int):
@@ -72,8 +105,14 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         argv = [
             "--opr", "train_sync", "--case", "relation", "--env", "rel_duo",
             "--exp_name", "runner", "--seed", str(int(seed)),
-            "--train_on_gpu",
-            "--data_actors", "1", "--num_pmcts", "1", "--reanalyze_actors", "1",
+            # all three workers on GPU: selfplay/reanalyze default to CPU in
+            # the fork (core/config.py:40,132) and the adapter previously
+            # passed only --train_on_gpu, so search AND the reanalyze
+            # batch-refresh ran single-threaded on CPU. Both flags degrade
+            # gracefully — core/config.py ANDs them with cuda.is_available().
+            "--train_on_gpu", "--selfplay_on_gpu", "--reanalyze_on_gpu",
+            "--data_actors", "1", "--num_pmcts", str(int(self._num_pmcts)),
+            "--reanalyze_actors", "1",
             "--test_interval", str(10 * training_steps + 1),
             "--target_model_interval", "50",
             "--batch_size", "64", "--num_simulations", "25",
@@ -107,10 +146,18 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
 
     def _lazy_model(self):
         if self._model is None:
+            import torch
+
             self._game_config = self._build_game_config(
                 total_env_steps=1024, lr=0.02, seed=0
             )
-            self._model = self._game_config.get_uniform_network()
+            model = self._game_config.get_uniform_network()
+            # checkpoint-eval path (no train() in this process): put the model
+            # on the GPU too, so evaluate()/predict_rewards() are not pinned to
+            # the CPU just because training happened in another run.
+            if torch.cuda.is_available():
+                model = model.cuda()
+            self._model = model
             self._model.eval()
         return self._model
 
@@ -119,6 +166,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
               seed: int = 0, **kwargs) -> None:
         self.cfg = cfg
         self._ablation = str(kwargs.get("ablation") or "none")
+        self._num_pmcts = int(kwargs.get("num_pmcts") or _DEFAULT_NUM_PMCTS)
         _ensure_fork_on_path()
         import torch
         from torch.utils.tensorboard import SummaryWriter
@@ -151,7 +199,10 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         model, weights = train_sync_serial(game_config, summary_writer, None)
         model.set_weights(weights)
         model.eval()
-        self._model = model.cpu()
+        # keep the trained model on the device it was trained on — evaluate()
+        # and predict_rewards() together run len(grid)*episodes*T_max forward
+        # passes, which used to be forced onto the CPU by a .cpu() here.
+        self._model = model
         self._game_config = game_config
 
     # ------------------------------------------------------------ evaluate
@@ -160,6 +211,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
 
         model = self._lazy_model()
         model.eval()
+        device = self._device_of(model)
         t0 = time.time()
 
         env = env_fn()
@@ -181,13 +233,13 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
                                             options={"g": int(g)})
                     # plain-MAZero ablation (no_subjective) has no belief net
                     subjective = hasattr(model, "belief_net")
-                    hidden = (model.belief_net.init_hidden(1, N, device="cpu")
+                    hidden = (model.belief_net.init_hidden(1, N, device=device)
                               if subjective else None)
                     ep_ret, steps = 0.0, 0
                     done = False
                     while not done:
                         obs = np.stack([obs_dict[a] for a in agents]).astype(np.float32)
-                        obs_t = torch.from_numpy(obs).unsqueeze(0)      # (1, N, obs)
+                        obs_t = torch.from_numpy(obs).unsqueeze(0).to(device)
                         if subjective:
                             hidden, g_hat = model.belief_net.step(obs_t, hidden)
                             model.set_belief(g_hat)
@@ -252,7 +304,8 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         import torch
 
         model = self._lazy_model()
-        ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
+        ckpt = torch.load(str(path), map_location=self._device_of(model),
+                          weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         model.eval()
 
@@ -275,19 +328,20 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         if not hasattr(model, "belief_net"):
             return None
         model.eval()
+        device = self._device_of(model)
         obs_seq = np.asarray(episode["obs"], dtype=np.float32)   # (T+1, N, D)
         actions = np.asarray(episode["actions"], dtype=np.int64)  # (T, N)
         T, N = actions.shape
         preds = np.zeros((T, N), dtype=np.float64)
         with torch.no_grad():
-            hidden = model.belief_net.init_hidden(1, N, device="cpu")
+            hidden = model.belief_net.init_hidden(1, N, device=device)
             for t in range(T):
-                obs_t = torch.from_numpy(obs_seq[t]).unsqueeze(0)  # (1, N, D)
+                obs_t = torch.from_numpy(obs_seq[t]).unsqueeze(0).to(device)
                 hidden, g_hat = model.belief_net.step(obs_t, hidden)
                 model.set_belief(g_hat)
                 out = model.initial_inference(obs_t)
-                a_t = torch.from_numpy(actions[t]).reshape(1, N)
+                a_t = torch.from_numpy(actions[t]).reshape(1, N).to(device)
                 out2 = model.recurrent_inference(
-                    torch.as_tensor(out.hidden_state), a_t)
+                    torch.as_tensor(out.hidden_state).to(device), a_t)
                 preds[t] = np.asarray(out2.reward).reshape(N)
         return preds
