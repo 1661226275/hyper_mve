@@ -1,0 +1,21 @@
+# Comparative experiments — GPU 3: THE METHOD, all three envs.
+#
+# mazero_mixed is by far the most expensive runner (MCTS: ~6 h per 200k-step
+# run at num_pmcts=1), so it gets a card to itself. 3 envs x 3 seeds = 9 runs.
+#
+# Rows run SEQUENTIALLY, one subprocess each. Results land in
+# results/<algo>/<env>/seed<k>/ and append to results/registry.jsonl.
+algos:
+  - mazero_mixed
+envs:
+  - relation
+  - relation_holdout
+  - mpe_tag
+seeds: [0, 1, 2]
+total_env_steps: 200000
+episodes: 16
+
+# Unified across every grid (compare + ablation) so no comparison is
+# confounded by collection dynamics. 1 = the dynamics your 5k-step probe and
+# smoke runs were validated under.
+num_pmcts: 1

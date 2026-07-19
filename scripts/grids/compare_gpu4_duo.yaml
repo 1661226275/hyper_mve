@@ -1,0 +1,22 @@
+# Comparative experiments — GPU 4, part 2: the duo-only RelationCommons pair.
+#
+# mbom / mbom_oracle assert cfg.env.N == 2 (hyper_mve/comparison/mbom.py) and
+# hard-fail on mpe_tag (N=4) with
+#     AssertionError: MBOM baseline is RelationCommons-duo only
+# so they are restricted to the relation family. This split is the reason the
+# GPU-4 comparative set is two grid files rather than one.
+#
+# Device: these are tiny MLPs (39-dim in, [64,32] hidden) and default to CPU,
+# which is ~17% FASTER per run than CUDA. Export MBOM_DEVICE=cuda before this
+# grid only if CPU contention with the other two cards is the binding
+# constraint (the CUDA path is now supported — see vendor/VENDOR.md).
+algos:
+  - mbom
+  - mbom_oracle
+envs:
+  - relation
+  - relation_holdout
+seeds: [0, 1, 2]
+total_env_steps: 200000
+episodes: 16
+num_pmcts: 1

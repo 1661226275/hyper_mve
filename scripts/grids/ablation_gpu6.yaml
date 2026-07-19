@@ -1,0 +1,23 @@
+# Ablation study — GPU 6 half: the two CONDITIONING-MECHANISM arms.
+#
+# moe_router / film swap how theta is generated for the DualHyperNetwork while
+# feeding it the SAME ctx input — this is the controlled Direction-1 mechanism
+# comparison, and it is read as a PAIR against each other and against the
+# unablated hypernet. They are deliberately kept on one card so both arms see
+# identical hardware conditions.
+#
+# (Distinct from the m3w_adapted BASELINE, which is a different training
+# paradigm entirely, not a mechanism swap.)
+#
+# 2 arms x 1 env x 3 seeds = 6 runs at ~6 h ~= 1.5 days.
+algos:
+  - mazero_mixed
+ablations:
+  - moe_router
+  - film
+envs:
+  - relation
+seeds: [0, 1, 2]
+total_env_steps: 200000
+episodes: 16
+num_pmcts: 1
