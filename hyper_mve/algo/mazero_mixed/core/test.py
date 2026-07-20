@@ -15,6 +15,43 @@ from core.game import GameHistory
 from core.utils import select_action, prepare_observation_lst
 
 
+def predict_rewards_from_model(model, episode, device):
+    """fidelity-v1 hook body (one-step per-agent reward predictions, (T, N)):
+    belief-GRU rollout over the real observation prefix, then the learned
+    reward head scores the realized joint action via recurrent_inference.
+
+    Factored out so both the post-hoc MAZeroMixedRunner.predict_rewards
+    (hyper_mve/algo/runner.py) and the periodic in-training fidelity probe
+    (train_sync_serial below) share one implementation instead of drifting.
+    None if the model has no belief_net (plain-MAZero ablation arms are N/A,
+    same as the post-hoc path).
+    """
+    if not hasattr(model, "belief_net"):
+        return None
+    was_training = model.training
+    model.eval()
+    obs_seq = np.asarray(episode["obs"], dtype=np.float32)   # (T+1, N, D)
+    actions = np.asarray(episode["actions"], dtype=np.int64)  # (T, N)
+    T, N = actions.shape
+    preds = np.zeros((T, N), dtype=np.float64)
+    try:
+        with torch.no_grad():
+            hidden = model.belief_net.init_hidden(1, N, device=device)
+            for t in range(T):
+                obs_t = torch.from_numpy(obs_seq[t]).unsqueeze(0).to(device)
+                hidden, g_hat = model.belief_net.step(obs_t, hidden)
+                model.set_belief(g_hat)
+                out = model.initial_inference(obs_t)
+                a_t = torch.from_numpy(actions[t]).reshape(1, N).to(device)
+                out2 = model.recurrent_inference(
+                    torch.as_tensor(out.hidden_state).to(device), a_t)
+                preds[t] = np.asarray(out2.reward).reshape(N)
+    finally:
+        if was_training:
+            model.train()
+    return preds
+
+
 def test(
     config: BaseConfig,
     model: BaseNet,

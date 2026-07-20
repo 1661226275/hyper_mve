@@ -235,8 +235,8 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
 
                 tb_writer = SummaryWriter(tensorboard_dir)
 
-            def _probe_act(obs: np.ndarray, t: int) -> np.ndarray:
-                del t  # MLP policy — no recurrent state to reset
+            def _probe_act(obs: np.ndarray, t: int, g: int) -> np.ndarray:
+                del t, g  # MLP policy — no recurrent state, regime-blind
                 a_n, _ = self._agent.choose_action(obs, evaluate=True)
                 return np.asarray(a_n)
 

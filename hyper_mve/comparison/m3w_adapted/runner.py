@@ -130,7 +130,9 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
         import torch
 
         self.cfg = cfg
-        del env_fn  # own oracle-mode env (given-ID protocol, see docstring)
+        # NOTE: env_fn is NOT used for training below (own oracle-mode env,
+        # given-ID protocol, see docstring) -- kept alive only for the
+        # periodic probe, which mirrors evaluate()'s oracle-free env_fn use.
         torch.manual_seed(int(seed))
         np.random.seed(int(seed))
         rng = np.random.default_rng(int(seed))
@@ -164,6 +166,38 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
 
         if unified_logger is not None:
             unified_logger.declare_ratio(float(update_every))
+
+        probe = None
+        tensorboard_dir = kwargs.get("tensorboard_dir")
+        if tensorboard_dir or unified_logger is not None:
+            from hyper_mve.comparison._probe import PeriodicEvalProbe
+
+            probe_writer = unified_logger
+            if probe_writer is None:
+                from torch.utils.tensorboard import SummaryWriter
+
+                probe_writer = SummaryWriter(tensorboard_dir)
+            probe_gen = torch.Generator(device=self._device)
+
+            def _probe_act(obs: np.ndarray, t: int, g: int) -> np.ndarray:
+                del t
+                probe_gen.manual_seed(0)
+                return self._planner.plan(obs, int(g), explore=False,
+                                          generator=probe_gen)
+
+            def _fidelity_fn():
+                from hyper_mve.utils.eval.fidelity import compute_fidelity_report
+                from hyper_mve.utils.schemas import get_regime_family
+
+                grid = tuple(range(get_regime_family(cfg.env).size))
+                return compute_fidelity_report(self, env_fn, grid,
+                                               episodes=2, seed=1234)
+
+            probe = PeriodicEvalProbe(
+                env_fn, cfg, probe_writer, act_fn=_probe_act,
+                every_train_steps=500, episodes_per_regime=8,
+                fidelity_fn=_fidelity_fn,
+            )
 
         self._wm.train()
         self._sac.train()
@@ -222,9 +256,17 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
                     for tag, v in {**wm_parts, **sac_parts}.items():
                         unified_logger.log_scalar(
                             f"train/{tag}", v, train_step=train_step)
+                if probe is not None:
+                    self._wm.eval()
+                    self._sac.eval()
+                    probe.maybe_run(t, train_steps=train_step)
+                    self._wm.train()
+                    self._sac.train()
         if unified_logger is not None:
             unified_logger.set_progress(env_steps=total,
                                         train_steps=max(train_step, 1))
+        if probe is not None:
+            probe.close()
         env.close()
 
     # ------------------------------------------------------------- evaluate

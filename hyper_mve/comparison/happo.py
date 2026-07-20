@@ -48,7 +48,7 @@ _HARL_DIR = Path(__file__).resolve().parent / "vendor" / "HARL"
 # save_config, so the EnvConfig / UnifiedLogger cannot ride in env_args. The
 # clone's relation_env.py / relation_logger.py read these slots instead.
 # Single-process only (n_rollout_threads=1 enforced below).
-_ACTIVE: dict = {"env_cfg": None, "unified_logger": None}
+_ACTIVE: dict = {"env_cfg": None, "unified_logger": None, "probe": None}
 
 
 def get_active_env_cfg():
@@ -57,6 +57,17 @@ def get_active_env_cfg():
 
 def get_active_unified_logger():
     return _ACTIVE["unified_logger"]
+
+
+def get_active_probe():
+    """PeriodicEvalProbe for the in-flight train() call, or None.
+
+    HAPPO owns no step-loop of its own (``self._runner.run()`` is a single
+    blocking call into unmodified vendored HARL) -- relation_logger.py's
+    episode_log, which HARL already calls back into periodically, is the
+    only available hook for a periodic probe. Constructed once in train()
+    (where self._runner.actor is reachable) and read from there."""
+    return _ACTIVE["probe"]
 
 
 def _ensure_harl_on_path() -> None:
@@ -134,12 +145,58 @@ class HAPPORunner(ExternalBaselineRunner):
               seed: int = 0, **kwargs) -> None:
         self.cfg = cfg
         self._lr = float(lr)
+        unified_logger = kwargs.get("unified_logger")
+        tensorboard_dir = kwargs.get("tensorboard_dir")
         self._runner = self._build_runner(
             total_env_steps=int(total_env_steps), lr=lr, seed=int(seed),
-            log_dir=kwargs.get("tensorboard_dir"),
-            unified_logger=kwargs.get("unified_logger"),
+            log_dir=tensorboard_dir, unified_logger=unified_logger,
         )
-        self._runner.run()
+
+        probe = None
+        if tensorboard_dir or unified_logger is not None:
+            from hyper_mve.comparison._probe import PeriodicEvalProbe
+
+            probe_writer = unified_logger
+            if probe_writer is None:
+                from torch.utils.tensorboard import SummaryWriter
+
+                probe_writer = SummaryWriter(tensorboard_dir)
+
+            recurrent_n = int(self._runner.recurrent_n)
+            rnn_hidden = int(self._runner.rnn_hidden_size)
+            n_agents = int(cfg.env.N)
+            probe_rnn = {"state": None}
+
+            def _probe_act(obs: np.ndarray, t: int, g: int) -> np.ndarray:
+                del g
+                if t == 0:
+                    probe_rnn["state"] = [
+                        np.zeros((1, recurrent_n, rnn_hidden), dtype=np.float32)
+                        for _ in range(n_agents)
+                    ]
+                masks = np.ones((1, 1), dtype=np.float32)
+                acts = np.zeros(n_agents, dtype=np.int64)
+                for i in range(n_agents):
+                    action, rnn_i = self._runner.actor[i].act(
+                        obs[i][None], probe_rnn["state"][i], masks, None,
+                        deterministic=True,
+                    )
+                    probe_rnn["state"][i] = rnn_i.detach().cpu().numpy()
+                    acts[i] = int(action.detach().cpu().numpy().reshape(-1)[0])
+                return acts
+
+            probe = PeriodicEvalProbe(
+                env_fn, cfg, probe_writer, act_fn=_probe_act,
+                every_train_steps=500, episodes_per_regime=8,
+            )
+        _ACTIVE["probe"] = probe
+
+        try:
+            self._runner.run()
+        finally:
+            _ACTIVE["probe"] = None
+            if probe is not None:
+                probe.close()
         # release HARL's train envs / writer; actors stay in memory for eval
         self._runner.close()
 

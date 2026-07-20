@@ -161,8 +161,9 @@ class _RealMAMBA(ExternalBaselineRunner):
             action = F.one_hot(idx, pi.shape[-1]).to(pi.dtype)
         return action, state
 
-    def _probe_act(self, obs: np.ndarray, t: int) -> np.ndarray:
+    def _probe_act(self, obs: np.ndarray, t: int, g: int) -> np.ndarray:
         """Deterministic act_fn for PeriodicEvalProbe (recurrent state per episode)."""
+        del g  # regime-blind
         if t == 0:
             self._probe_prev = (None, None)
         device = self._mcfg.DEVICE
@@ -286,9 +287,19 @@ class _RealMAMBA(ExternalBaselineRunner):
                 from torch.utils.tensorboard import SummaryWriter
 
                 self._tb = SummaryWriter(tensorboard_dir)
+
+            def _fidelity_fn():
+                from hyper_mve.utils.eval.fidelity import compute_fidelity_report
+                from hyper_mve.utils.schemas import get_regime_family
+
+                grid = tuple(range(get_regime_family(cfg.env).size))
+                return compute_fidelity_report(self, env_fn, grid,
+                                               episodes=2, seed=1234)
+
             probe = PeriodicEvalProbe(
                 env_fn, cfg, self._tb, act_fn=self._probe_act,
                 every_train_steps=500, episodes_per_regime=8,
+                fidelity_fn=_fidelity_fn,
             )
 
         # Periodic model checkpoints (env-step cadence) into the run dir, so a

@@ -55,8 +55,8 @@ class _CountingWriter:
         pass
 
 
-def _fake_act(obs: np.ndarray, t: int) -> np.ndarray:
-    del obs, t
+def _fake_act(obs: np.ndarray, t: int, g: int) -> np.ndarray:
+    del obs, t, g
     return np.zeros(2, dtype=np.int64)
 
 

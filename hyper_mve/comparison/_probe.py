@@ -27,9 +27,13 @@ varies -- so a fixed env-step cadence drifts away from an even train-step
 spacing over a run; passing ``train_steps`` keeps evals evenly spaced on the
 axis TensorBoard curves are actually compared on).
 
-``act_fn(obs, t)`` maps a stacked ``(N, obs_dim)`` float32 observation and the
+``act_fn(obs, t, g)`` maps a stacked ``(N, obs_dim)`` float32 observation, the
 in-episode step index ``t`` (``t == 0`` ⇒ new episode; recurrent runners reset
-their hidden state on it) to an ``(N,)`` int action vector, deterministically.
+their hidden state on it), and the pinned regime id ``g`` for this episode to
+an ``(N,)`` int action vector, deterministically. ``g`` is provided because
+m3w_adapted's policy takes the regime id as an explicit argument (its
+disclosed given-ID protocol, see fidelity.py); regime-blind callers just
+ignore the third argument.
 """
 from __future__ import annotations
 
@@ -48,11 +52,12 @@ class PeriodicEvalProbe:
         env_fn: Callable[[], Any],
         cfg: V4Config,
         writer,                      # torch.utils.tensorboard.SummaryWriter | None
-        act_fn: Callable[[np.ndarray, int], np.ndarray],
+        act_fn: Callable[[np.ndarray, int, int], np.ndarray],
         every_env_steps: int = 10_000,
         every_train_steps: Optional[int] = None,
         episodes_per_regime: int = 2,
         tag_prefix: str = "eval",
+        fidelity_fn: Optional[Callable[[], Optional[dict]]] = None,
     ) -> None:
         self._env_fn = env_fn
         self._cfg = cfg
@@ -62,6 +67,15 @@ class PeriodicEvalProbe:
         self._every_train = int(every_train_steps) if every_train_steps else None
         self._episodes = int(episodes_per_regime)
         self._prefix = tag_prefix
+        # 2026-07-20: World Fidelity must log alongside training, not just
+        # post-hoc (Model Generalization is fine post-training only; reward
+        # is already this class's job). Zero-arg callable -- typically a
+        # closure over compute_fidelity_report(runner, env_fn, grid, ...) --
+        # called at the SAME cadence as the reward probe; same fire/skip
+        # semantics, no separate cadence state, so the two curves share x.
+        # None for runners without a learned world model (predict_rewards
+        # absent or None -- see fidelity.py), which is most of them.
+        self._fidelity_fn = fidelity_fn
         self._env = None
         self._next_at = 0            # first call always fires (near-init point)
         self._next_train_at = 0      # gates on train_steps instead when set
@@ -123,6 +137,17 @@ class PeriodicEvalProbe:
         if unseen:
             self._writer.add_scalar(f"{self._prefix}/return_unseen",
                                     float(np.mean(unseen)), env_steps)
+        if self._fidelity_fn is not None:
+            report = self._fidelity_fn()
+            if report is not None:
+                # Same tag names as the post-hoc fidelity.json write in
+                # scripts/train.py's run_one(), so the periodic curve and the
+                # final point land on the same TB series.
+                self._writer.add_scalar(
+                    "fidelity/reward_mae", float(report["reward_mae"]), env_steps)
+                for g, v in report["reward_mae_per_regime"].items():
+                    self._writer.add_scalar(
+                        f"fidelity/reward_mae_regime_{g}", float(v), env_steps)
         self._writer.flush()
 
     def _one_episode(self, g: int, n: int) -> float:
@@ -133,7 +158,7 @@ class PeriodicEvalProbe:
             obs = np.stack(
                 [obs_dict[f"agent_{i}"] for i in range(n)], axis=0,
             ).astype(np.float32)
-            actions = self._act_fn(obs, t)
+            actions = self._act_fn(obs, t, g)
             action_dict = {f"agent_{i}": int(actions[i]) for i in range(n)}
             obs_dict, reward, term, trunc, _ = self._env.step(action_dict)
             total += float(sum(reward.values()))

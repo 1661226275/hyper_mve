@@ -553,6 +553,57 @@ def train_sync_serial(config: BaseConfig, summary_writer, model_path=None):
                            weight_decay=config.weight_decay)
     scaler = GradScaler()
 
+    ''' fidelity-v1: periodic in-training world-model fidelity (2026-07-20) '''
+    # Same test_interval cadence as test_worker below, so the reward and
+    # fidelity curves share an x-axis. Guarded by case=="relation" rather
+    # than imported unconditionally: this file is the generic vendored
+    # fork's training loop (shared with non-relation env families upstream),
+    # and fidelity.py / RelationCommonsPettingZooEnv are hyper_mve-specific —
+    # same layering DataWorker already uses for its own relation-only
+    # reference-episode-injection feature. None (a no-op) for any other
+    # case, or if env_cfg_override wasn't set (evaluate()-only construction
+    # paths, e.g. _lazy_model()).
+    run_fidelity_probe = None
+    if getattr(config, "case", None) == "relation":
+        env_cfg = getattr(config, "env_cfg_override", None)
+        if env_cfg is not None:
+            from hyper_mve.envs.adapters.pettingzoo_wrapper import (
+                RelationCommonsPettingZooEnv,
+            )
+            from hyper_mve.utils.eval.fidelity import compute_fidelity_report
+            from hyper_mve.utils.schemas import get_regime_family
+            from core.test import predict_rewards_from_model
+
+            fidelity_grid = tuple(range(get_regime_family(env_cfg).size))
+
+            def _fidelity_env_fn():
+                return RelationCommonsPettingZooEnv(
+                    env_cfg, oracle_mode=False, eval_info_mode=False)
+
+            class _ModelPredictRewards:
+                """Duck-types compute_fidelity_report's runner arg (just
+                needs .predict_rewards) around the LIVE model -- a plain
+                function wouldn't satisfy that contract."""
+
+                def predict_rewards(self, episode):
+                    return predict_rewards_from_model(
+                        model, episode, next(model.parameters()).device)
+
+            _fidelity_hook = _ModelPredictRewards()
+
+            def run_fidelity_probe():
+                report = compute_fidelity_report(
+                    _fidelity_hook, _fidelity_env_fn, fidelity_grid,
+                    episodes=2, seed=1234)
+                if report is not None:
+                    summary_writer.add_scalar(
+                        "fidelity/reward_mae", float(report["reward_mae"]),
+                        step_count)
+                    for g, v in report["reward_mae_per_regime"].items():
+                        summary_writer.add_scalar(
+                            f"fidelity/reward_mae_regime_{g}", float(v),
+                            step_count)
+
     ''' training loop '''
 
     transitions_collected = 0
@@ -614,6 +665,8 @@ def train_sync_serial(config: BaseConfig, summary_writer, model_path=None):
                     test_worker.update_model(step_count, model.get_weights())
                     test_log, eval_steps = test_worker.run()
                     shared_storage.add_test_logs(test_log)
+                    if run_fidelity_probe is not None:
+                        run_fidelity_probe()
                 timer.stop('eval')
 
                 train_logs['Tc_perstep'] = timer.sum('collect') / (step_count + 1)

@@ -639,27 +639,12 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         (exactly the strict-CTDE eval path), then the learned reward head
         scores the realized joint action via ``recurrent_inference``.
         Plain-MAZero ablation models (no ``belief_net``) are N/A → None.
+        Body shared with the periodic in-training fidelity probe
+        (core/train.py::train_sync_serial) via core.test.predict_rewards_from_model.
         """
-        import torch
+        _ensure_fork_on_path()
+        from core.test import predict_rewards_from_model
 
         model = self._lazy_model()
-        if not hasattr(model, "belief_net"):
-            return None
-        model.eval()
         device = self._device_of(model)
-        obs_seq = np.asarray(episode["obs"], dtype=np.float32)   # (T+1, N, D)
-        actions = np.asarray(episode["actions"], dtype=np.int64)  # (T, N)
-        T, N = actions.shape
-        preds = np.zeros((T, N), dtype=np.float64)
-        with torch.no_grad():
-            hidden = model.belief_net.init_hidden(1, N, device=device)
-            for t in range(T):
-                obs_t = torch.from_numpy(obs_seq[t]).unsqueeze(0).to(device)
-                hidden, g_hat = model.belief_net.step(obs_t, hidden)
-                model.set_belief(g_hat)
-                out = model.initial_inference(obs_t)
-                a_t = torch.from_numpy(actions[t]).reshape(1, N).to(device)
-                out2 = model.recurrent_inference(
-                    torch.as_tensor(out.hidden_state).to(device), a_t)
-                preds[t] = np.asarray(out2.reward).reshape(N)
-        return preds
+        return predict_rewards_from_model(model, episode, device)

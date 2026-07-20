@@ -22,6 +22,16 @@ Permitted local edits (kept minimal, re-listed here when made):
   `harl/envs/__init__.py` (logger registry entry),
   `harl/configs/envs_cfgs/relation.yaml` (new file),
   `harl/utils/configs_tools.py` (`get_task_name` relation branch). *(phase 4 — DONE)*
+  **Periodic eval/fidelity probe** *(2026-07-20)*: `harl/envs/relation/relation_logger.py`'s
+  `episode_log` (already HARL's own periodic training callback) now also
+  looks up `hyper_mve.comparison.happo.get_active_probe()` — a
+  `PeriodicEvalProbe` constructed in `happo.py::train()` (which owns
+  `self._runner.actor`, unlike this logger) and exposed through the SAME
+  side-channel pattern already used for `env_cfg`/`unified_logger` — and
+  calls `probe.maybe_run(...)` at HARL's own cadence. Looked up fresh on
+  every call rather than cached in `__init__`, since `__init__` runs while
+  `_build_runner()` is still constructing `self._runner`, before
+  `train()` has set `_ACTIVE["probe"]`.
 - `MBOM/`: `utils/rl_utils.py` — `"MBAM"` type-name check → accepts `MBOM`;
   coin-game-specific `info` keys guarded. `policy/MBOM.py` — `om_phis`
   construction: `np.array()` over ragged parameter-tensor lists relied on

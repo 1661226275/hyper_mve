@@ -367,6 +367,35 @@ class MBOMRunner(ExternalBaselineRunner):
         )
         env = _DuoEnvFacade(env_fn())
 
+        probe = None
+        if log_root or unified_logger is not None:
+            from hyper_mve.comparison._probe import PeriodicEvalProbe
+
+            probe_writer = unified_logger
+            if probe_writer is None:
+                from torch.utils.tensorboard import SummaryWriter
+
+                probe_writer = SummaryWriter(log_root)
+
+            def _probe_act(obs: np.ndarray, t: int, g: int) -> np.ndarray:
+                # Mirrors evaluate(): NO no_grad -- MBOM's opponent-model
+                # imagined-rollout fine-tuning inside choose_action is part of
+                # its acting path at eval time too (disclosed above), so the
+                # periodic probe follows the same protocol as the final eval.
+                del t, g
+                acts = np.zeros(2, dtype=np.int64)
+                for i in range(2):
+                    action_info = agents[i].choose_action(
+                        obs[i], greedy=True, hidden_state=None,
+                        oppo_hidden_prob=None)
+                    acts[i] = int(np.asarray(action_info[0]).reshape(-1)[0])
+                return acts
+
+            probe = PeriodicEvalProbe(
+                env_fn, cfg, probe_writer, act_fn=_probe_act,
+                every_train_steps=500, episodes_per_regime=8,
+            )
+
         # Single-process equivalent of upstream trainer.worker() at ranks=1
         # (same construction, same collection, same learn cadence — the mp
         # queue plumbing is the only thing dropped).
@@ -390,6 +419,10 @@ class MBOMRunner(ExternalBaselineRunner):
                 unified_logger.log_scalar(
                     "train/score_mbom_agent1", float(scores[1]),
                     env_step=int(global_step))
+            if probe is not None:
+                probe.maybe_run(int(global_step), train_steps=epoch)
+        if probe is not None:
+            probe.close()
         self._agents = agents
 
     # ------------------------------------------------------------ evaluate
