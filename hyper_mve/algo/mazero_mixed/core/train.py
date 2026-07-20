@@ -22,6 +22,23 @@ from core.reanalyze_worker import ReanalyzeWorker, RemoteReanalyzeWorker
 from core.utils import Timer, remote_worker_handles
 
 
+def reward_nonzero_weight(target_reward_step: torch.Tensor, upweight: float, eps: float) -> torch.Tensor:
+    """2026-07-20 harvest-collapse fix: per-sample reward-loss weight that
+    upweights transitions carrying nonzero raw team reward (see
+    ``--reward_nonzero_upweight`` / ``--reward_nonzero_eps`` in config.py).
+
+    ``target_reward_step`` is ``(batch, num_agents)`` raw (pre-transform)
+    reward for one unroll step. A transition counts as nonzero if the
+    team-summed absolute reward exceeds ``eps`` — this also catches the
+    negative per-step movement cost, not just positive harvest payoff.
+    Returns ``(batch,)``; all-ones when ``upweight <= 0`` (off).
+    """
+    if upweight <= 0:
+        return torch.ones(target_reward_step.shape[0], device=target_reward_step.device)
+    nz = (target_reward_step.abs().sum(dim=-1) > eps).float()
+    return 1.0 + upweight * nz
+
+
 def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: tuple, optimizer: optim.Optimizer, scaler: GradScaler, device):
     """update models given a batch data
     Parameters
@@ -210,7 +227,18 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
                 else:
                     raise NotImplementedError
 
-            reward_loss += config.reward_loss(network_output.reward, target_reward_phi[:, step_i - 1])          # don't mask reward loss
+            # 2026-07-20 harvest-collapse fix: zero-inflation counter. Under a
+            # camping-heavy behaviour policy the overwhelming majority of
+            # transitions carry ~0 team reward, so an unweighted reward loss
+            # gives the encoder almost no gradient toward what "harvesting/
+            # moving pays" looks like (confirmed by fresh_head_probe.py: the
+            # frozen latent could not decode the on-resource-cell affordance
+            # that raw obs decodes at 0.93 balanced accuracy). Upweight the
+            # per-transition reward loss on the raw (pre-transform) reward so
+            # informative steps count more than idle no-payoff steps.
+            step_reward_weight = reward_nonzero_weight(
+                target_reward[:, step_i - 1], config.reward_nonzero_upweight, config.reward_nonzero_eps)
+            reward_loss += step_reward_weight * config.reward_loss(network_output.reward, target_reward_phi[:, step_i - 1])          # don't mask reward loss
             value_loss += config.value_loss(network_output.value, target_value_phi[:, step_i])                  # don't mask value loss
             if config.consistency_coeff > 0:
                 # obtain the oracle hidden states from representation function

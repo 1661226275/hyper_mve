@@ -1,0 +1,22 @@
+# Ablation study — GPU 5, part 2: the third ARCHITECTURAL arm.
+#   no_subjective  plain MAZero — no belief / hypernet / subjective heads (the
+#                  whole subjective pathway; cooperative-sanity arm).
+#                  VERIFIED: no belief_net -> predict_rewards() returns None,
+#                  so fidelity.json is intentionally NOT written.
+#
+# Split out of ablation_gpu5.yaml on 2026-07-20 to run CONCURRENTLY with it on
+# the same card (two programs per GPU confirmed to coexist without a
+# meaningful slowdown).
+#
+# seed 0 only for now (quick full pass across every algo/arm/env first);
+# seeds 1-2 are backfilled as a follow-up, not dropped.
+algos:
+  - mazero_mixed
+ablations:
+  - no_subjective
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 200000
+episodes: 16
+num_pmcts: 1

@@ -1,29 +1,27 @@
-# Ablation study — GPU 5 half: the three ARCHITECTURAL arms.
-# Each removes a distinct structural component of the method.
+# Ablation study — GPU 5, part 1: two of the three ARCHITECTURAL arms.
 #   point_estimate_leaf  single posterior-blended head instead of the Bayes
 #                        average over the regime family (leaf evaluation)
 #   joint_selection      joint team-UCB child selection instead of the
 #                        vectorized decoupled per-agent selection (search rule)
-#   no_subjective        plain MAZero — no belief / hypernet / subjective heads
-#                        (the whole subjective pathway; cooperative-sanity arm).
-#                        VERIFIED: no belief_net -> predict_rewards() returns
-#                        None, so fidelity.json is intentionally NOT written.
+# (no_subjective is the third architectural arm — split into ablation_gpu5b.yaml
+# on 2026-07-20 to run CONCURRENTLY with this half on the same card; two
+# programs per GPU confirmed to coexist without a meaningful slowdown.)
 #
 # The conditioning-mechanism arms (moe_router / film) run on GPU 6 — they are a
 # matched pairwise comparison and are kept on one card so they share hardware
 # conditions. The unablated reference is the mazero_mixed row in
 # compare_gpu3.yaml; do not duplicate it here.
 #
-# 3 arms x 1 env x 3 seeds = 9 runs at ~6 h ~= 2.3 days.
+# seed 0 only for now (quick full pass across every algo/arm/env first);
+# seeds 1-2 are backfilled as a follow-up, not dropped.
 algos:
   - mazero_mixed
 ablations:
   - point_estimate_leaf
   - joint_selection
-  - no_subjective
 envs:
   - relation
-seeds: [0, 1, 2]
+seeds: [0]
 total_env_steps: 200000
 episodes: 16
 num_pmcts: 1

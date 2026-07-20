@@ -119,9 +119,30 @@ class ObjectiveDynamics(nn.Module):
             nn.ReLU(),
             AttentionEncoder(3, hidden_state_size, hidden_state_size, dropout=0.1),
         )
+        # use_value_out=True strips the trailing ReLU + LayerNorm that mlp()
+        # otherwise appends after EVERY layer, including the output.
+        #
+        # Without it this branch is the only head in the model whose output is
+        # forced non-negative and then renormalized — fc_reward, fc_value and
+        # fc_policy all pass use_value_out=True. A residual transition has to
+        # emit SIGNED deltas, and measured on two independently trained
+        # checkpoints (2026-07-19) that output ReLU had died to 1/128 live
+        # units, versus 64/128 at initialization. The branch then emitted a
+        # near-constant, so `state + hidden_state` became a frozen-world
+        # identity map: ‖h'(a) − h'(NOOP)‖ ≈ 2e-7 for every action, at any
+        # action amplitude and any state scale. MCTS saw identical values on
+        # every branch, only the reward head could rank actions, and the policy
+        # distilled to 100% HARVEST. Dead ReLUs get no gradient, so this is an
+        # absorbing state that neither budget nor exploration can escape.
+        #
+        # Disclosed vendor deviation: upstream MAZero has the same latent
+        # issue (vendor/MAZero/config/{smac,matrix}/model.py build fc_dynamic
+        # without use_value_out). Zero-init of the final Linear that comes with
+        # this flag is standard residual practice — it starts the transition at
+        # identity, but with a live gradient path, unlike a dead ReLU.
         self.fc_dynamic = mlp(
             hidden_state_size + action_space_size + hidden_state_size,
-            fc_dynamic_layers, hidden_state_size,
+            fc_dynamic_layers, hidden_state_size, use_value_out=True,
         )
 
     def forward(self, hidden_state, action):
@@ -293,6 +314,15 @@ class HyperMAMuZeroNet(BaseNet):
         # per-regime Python loop this replaces was ~38% of search step time
         v_g = self.value_head.forward_multi(
             gs, torch.stack(self._theta_val_G, dim=0))           # (B*N, 1, |G|)
+        # _belief_probs was built at the ROOT batch size by _build_context. This
+        # reshape is only valid because the search expands exactly one leaf per
+        # tree per simulation, so every recurrent_inference batch matches the
+        # root batch. Silent corruption if that ever changes.
+        assert self._belief_probs.shape[0] == B, (
+            f"belief batch {self._belief_probs.shape[0]} != hidden-state batch {B}; "
+            "set_belief/initial_inference must run at the same batch size as the "
+            "search that follows"
+        )
         b = self._belief_probs.reshape(B * self.num_agents, 1, self.n_regimes)
         v = (v_g * b).sum(-1)                                    # (B*N, 1)
         return v.reshape(B, self.num_agents, 1)

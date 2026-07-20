@@ -17,11 +17,16 @@ _BASE_ARGV = [
 ]
 
 
-def test_arm_set_is_the_locked_five():
-    assert set(ARMS) == {
+def test_arm_set_is_the_locked_five_plus_diagnostics():
+    # The five thesis arms are user-locked (phase 7). ``oracle_belief`` is a
+    # DIAGNOSTIC control (2026-07-20 harvest-collapse triage), not a thesis
+    # ablation — it must never appear in the formal grid manifest.
+    locked = {
         "point_estimate_leaf", "joint_selection", "no_subjective",
         "moe_router", "film",
     }
+    assert locked <= set(ARMS)
+    assert set(ARMS) - locked == {"oracle_belief"}
 
 
 def test_unknown_arm_rejected():

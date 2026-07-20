@@ -10,13 +10,15 @@
 # which is ~17% FASTER per run than CUDA. Export MBOM_DEVICE=cuda before this
 # grid only if CPU contention with the other two cards is the binding
 # constraint (the CUDA path is now supported — see vendor/VENDOR.md).
+# seed 0 only for now (quick full pass across every algo/arm/env first);
+# seeds 1-2 are backfilled as a follow-up, not dropped.
 algos:
   - mbom
   - mbom_oracle
 envs:
   - relation
   - relation_holdout
-seeds: [0, 1, 2]
+seeds: [0]
 total_env_steps: 200000
 episodes: 16
 num_pmcts: 1

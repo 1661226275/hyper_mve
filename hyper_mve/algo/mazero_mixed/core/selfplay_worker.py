@@ -32,6 +32,19 @@ def oracle_blend_weight(config, trained_steps: int) -> float:
     return 0.0
 
 
+def reference_episode_prob(config, trained_steps: int) -> float:
+    """2026-07-20 harvest-collapse fix: linear-decay probability that a fresh
+    self-play episode is driven by the scripted-greedy reference policy
+    (start -> end over anneal_steps, then held at end). 0 unless configured."""
+    p0 = getattr(config, "reference_episode_prob_start", 0.0)
+    p1 = getattr(config, "reference_episode_prob_end", 0.0)
+    steps = getattr(config, "reference_episode_anneal_steps", 0)
+    if steps <= 0:
+        return p0
+    frac = min(1.0, trained_steps / float(steps))
+    return p0 + (p1 - p0) * frac
+
+
 class DataWorker(object):
     def __init__(self, rank, config: BaseConfig, replay_buffer: ReplayBuffer, shared_storage: SharedStorage):
         """Data Worker for collecting data through self-play
@@ -54,6 +67,27 @@ class DataWorker(object):
         self.device = 'cuda' if (config.selfplay_on_gpu and torch.cuda.is_available()) else 'cpu'
         self.gap_step = self.config.num_unroll_steps + self.config.td_steps
         self.max_visit_entropy = get_max_entropy(self.config.action_space_size)
+
+        # 2026-07-20 harvest-collapse fix: optional scripted-greedy reference
+        # policy for the reference-episode-injection mechanism (see
+        # reference_episode_prob docstring above). Built before init_envs()
+        # (which reads it to draw the initial per-env flags); None (and
+        # therefore always inert) unless both the case is "relation" and the
+        # probability schedule is actually turned on.
+        self._ref_policy = None
+        if (getattr(self.config, "case", None) == "relation"
+                and (getattr(self.config, "reference_episode_prob_start", 0.0) > 0.0
+                     or getattr(self.config, "reference_episode_prob_end", 0.0) > 0.0)):
+            from hyper_mve.envs.relation_commons.reference_policies import (
+                make_scripted_greedy_policy,
+            )
+
+            env_cfg = self.config._make_env_cfg()
+            if getattr(env_cfg, "env_kind", "relation") == "relation":
+                self._ref_policy = make_scripted_greedy_policy(
+                    int(self.config.num_agents), int(env_cfg.K),
+                    distinct_targets=True,
+                )
 
         # create env & logs
         self.init_envs()
@@ -115,6 +149,12 @@ class DataWorker(object):
 
         self.dones = np.zeros(num_envs, dtype=np.bool_)
 
+        # per-env reference-episode flags (drawn fresh at every reset)
+        self.reference_flags = np.zeros(num_envs, dtype=np.bool_)
+        if self._ref_policy is not None:
+            p0 = reference_episode_prob(self.config, 0)
+            self.reference_flags = self.np_random.random(num_envs) < p0
+
     def put(self, data: Tuple[GameHistory, List[float]]):
         # put a game history into the pool
         self.trajectory_pool.append(data)
@@ -151,13 +191,16 @@ class DataWorker(object):
 
         self._log_to_buffer(log_dict)
 
-    def reset_env(self, env_id):
+    def reset_env(self, env_id, trained_steps: int = 0):
         self.eps_steps_lst[env_id] = 0
         self.eps_reward_lst[env_id] = 0
         self.visit_entropies_lst[env_id] = 0
         self.model_index_lst[env_id] = 0
         if self.config.case in ['smac', 'gfootball']:
             self.battle_won_lst[env_id] = 0
+        if self._ref_policy is not None:
+            p = reference_episode_prob(self.config, trained_steps)
+            self.reference_flags[env_id] = bool(self.np_random.random() < p)
         # new trajectory
         init_obs = self.envs[env_id].reset()
         self.stack_obs_windows[env_id] = [init_obs for _ in range(self.config.stacked_observations)]
@@ -258,6 +301,24 @@ class DataWorker(object):
                     action = sampled_actions[action_pos]
                     action = eps_greedy_action(action, legal_actions_lst[i], greedy_epsilon)
 
+                    if self._ref_policy is not None and self.reference_flags[i]:
+                        # 2026-07-20 harvest-collapse fix: override the
+                        # EXECUTED action with the scripted-greedy reference
+                        # policy on the current raw obs. MCTS search already
+                        # ran above on this exact state, so root_value/
+                        # sampled_actions/sampled_policy stored below are
+                        # real search targets for the states the reference
+                        # trajectory visits (walk-to-resource, harvest) —
+                        # this guarantees informative, non-camping,
+                        # non-zero-reward transitions reach replay without
+                        # fabricating any search statistics.
+                        cur_frame = self.stack_obs_windows[i][-1]  # (N, obs_size, 1, 1)
+                        action = np.asarray(
+                            [self._ref_policy(cur_frame[a, :, 0, 0], a)
+                             for a in range(self.config.num_agents)],
+                            dtype=np.int64,
+                        )
+
                     next_obs, reward, done, info = self.envs[i].step(action)
                     self.dones[i] = done
 
@@ -298,10 +359,10 @@ class DataWorker(object):
                         transitions_collected += len(self.game_histories[i])
                         self.log(i, temperature=temperature)
                         self.log(i, greedy_epsilon=greedy_epsilon)
-                        self.reset_env(i)
+                        self.reset_env(i, trained_steps=trained_steps)
                     elif len(self.game_histories[i]) > self.config.max_moves:
                         # discard this trajectory
-                        self.reset_env(i)
+                        self.reset_env(i, trained_steps=trained_steps)
 
         return transitions_collected
 

@@ -1,9 +1,12 @@
 # Comparative experiments — GPU 4, part 1: the four env-portable baselines
-# across all three envs. 4 algos x 3 envs x 3 seeds = 36 runs, all far cheaper
-# than a mazero_mixed row (no MCTS).
+# across all three envs, all far cheaper than a mazero_mixed row (no MCTS).
 #
 # VERIFIED: all four run on mpe_tag (N=4) at tiny budget.
-# mbom / mbom_oracle are NOT here — they are duo-only; see compare_gpu4_duo.yaml.
+# mbom / mbom_oracle are NOT here — they are duo-only; see compare_gpu4_duo.yaml
+# (already a second, concurrent session on this same card).
+#
+# seed 0 only for now (quick full pass across every algo/arm/env first);
+# seeds 1-2 are backfilled as a follow-up, not dropped.
 algos:
   - mappo
   - mamba
@@ -13,7 +16,7 @@ envs:
   - relation
   - relation_holdout
   - mpe_tag
-seeds: [0, 1, 2]
+seeds: [0]
 total_env_steps: 200000
 episodes: 16
 num_pmcts: 1

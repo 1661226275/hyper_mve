@@ -122,8 +122,12 @@ class DynamicsNetwork(nn.Module):
             AttentionEncoder(3, hidden_state_size, hidden_state_size, dropout=0.1)
         )
 
+        # use_value_out: the residual at `state += pre_state` needs a signed
+        # delta; without it the trailing ReLU+LayerNorm dies to a constant and
+        # the transition becomes action-blind (same vendor deviation fixed in
+        # subjective_model.ObjectiveDynamics).
         self.fc_dynamic = mlp(hidden_state_size + action_space_size + hidden_state_size,
-                              fc_dynamic_layers, hidden_state_size)
+                              fc_dynamic_layers, hidden_state_size, use_value_out=True)
         # per-agent subjective reward heads over the centralized (global) input:
         # one shared trunk emitting num_agents × support outputs (A2 migration).
         self.fc_reward = mlp(num_agents * (hidden_state_size + action_space_size),

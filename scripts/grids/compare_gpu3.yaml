@@ -1,17 +1,24 @@
-# Comparative experiments — GPU 3: THE METHOD, all three envs.
+# Comparative experiments — GPU 3, part 1: THE METHOD, relation family.
 #
 # mazero_mixed is by far the most expensive runner (MCTS: ~6 h per 200k-step
-# run at num_pmcts=1), so it gets a card to itself. 3 envs x 3 seeds = 9 runs.
+# run at num_pmcts=1), so it gets cards to itself. 2026-07-20: split across two
+# CONCURRENT sessions on the same GPU (confirmed two programs coexist on one
+# card without a meaningful slowdown) — this half is the two same-family,
+# similarly-priced relation envs; mpe_tag (N=4, pricier joint action space) is
+# isolated alone in compare_gpu3b.yaml so neither half is bottlenecked by the
+# other's slower row.
 #
-# Rows run SEQUENTIALLY, one subprocess each. Results land in
+# Rows run SEQUENTIALLY within a session, one subprocess each. Results land in
 # results/<algo>/<env>/seed<k>/ and append to results/registry.jsonl.
+#
+# seed 0 only for now (quick full pass across every algo/arm/env first);
+# seeds 1-2 are backfilled as a follow-up, not dropped.
 algos:
   - mazero_mixed
 envs:
   - relation
   - relation_holdout
-  - mpe_tag
-seeds: [0, 1, 2]
+seeds: [0]
 total_env_steps: 200000
 episodes: 16
 

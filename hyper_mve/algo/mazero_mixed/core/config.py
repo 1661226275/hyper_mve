@@ -118,6 +118,17 @@ def parse_args(args):
     groups.add_argument("--adv_clip", type=float, default=3.0,
                         help="clip parameter in advantage (default: %(default)s)")
     groups.add_argument("--PG_type", type=str, default="none", choices=["none", "sharp", "raw"], help="type of PG loss")
+    groups.add_argument("--reward_nonzero_upweight", type=float, default=0.0,
+                        help="Extra additive weight on the per-transition reward loss when "
+                             "the raw team reward magnitude exceeds --reward_nonzero_eps "
+                             "(default: %(default)s = off). Counters zero-inflation: under a "
+                             "camping-heavy behaviour policy most transitions carry ~0 reward, "
+                             "so the reward/encoder gradient is dominated by uninformative "
+                             "no-payoff steps. Total weight on a nonzero-reward step is "
+                             "(1 + this).")
+    groups.add_argument("--reward_nonzero_eps", type=float, default=1e-6,
+                        help="Magnitude threshold above which a transition's raw team reward "
+                             "counts as 'nonzero' for --reward_nonzero_upweight.")
 
     groups = parser.add_argument_group("Optimizer parameters")
     groups.add_argument("--lr", type=float, default=5e-4,
@@ -184,6 +195,23 @@ def parse_args(args):
                         help="Weight of the BeliefNet supervision loss (CE + diversity hinge).")
     groups.add_argument("--belief_grad_gating_steps", type=int, default=5000,
                         help="Steps for which the main loss is cut off from the belief pathway.")
+    groups.add_argument("--reference_episode_prob_start", type=float, default=0.0,
+                        help="2026-07-20 harvest-collapse fix: probability that a fresh "
+                             "self-play episode is driven by the scripted-greedy reference "
+                             "policy (envs/relation_commons/reference_policies.py) instead of "
+                             "the MCTS-selected action, at training step 0. MCTS search still "
+                             "runs every step on the real env state visited under the scripted "
+                             "policy, so priors/values/priorities are trained normally — only "
+                             "the executed action is overridden. Breaks the "
+                             "encoder-stagnation -> policy-collapse -> data-starvation loop by "
+                             "guaranteeing walk-then-harvest transitions reach replay. "
+                             "0 = off (default; case=='relation' only, no-op otherwise).")
+    groups.add_argument("--reference_episode_prob_end", type=float, default=0.0,
+                        help="Floor value of the reference-episode probability after "
+                             "--reference_episode_anneal_steps training steps.")
+    groups.add_argument("--reference_episode_anneal_steps", type=int, default=0,
+                        help="Training steps over which the reference-episode probability "
+                             "linearly decays from _start to _end (0 = stay at _start).")
 
     groups = parser.add_argument_group("Save & Log parameters")
     groups.add_argument("--save_interval", type=int, default=10000,
@@ -293,6 +321,8 @@ class BaseConfig(ABC):
         self.awac_lambda = args.awac_lambda
         self.adv_clip = args.adv_clip
         self.PG_type = args.PG_type
+        self.reward_nonzero_upweight = args.reward_nonzero_upweight
+        self.reward_nonzero_eps = args.reward_nonzero_eps
 
         # optimization control
         self.lr = args.lr   # type: float
@@ -354,6 +384,9 @@ class BaseConfig(ABC):
         self.belief_anneal_steps = args.belief_anneal_steps
         self.belief_loss_coeff = args.belief_loss_coeff
         self.belief_grad_gating_steps = args.belief_grad_gating_steps
+        self.reference_episode_prob_start = args.reference_episode_prob_start
+        self.reference_episode_prob_end = args.reference_episode_prob_end
+        self.reference_episode_anneal_steps = args.reference_episode_anneal_steps
 
         # save & log
         self.save_interval = args.save_interval

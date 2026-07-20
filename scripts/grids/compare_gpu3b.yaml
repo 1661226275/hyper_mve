@@ -1,0 +1,18 @@
+# Comparative experiments — GPU 3, part 2: THE METHOD, mpe_tag alone.
+#
+# Split out of compare_gpu3.yaml on 2026-07-20 to run CONCURRENTLY with it on
+# the same card (two programs per GPU confirmed to coexist without a
+# meaningful slowdown) — mpe_tag (N=4 agents, pricier joint action space for
+# MCTS) is isolated here so it doesn't become the long pole behind the two
+# cheaper relation-family envs in compare_gpu3.yaml.
+#
+# seed 0 only for now (quick full pass across every algo/arm/env first);
+# seeds 1-2 are backfilled as a follow-up, not dropped.
+algos:
+  - mazero_mixed
+envs:
+  - mpe_tag
+seeds: [0]
+total_env_steps: 200000
+episodes: 16
+num_pmcts: 1

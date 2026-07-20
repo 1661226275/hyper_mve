@@ -1,0 +1,19 @@
+# Ablation study — GPU 6, part 2: the other CONDITIONING-MECHANISM arm.
+#
+# See ablation_gpu6.yaml for the moe_router/film pairwise-comparison
+# rationale. Split out on 2026-07-20 to run CONCURRENTLY with it on the same
+# card (two programs per GPU confirmed to coexist without a meaningful
+# slowdown) — still the same card, so the "identical hardware" framing holds.
+#
+# seed 0 only for now (quick full pass across every algo/arm/env first);
+# seeds 1-2 are backfilled as a follow-up, not dropped.
+algos:
+  - mazero_mixed
+ablations:
+  - film
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 200000
+episodes: 16
+num_pmcts: 1

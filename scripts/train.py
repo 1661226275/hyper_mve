@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import pathlib
@@ -67,7 +68,7 @@ NATIVE_STEP_UNIT = {
 
 
 def _set_gpus(spec: str) -> None:
-    """Validate --gpus ⊆ {3,4,5} and export CUDA_VISIBLE_DEVICES.
+    """Validate --gpus ⊆ ALLOWED_GPUS and export CUDA_VISIBLE_DEVICES.
 
     MUST run before any torch import (torch reads the env var once).
     """
@@ -207,8 +208,38 @@ def run_one(*, algo: str, env_id: str, seed: int, total_env_steps: int,
     if grid is None:
         grid = tuple(range(get_regime_family(cfg.env).size))
     grid = tuple(int(g) for g in grid)
-    report = runner.evaluate(env_fn, grid, int(episodes))
+    # Identity for the report. Both fields used to be hardcoded inside the
+    # runner ("seed": 0, config_hash all-zeros), so every seed's report claimed
+    # seed 0 and no report could be traced back to its config.
+    config_hash = hashlib.sha1(
+        json.dumps({"algo": algo, "env": env_id, "ablation": ablation,
+                    "total_env_steps": int(total_env_steps),
+                    "lr": float(lr)}, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    # Baseline runners keep the 3-arg signature; only mazero_mixed accepts the
+    # identity kwargs. Dispatch on the signature rather than catching TypeError,
+    # which would also swallow a TypeError raised inside evaluate() itself.
+    eval_params = inspect.signature(runner.evaluate).parameters
+    eval_kwargs = {k: v for k, v in
+                   (("seed", int(seed)), ("config_hash", config_hash))
+                   if k in eval_params}
+    report = runner.evaluate(env_fn, grid, int(episodes), **eval_kwargs)
     logger.log_eval_report(report)
+
+    # Action/visit diagnostics (evaldiag-v1). Only mazero_mixed produces these;
+    # they are what makes a collapsed policy visible without reading weights.
+    diagnostics = getattr(runner, "_eval_diagnostics", None)
+    if diagnostics:
+        (run_dir / "eval_diagnostics.json").write_text(
+            json.dumps(diagnostics, indent=2), encoding="utf-8")
+        for mode in ("prior", "planner"):
+            for a, frac in enumerate(diagnostics[f"{mode}_action_fractions"]):
+                logger.log_scalar(f"eval/action_frac_{mode}_a{a}", float(frac),
+                                  train_step=logger.train_steps)
+        for key in ("planner_prior_return_gap", "prior_logit_margin",
+                    "planner_visit_entropy"):
+            logger.log_scalar(f"eval/{key}", float(diagnostics[key]),
+                              train_step=logger.train_steps)
 
     # metric ① — world-model fidelity (fidelity-v1, SEPARATE artifact from
     # the rel-v1 EvalReport). None for model-free / supplied-model runners.
@@ -249,11 +280,8 @@ def run_one(*, algo: str, env_id: str, seed: int, total_env_steps: int,
     # silently report zero runs.
     variant = f"{algo}{arm_suffix}"
     run_id = f"{variant}/{env_id}/seed{seed}"
-    config_hash = hashlib.sha1(
-        json.dumps({"algo": algo, "env": env_id, "ablation": ablation,
-                    "total_env_steps": int(total_env_steps),
-                    "lr": float(lr)}, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    # config_hash computed above, before evaluate(), so the report and the
+    # registry row carry the same value.
     row = dict(meta)
     row.update({
         "run_id": run_id,

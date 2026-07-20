@@ -21,6 +21,10 @@ Arms (user-locked set):
     DualHyperNetwork on the SAME ctx input (``--conditioning <arm>``):
     the controlled Direction-1 mechanism comparison. (Distinct from the
     ``m3w_adapted`` BASELINE, which is a different training paradigm.)
+  * ``oracle_belief``       — diagnostic control: belief pinned to the oracle
+    one-hot g for the entire training run (removes belief quality as a
+    confound; eval remains oracle-free, so ``regime_accuracy`` still
+    measures the concurrently-trained BeliefNet).
 """
 from __future__ import annotations
 
@@ -30,6 +34,7 @@ ARMS: tuple[str, ...] = (
     "no_subjective",
     "moe_router",
     "film",
+    "oracle_belief",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -39,6 +44,8 @@ _ARGV_ADD: dict[str, tuple[str, ...]] = {
     "no_subjective": (),
     "moe_router": ("--conditioning", "moe_router"),
     "film": ("--conditioning", "film"),
+    "oracle_belief": ("--belief_oracle_steps", "100000000",
+                      "--belief_anneal_steps", "0"),
 }
 _ARGV_REMOVE: dict[str, tuple[str, ...]] = {
     "point_estimate_leaf": (),
@@ -46,6 +53,7 @@ _ARGV_REMOVE: dict[str, tuple[str, ...]] = {
     "no_subjective": ("--subjective_model",),
     "moe_router": (),
     "film": (),
+    "oracle_belief": (),
 }
 
 
