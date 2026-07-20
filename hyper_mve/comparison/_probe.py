@@ -19,7 +19,13 @@ Contract:
     ``eval/return_unseen``.
 
 The first ``maybe_run`` call always fires (near-init anchor point for log-x
-curves); afterwards the cadence aligns to ``every_env_steps`` multiples.
+curves); afterwards the cadence aligns to ``every_env_steps`` multiples, or to
+``every_train_steps`` multiples of the caller-supplied ``train_steps`` count
+when that is set (2026-07-20: the env-steps-per-train-step ratio is not fixed
+for on-policy callers like MAPPO/MAMBA -- it tracks episode length, which
+varies -- so a fixed env-step cadence drifts away from an even train-step
+spacing over a run; passing ``train_steps`` keeps evals evenly spaced on the
+axis TensorBoard curves are actually compared on).
 
 ``act_fn(obs, t)`` maps a stacked ``(N, obs_dim)`` float32 observation and the
 in-episode step index ``t`` (``t == 0`` ⇒ new episode; recurrent runners reset
@@ -44,6 +50,7 @@ class PeriodicEvalProbe:
         writer,                      # torch.utils.tensorboard.SummaryWriter | None
         act_fn: Callable[[np.ndarray, int], np.ndarray],
         every_env_steps: int = 10_000,
+        every_train_steps: Optional[int] = None,
         episodes_per_regime: int = 2,
         tag_prefix: str = "eval",
     ) -> None:
@@ -52,10 +59,12 @@ class PeriodicEvalProbe:
         self._writer = writer
         self._act_fn = act_fn
         self._every = int(every_env_steps)
+        self._every_train = int(every_train_steps) if every_train_steps else None
         self._episodes = int(episodes_per_regime)
         self._prefix = tag_prefix
         self._env = None
         self._next_at = 0            # first call always fires (near-init point)
+        self._next_train_at = 0      # gates on train_steps instead when set
 
         if cfg.eval.eval_regime_grid is not None:
             self._grid = tuple(int(g) for g in cfg.eval.eval_regime_grid)
@@ -69,10 +78,20 @@ class PeriodicEvalProbe:
 
     # ------------------------------------------------------------------ api
 
-    def maybe_run(self, env_steps: int) -> None:
-        if self._writer is None or env_steps < self._next_at:
+    def maybe_run(self, env_steps: int, train_steps: Optional[int] = None) -> None:
+        if self._writer is None:
             return
-        self._next_at = max(self._every, (env_steps // self._every + 1) * self._every)
+        if self._every_train is not None and train_steps is not None:
+            if train_steps < self._next_train_at:
+                return
+            self._next_train_at = max(
+                self._every_train,
+                (train_steps // self._every_train + 1) * self._every_train,
+            )
+        else:
+            if env_steps < self._next_at:
+                return
+            self._next_at = max(self._every, (env_steps // self._every + 1) * self._every)
         self._run(int(env_steps))
 
     def close(self) -> None:

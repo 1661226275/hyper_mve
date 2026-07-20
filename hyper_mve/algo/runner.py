@@ -139,12 +139,21 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             # test() fired exactly once — on the untrained net — so a 7-hour run
             # produced a single eval point (test/mean_score, value 0.0) and the
             # policy collapse was invisible until the run ended. With
-            # --use_mcts_test the curve tracks the ACTING policy; ~6 s per eval
-            # x 25 evals is <0.1% of a 200k-step run.
+            # --use_mcts_test the curve tracks the ACTING policy.
+            # 2026-07-20: pinned to a fixed 500 train steps (was
+            # `training_steps // 25`, a value that only happened to equal 500
+            # at this grid's specific total_env_steps budget and would drift
+            # for any other budget) to match the fixed cadence now used by the
+            # external runners' PeriodicEvalProbe (mappo.py/mamba.py,
+            # every_train_steps=500) -- same 500-train-step spacing and same
+            # 8-episode averaging (test_episodes) across every algo that has a
+            # periodic curve at all. ~6 s per eval x 25 evals at this cadence
+            # over a 200k-env-step/12.5k-train-step row is <0.1% of the run.
             # Caveat: test() averages over agents and does not pin the regime,
             # so test/mean_score is a trend line, not comparable to
-            # eval/return_mean (which sums over agents, per pinned regime).
-            "--test_interval", str(max(200, training_steps // 25)),
+            # eval/return_mean (which sums over agents, per pinned regime) --
+            # unlike the external runners' probe, which IS eval/return_mean.
+            "--test_interval", "500",
             "--test_episodes", "8", "--use_mcts_test",
             "--target_model_interval", "50",
             "--batch_size", "64", "--num_simulations", "25",

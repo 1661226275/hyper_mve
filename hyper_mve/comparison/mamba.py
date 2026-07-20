@@ -286,7 +286,10 @@ class _RealMAMBA(ExternalBaselineRunner):
                 from torch.utils.tensorboard import SummaryWriter
 
                 self._tb = SummaryWriter(tensorboard_dir)
-            probe = PeriodicEvalProbe(env_fn, cfg, self._tb, act_fn=self._probe_act)
+            probe = PeriodicEvalProbe(
+                env_fn, cfg, self._tb, act_fn=self._probe_act,
+                every_train_steps=500, episodes_per_regime=8,
+            )
 
         # Periodic model checkpoints (env-step cadence) into the run dir, so a
         # long run that will not finish by a deadline can still be evaluated at
@@ -299,16 +302,18 @@ class _RealMAMBA(ExternalBaselineRunner):
             next_ckpt = int(checkpoint_every_env_steps)
 
         self._env_steps = 0
+        n_train_steps = 0  # one learner update round per collected episode
         while self._env_steps < budget:
             steps = self._run_one_episode(env, deterministic=False, collect=True)
             self._env_steps += steps
+            n_train_steps += 1
             if unified_logger is not None:
                 # one learner update round per collected episode (the vendored
                 # DreamerLearner cadence) — proxy for the train_steps axis
                 unified_logger.set_progress(env_steps=self._env_steps)
                 unified_logger.advance(train_steps=1)
             if probe is not None:
-                probe.maybe_run(self._env_steps)
+                probe.maybe_run(self._env_steps, train_steps=n_train_steps)
             if ckpt_dir is not None and self._env_steps >= next_ckpt:
                 self.save_checkpoint(ckpt_dir / f"step_{self._env_steps}.pt")
                 next_ckpt += int(checkpoint_every_env_steps)

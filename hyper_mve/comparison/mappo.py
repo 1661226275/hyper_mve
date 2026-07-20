@@ -240,9 +240,13 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
                 a_n, _ = self._agent.choose_action(obs, evaluate=True)
                 return np.asarray(a_n)
 
-            probe = PeriodicEvalProbe(env_fn, cfg, tb_writer, act_fn=_probe_act)
+            probe = PeriodicEvalProbe(
+                env_fn, cfg, tb_writer, act_fn=_probe_act,
+                every_train_steps=500, episodes_per_regime=8,
+            )
 
         total_steps = 0
+        n_train_steps = 0  # PPO update rounds; tracked regardless of unified_logger
         while total_steps < budget:
             episode_steps = self._run_one_episode(
                 env=env,
@@ -256,6 +260,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
             if replay_buffer.episode_num == args.batch_size:
                 self._agent.train(replay_buffer, total_steps)
                 replay_buffer.reset_buffer()
+                n_train_steps += 1
                 if unified_logger is not None:
                     # one PPO update round; keeps the canonical train_steps
                     # axis honest for env-step-native emissions
@@ -263,7 +268,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
                     unified_logger.advance(train_steps=1)
 
             if probe is not None:
-                probe.maybe_run(total_steps)
+                probe.maybe_run(total_steps, train_steps=n_train_steps)
 
         env.close()
         if probe is not None:
