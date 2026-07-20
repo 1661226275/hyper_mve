@@ -82,9 +82,21 @@ namespace tools
 
     void CMinMaxStats::remove(float old_val)
     {
+        // `old_val` is recomputed (qsa - father->pred_value_mean()) rather
+        // than stored at insert time, and father's value can drift between
+        // this node's insert and this remove whenever a SIBLING subtree is
+        // visited in between (any simulation through a shared ancestor
+        // updates that ancestor's estimate) -- more agents means more
+        // branching means more exposure, but it is not tied to a specific
+        // env. `se` is a soft min/max normalization envelope (see
+        // normalize()), not exact bookkeeping: silently leaving a stale
+        // entry in place when the recomputed value no longer matches
+        // anything is harmless (worst case a slightly wider bound lingers
+        // one extra step). Previously this threw and took down the whole
+        // training row (SIGABRT, all its data lost) on every such drift.
         auto it = se.find(old_val);
-        my_assert(it != se.end(), "CMinMaxStats::remove: value not found");
-        se.erase(it);
+        if (it != se.end())
+            se.erase(it);
     }
 
     void CMinMaxStats::insert(float new_val)
