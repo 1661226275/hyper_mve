@@ -8,12 +8,12 @@ cdef class Tree_batch:
     cdef CTree_batch *trees
     cdef int root_num, agent_num, action_space_size
 
-    def __cinit__(self, int root_num, int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, unsigned int random_seed, float rho, float lam, int select_mode=0):
+    def __cinit__(self, int root_num, int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, unsigned int random_seed, float rho, float lam, int select_mode=0, int root_cover_mode=0):
         self.root_num = root_num
         self.agent_num = agent_num
         self.action_space_size = action_space_size
 
-        self.trees = new CTree_batch(root_num, agent_num, action_space_size, sampled_times, simulation_num, tree_value_stat_delta_lb, random_seed, rho, lam, select_mode)
+        self.trees = new CTree_batch(root_num, agent_num, action_space_size, sampled_times, simulation_num, tree_value_stat_delta_lb, random_seed, rho, lam, select_mode, root_cover_mode)
 
     def __dealloc__(self):
         del self.trees

@@ -5,6 +5,8 @@
 
 #include <vector>
 #include <random>
+#include <set>
+#include <algorithm>
 
 namespace tree
 {
@@ -80,6 +82,7 @@ namespace tree
     public:
         int agent_num, action_space_size, sampled_times, tot_nodes;
         int select_mode; // 0 = joint (original team-UCB over sampled children), 1 = decoupled per-agent UCB
+        int root_cover_mode; // 0 = sample root children from beta (upstream), 1 = deterministic "star" cover
         float rho, lam;
         CNode *node_pool_ptr;
         CNode *root;
@@ -87,7 +90,7 @@ namespace tree
         std::vector<tools::CMinMaxStats> minmax_agent;    // per-agent q normalization — decoupled mode
         SearchResult result;
 
-        CTree(int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, CNode *node_pool_ptr, unsigned int random_seed, float rho, float lam, int select_mode);
+        CTree(int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, CNode *node_pool_ptr, unsigned int random_seed, float rho, float lam, int select_mode, int root_cover_mode);
         ~CTree();
 
         // reward_vec / value_vec: shape = (agent_num,)
@@ -137,7 +140,7 @@ namespace tree
         CTree *trees;
         CNode *node_pool;
 
-        CTree_batch(int root_num, int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, unsigned int random_seed, float rho, float lam, int select_mode);
+        CTree_batch(int root_num, int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, unsigned int random_seed, float rho, float lam, int select_mode, int root_cover_mode);
         ~CTree_batch();
 
         // rewards / values: shape = (root_num, agent_num)

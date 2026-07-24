@@ -11,7 +11,7 @@ cdef extern from "lib/cnode.cpp":
 cdef extern from "lib/cnode.h" namespace "tree":
 
     cdef cppclass CTree_batch:
-        CTree_batch(int root_num, int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, unsigned int random_seed, float rho, float lam, int select_mode) except +
+        CTree_batch(int root_num, int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, unsigned int random_seed, float rho, float lam, int select_mode, int root_cover_mode) except +
 
         void prepare(float* rewards, float* values, float* policy_probs, float* beta, int sampled_times, float noise_eps, float* noises) except +
 

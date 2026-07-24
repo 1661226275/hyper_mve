@@ -85,6 +85,16 @@ def parse_args(args):
                         help="Noisy fraction. (default: %(default)s)")
     groups.add_argument("--sampled_action_times", type=int, default=5,
                         help="Sampled times per Node (default: %(default)s)")
+    groups.add_argument("--root_cover", type=str, default="none", choices=["none", "star"],
+                        help="Root child construction. 'none' = upstream (sample joint actions "
+                             "from beta, which a collapsed prior dedups to 1-3 children). "
+                             "'star' = per-agent enumeration of all actions against a shared "
+                             "CRN anchor, plus the greedy joint. (default: %(default)s)")
+    groups.add_argument("--leaf_sampled_times", type=int, default=0,
+                        help="Sampled times at NON-root nodes. 0 = same as sampled_action_times. "
+                             "Set this when --root_cover forces sampled_action_times up for the "
+                             "replay-buffer width, so leaves keep a smaller branching factor. "
+                             "(default: %(default)s)")
     groups.add_argument("--mcts_rho", type=float, default=0.75, 
                         help="Quantile rho in subtree value estimation (default: %(default)s)")
     groups.add_argument("--mcts_lambda", type=float, default=0.8,
@@ -118,6 +128,31 @@ def parse_args(args):
     groups.add_argument("--adv_clip", type=float, default=3.0,
                         help="clip parameter in advantage (default: %(default)s)")
     groups.add_argument("--PG_type", type=str, default="none", choices=["none", "sharp", "raw"], help="type of PG loss")
+    groups.add_argument("--policy_target_type", type=str, default="visit", choices=["visit", "q_softmax"],
+                        help="Source of the policy target under PG_type=none. 'visit' = upstream "
+                             "normalized root visit counts, which are UCB-allocated and therefore "
+                             "carry the prior's bias. 'q_softmax' = per-agent softmax over the "
+                             "search's own advantage estimates, which does not. (default: %(default)s)")
+    groups.add_argument("--policy_target_temperature", type=float, default=1.0,
+                        help="Temperature for --policy_target_type q_softmax. The advantages are "
+                             "already batch-std-normalized, so 1.0 is a sane base. "
+                             "(default: %(default)s)")
+    groups.add_argument("--policy_target_min_qstd", type=float, default=0.0,
+                        help="Zero-information guard: drop a transition from the policy loss when "
+                             "its root advantage spread falls below this FRACTION of the "
+                             "batch-pooled spread (the advantages are already pooled-normalized, "
+                             "so this is scale-free across arms). A flat-advantage root yields a "
+                             "near-uniform q_softmax target, which actively flattens the policy. "
+                             "0 = off. (default: %(default)s)")
+    groups.add_argument("--policy_target_min_children", type=int, default=2,
+                        help="Zero-information guard: minimum live root children for a transition "
+                             "to contribute to the policy loss. Only active when "
+                             "--policy_target_min_qstd > 0. (default: %(default)s)")
+    groups.add_argument("--policy_target_renorm_cap", type=float, default=4.0,
+                        help="Cap on the policy-loss rescale that compensates for guarded-out "
+                             "transitions. Without the rescale the guard silently lowers the "
+                             "effective policy LR; without the cap a sparse batch inflates "
+                             "gradient variance. (default: %(default)s)")
     groups.add_argument("--reward_nonzero_upweight", type=float, default=0.0,
                         help="Extra additive weight on the per-transition reward loss when "
                              "the raw team reward magnitude exceeds --reward_nonzero_eps "
@@ -181,6 +216,20 @@ def parse_args(args):
     groups.add_argument("--belief_point_estimate", action="store_true", default=False,
                         help="Ablation arm: leaf values from a single posterior-blended head "
                              "instead of the Bayes average over the regime family.")
+    groups.add_argument("--value_hard_select", action="store_true", default=False,
+                        help="2026-07-23 gradient-diffusion diagnostic: during TRAINING route "
+                             "the value gradient to the TRUE-regime head only (v = v_{g_true}) "
+                             "instead of the belief-diffused Bayes average, so each per-regime "
+                             "head gets a clean signal. Deploy/eval/reanalyze still Bayes-average. "
+                             "If head_diversity rises, expert collapse was gradient diffusion.")
+    groups.add_argument("--belief_blind", action="store_true", default=False,
+                        help="2026-07-22 capacity-matched control: keep the ENTIRE subjective "
+                             "architecture (belief net, hypernet, ctx encoder — same params, "
+                             "belief net still trained) but feed a UNIFORM posterior so the "
+                             "regime posterior no longer conditions the heads. Isolates the "
+                             "belief posterior's marginal value from raw capacity. NOTE: the row "
+                             "block w_i· still reaches representation+ctx, so this is not truly "
+                             "regime-blind — it removes only the temporally-aggregated posterior.")
     groups.add_argument("--conditioning", type=str, default="hyper",
                         choices=("hyper", "moe_router", "film"),
                         help="Subjective θ-generation mechanism (phase-7 ablation arms): "
@@ -212,6 +261,20 @@ def parse_args(args):
     groups.add_argument("--reference_episode_anneal_steps", type=int, default=0,
                         help="Training steps over which the reference-episode probability "
                              "linearly decays from _start to _end (0 = stay at _start).")
+    groups.add_argument("--bc_loss_coeff", type=float, default=0.0,
+                        help="2026-07-21 competence fix: weight of a behavior-cloning CE that "
+                             "supervises the policy toward the EXECUTED scripted-greedy action on "
+                             "reference-episode steps. Needed because the reanalyze policy target "
+                             "is the (collapsible) MCTS visit distribution, so demonstrated actions "
+                             "never become a policy target on their own. 0 = off (default; no-op "
+                             "unless reference episodes are also enabled).")
+    groups.add_argument("--bc_reward_weighting", action="store_true", default=False,
+                        help="2026-07-22: weight each reference step's per-agent BC by the "
+                             "agent's own full-episode return-to-go, normalized per-(regime,agent), "
+                             "positive-advantage only. Concentrates BC on high-value demonstrated "
+                             "actions (walk-toward-resource) vs idle steps. Off = uniform BC.")
+    groups.add_argument("--bc_weight_cap", type=float, default=0.0,
+                        help="Optional cap on the reward-weighted BC weight (0 = uncapped).")
 
     groups = parser.add_argument_group("Save & Log parameters")
     groups.add_argument("--save_interval", type=int, default=10000,
@@ -234,6 +297,40 @@ def parse_args(args):
     groups.add_argument("--stacked_observations", type=int, default=1, help="num of stacked observations. (default: %(default)s)")
 
     return parser.parse_args(args)
+
+
+def root_cover_size(num_agents: int, action_space_size: int) -> int:
+    """Max root children built by ``--root_cover star``: the greedy joint plus,
+    per agent, every action against that agent's shared CRN anchor. Actual
+    covers are usually smaller because anchors dedup against the greedy joint.
+    """
+    return 1 + num_agents * action_space_size
+
+
+def validate_root_cover(root_cover_mode, sampled_action_times, num_simulations,
+                        num_agents, action_space_size):
+    """Fail early and legibly on a root cover that cannot work.
+
+    Both of these otherwise surface far from their cause: an oversized cover
+    raises a shape error inside ``concat_with_zero_padding`` deep in the
+    reanalyze worker, and an under-simulated cover fails silently — the tail of
+    the cover is enumerated but never evaluated, which under a Q-based policy
+    target is worse than not enumerating it at all.
+    """
+    if not root_cover_mode:
+        return
+    cover_max = root_cover_size(num_agents, action_space_size)
+    assert sampled_action_times >= cover_max, (
+        f"--root_cover builds up to {cover_max} root children "
+        f"(1 + num_agents*action_space_size), but --sampled_action_times is "
+        f"{sampled_action_times} and it bounds the replay-buffer width; "
+        f"raise it to at least {cover_max}."
+    )
+    assert num_simulations >= cover_max, (
+        f"--root_cover builds up to {cover_max} root children but "
+        f"--num_simulations is {num_simulations}, so the root round-robin "
+        f"could not evaluate them all; raise it to at least {cover_max}."
+    )
 
 
 class DiscreteSupport(object):
@@ -304,8 +401,13 @@ class BaseConfig(ABC):
         self.root_dirichlet_alpha = args.root_dirichlet_alpha
         self.root_exploration_fraction = args.root_exploration_fraction
         self.sampled_action_times = args.sampled_action_times
+        self.root_cover_mode = {"none": 0, "star": 1}[args.root_cover]
+        self.leaf_sampled_times = args.leaf_sampled_times
         self.mcts_rho = args.mcts_rho
         self.mcts_lambda = args.mcts_lambda
+        validate_root_cover(self.root_cover_mode, self.sampled_action_times,
+                            self.num_simulations, self.num_agents,
+                            self.action_space_size)
 
         # Training
         self.train_on_gpu = args.train_on_gpu and torch.cuda.is_available()
@@ -321,6 +423,11 @@ class BaseConfig(ABC):
         self.awac_lambda = args.awac_lambda
         self.adv_clip = args.adv_clip
         self.PG_type = args.PG_type
+        self.policy_target_type = args.policy_target_type
+        self.policy_target_temperature = args.policy_target_temperature
+        self.policy_target_min_qstd = args.policy_target_min_qstd
+        self.policy_target_min_children = args.policy_target_min_children
+        self.policy_target_renorm_cap = args.policy_target_renorm_cap
         self.reward_nonzero_upweight = args.reward_nonzero_upweight
         self.reward_nonzero_eps = args.reward_nonzero_eps
 
@@ -379,6 +486,8 @@ class BaseConfig(ABC):
         self.decoupled_selection = args.decoupled_selection
         self.subjective_model = args.subjective_model
         self.belief_point_estimate = args.belief_point_estimate
+        self.belief_blind = args.belief_blind
+        self.value_hard_select = args.value_hard_select
         self.conditioning = args.conditioning
         self.belief_oracle_steps = args.belief_oracle_steps
         self.belief_anneal_steps = args.belief_anneal_steps
@@ -387,6 +496,9 @@ class BaseConfig(ABC):
         self.reference_episode_prob_start = args.reference_episode_prob_start
         self.reference_episode_prob_end = args.reference_episode_prob_end
         self.reference_episode_anneal_steps = args.reference_episode_anneal_steps
+        self.bc_loss_coeff = args.bc_loss_coeff
+        self.bc_reward_weighting = args.bc_reward_weighting
+        self.bc_weight_cap = args.bc_weight_cap
 
         # save & log
         self.save_interval = args.save_interval

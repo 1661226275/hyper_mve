@@ -67,6 +67,12 @@ class GameHistory:
         self.rewards = []
         self.legal_actions = []
         self.model_indices = []
+        # per-step flag: was this transition executed by the scripted-greedy
+        # reference policy (a demonstration)? drives the behavior-cloning target.
+        self.reference_flags = []
+        # per-step regime id (env.oracle_g()); for per-(regime,agent) reward
+        # normalization of the BC weight. Stored always (works for no_subjective).
+        self.regime_ids = []
         # subjective context (stage-3): per-step belief used in ctx, oracle
         # regime id (train-time supervision only), and the belief-GRU hidden
         # BEFORE the step (for one-step truncated belief training).
@@ -121,6 +127,17 @@ class GameHistory:
         self.sampled_actions.append(sampled_actions)
         self.sampled_policies.append(sampled_policy)
         self.sampled_qvalues.append(sampled_qvalues)
+
+    def store_reference(self, is_reference: bool):
+        """Flag whether this step's executed action came from the scripted-greedy
+        reference policy (a demonstration). One call per ``store_transition`` so
+        the array stays aligned with ``actions``."""
+        self.reference_flags.append(bool(is_reference))
+
+    def store_regime(self, regime_id: int):
+        """Oracle regime id for this step (constant within an episode). One call
+        per ``store_transition``; used for per-(regime,agent) BC-weight norm."""
+        self.regime_ids.append(int(regime_id))
 
     def store_context(self, belief, g_true, belief_hidden):
         """Store the subjective context of one real step (stage-3).
@@ -183,7 +200,14 @@ class GameHistory:
             self.obs_history = np.array(self.obs_history)
         self.actions = np.array(self.actions)
         self.legal_actions = np.array(self.legal_actions)
-        self.rewards = np.array(self.rewards)
+        self.rewards = np.array(self.rewards)                  # (T, N) per-agent
+        self.reference_flags = np.array(self.reference_flags, dtype=np.float32)
+        self.regime_ids = np.array(self.regime_ids, dtype=np.int64)
+        # full-episode per-agent return-to-go G[t] = sum(rewards[t:]) (reverse
+        # cumsum over time) — NOT windowed; used for the reward-weighted BC target.
+        self.returns_to_go = np.flip(
+            np.cumsum(np.flip(self.rewards, axis=0), axis=0), axis=0
+        ).astype(np.float32)
         self.root_values = np.array(self.root_values)
         self.pred_values = np.array(self.pred_values)
         if len(self.beliefs) > 0:

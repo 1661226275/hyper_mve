@@ -153,11 +153,21 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             # so test/mean_score is a trend line, not comparable to
             # eval/return_mean (which sums over agents, per pinned regime) --
             # unlike the external runners' probe, which IS eval/return_mean.
-            "--test_interval", "500",
+            "--test_interval", "200",
             "--test_episodes", "8", "--use_mcts_test",
             "--target_model_interval", "50",
             "--batch_size", "64", "--num_simulations", "25",
             "--sampled_action_times", "5",
+            # The 2026-07-20 prior-collapse fix (root-cover enumeration +
+            # Q-softmax policy target) is OPT-IN via the `mcts_fix` ablation
+            # arm, NOT the default. A budget-matched seed-0 A/B showed it
+            # de-collapses the prior but REDUCES return 22.1 -> 13.3: it walks
+            # the policy off the defensive always-HARVEST fallback into the
+            # value head's bad advice in the asymmetric regimes (g2/g3 drop
+            # ~20 -> ~0; regime_acc ~0.50). The default stays byte-for-byte
+            # upstream so existing results remain comparable. To reproduce or
+            # extend the fix, use the arms in hyper_mve/ablation/arms.py
+            # (`mcts_fix`, `mcts_fix_oracle`).
             "--training_steps", str(training_steps), "--last_step", "0",
             # Cosine decay, not the flat 0.02 that ran the whole 2026-07-18
             # grid: train/value_loss never converged there (rose to ~5, then
@@ -216,12 +226,27 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             "--target_value_type", "pred-re", "--revisit_policy_search_rate", "1",
             "--use_off_correction", "--value_transform_type", "scalar",
             "--use_priority", "--use_max_priority",
-            "--subjective_model", "--decoupled_selection",
+            # Centralized MCTS deployment (2026-07-24, user-locked): one joint
+            # tree searches + broadcasts the joint action (select_mode=0, the
+            # original MAZero path) instead of per-agent decoupled selection.
+            # --decoupled_selection is intentionally NOT passed here so every
+            # mazero_mixed run (main + ablations) is centralized; the
+            # `joint_selection` ablation arm (which removed it) is now a no-op.
+            "--subjective_model",
         ]
         if self._ablation and self._ablation != "none":
             from hyper_mve.ablation.arms import apply_arm_argv
 
             argv = apply_arm_argv(argv, self._ablation)
+        if self._ablation == "ref_bc_anneal_scaled":
+            # ref_bc's hardcoded 28000-step anneal validated at 600K
+            # (training_steps=37500) is 74.7% of that budget; preserve the
+            # FRACTION rather than the absolute count so longer budgets don't
+            # spend a disproportionately larger share of training on the
+            # unsupervised floor rate. Appended last so argparse's
+            # last-occurrence-wins rule lets it override arms.py's placeholder.
+            scaled_anneal = max(1, round(training_steps * 28000 / 37500))
+            argv = argv + ["--reference_episode_anneal_steps", str(scaled_anneal)]
         args = core_config.parse_args(argv)
         relation_pkg = importlib.import_module("config.relation")
 
@@ -266,17 +291,30 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         game_config = self._build_game_config(
             total_env_steps=total_env_steps, lr=lr, seed=seed
         )
-        tb_dir = kwargs.get("tensorboard_dir") or tempfile.mkdtemp(
-            prefix="mazero_mixed_tb_"
-        )
+        tb_dir_kwarg = kwargs.get("tensorboard_dir")
+        tb_dir = tb_dir_kwarg or tempfile.mkdtemp(prefix="mazero_mixed_tb_")
         # the fork's results dir (checkpoints/logs) lives under the fork tree;
         # model_dir/model_path are derived at config construction, so re-derive
         # them together with exp_path and create the directories the serial
         # trainer expects (main.py normally does this via make_results_dir).
-        game_config.exp_path = os.path.join(
-            str(_FORK_DIR), "results", "relation", "rel_duo", "runner",
-            f"seed={seed}",
-        )
+        #
+        # exp_path used to be keyed ONLY by seed (f"seed={seed}"), which is
+        # always 0 across a grid's ablation arms/budgets: any two same-seed
+        # runs launched concurrently (routine for a multi-GPU grid) wrote
+        # into the identical model_dir and clobbered each other's mid-training
+        # checkpoints (final checkpoints were safe -- save_checkpoint() writes
+        # those to the caller's own per-arm-unique path). tensorboard_dir is
+        # already unique per (algo+arm, env, seed) -- scripts/train.py sets it
+        # to run_dir/"tb" -- so anchor exp_path off its parent instead of the
+        # hardcoded shared path.
+        if tb_dir_kwarg:
+            run_dir = os.path.dirname(os.path.normpath(tb_dir_kwarg))
+            game_config.exp_path = os.path.join(run_dir, "mazero_mixed_fork")
+        else:
+            game_config.exp_path = os.path.join(
+                str(_FORK_DIR), "results", "relation", "rel_duo", "runner",
+                f"seed={seed}",
+            )
         game_config.model_dir = os.path.join(game_config.exp_path, "model")
         game_config.model_path = os.path.join(game_config.exp_path, "model.p")
         os.makedirs(game_config.model_dir, exist_ok=True)
@@ -287,6 +325,11 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         summary_writer = kwargs.get("unified_logger")
         if summary_writer is None:
             summary_writer = SummaryWriter(tb_dir, flush_secs=30)
+        # Seed the env->train ratio so the canonical env-steps x-axis is right
+        # from the first log batch; train/transitions_collected refines it every
+        # _log thereafter (UnifiedLogger self-calibration).
+        if hasattr(summary_writer, "declare_ratio"):
+            summary_writer.declare_ratio(_ENV_STEPS_PER_GRAD)
         model, weights = train_sync_serial(game_config, summary_writer, None)
         model.set_weights(weights)
         model.eval()
@@ -394,6 +437,16 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         action_counts = np.zeros(A, dtype=np.int64)
         visit_counts = np.zeros((N, A), dtype=np.float64)
         visit_entropies: list[float] = []
+        # Root-cover health (2026-07-20). child_counts tracks how many distinct
+        # joints the root actually offered; coverage is the fraction of
+        # (agent, action) pairs present among them -- 1.0 iff --root_cover is
+        # doing its job. policy_mass is sum(pred_prob) over the cover: with
+        # beta_hat == beta the target is the EXACT restriction of pi to the
+        # cover, not an unbiased estimate of E_pi, so if this falls well below
+        # 1 as the policy de-collapses the cover needs widening.
+        child_counts: list[float] = []
+        coverages: list[float] = []
+        policy_mass: list[float] = []
         steps_total = 0
         mcts = SampledMCTS(cfg_fork, np_random)
 
@@ -421,6 +474,13 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
                     deterministic=True, np_random=np_random,
                 )
                 visit_entropies.append(float(ent))
+                root_acts = np.asarray(search.sampled_actions[i]).reshape(-1, N)
+                child_counts.append(float(len(root_acts)))
+                coverages.append(float(np.mean([
+                    len(set(root_acts[:, k].tolist())) / float(A) for k in range(N)
+                ])))
+                policy_mass.append(
+                    float(np.sum(np.asarray(search.sampled_pred_probs[i]))))
                 joint = np.asarray(search.sampled_actions[i][pos]).reshape(-1)
                 acts = {a: int(joint[k]) for k, a in enumerate(agents)}
                 for a in acts.values():
@@ -442,6 +502,10 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         stats = {
             "visit_entropy": (float(np.mean(visit_entropies))
                               if visit_entropies else 0.0),
+            "root_child_count": float(np.mean(child_counts)) if child_counts else 0.0,
+            "root_action_coverage": float(np.mean(coverages)) if coverages else 0.0,
+            "root_policy_mass_covered": (float(np.mean(policy_mass))
+                                         if policy_mass else 0.0),
         }
         return list(returns), action_counts, visit_counts, steps_total, stats
 
@@ -496,6 +560,9 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         belief_hits = belief_n = 0
         margins: list[float] = []
         visit_ents: list[float] = []
+        root_child_counts: list[float] = []
+        root_coverages: list[float] = []
+        root_policy_mass: list[float] = []
 
         with torch.no_grad():
             for g in regime_grid:
@@ -513,6 +580,9 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
                 s_ret, s_acts, s_visits, s_steps, s_stats = self._rollout_planner(
                     env_fn, g, n_planner, device, np_random)
                 visit_ents.append(s_stats["visit_entropy"])
+                root_child_counts.append(s_stats["root_child_count"])
+                root_coverages.append(s_stats["root_action_coverage"])
+                root_policy_mass.append(s_stats["root_policy_mass_covered"])
                 planner_per_regime[g] = float(np.mean(s_ret)) if s_ret else 0.0
                 planner_per_regime_sem[g] = (
                     float(np.std(s_ret) / max(np.sqrt(len(s_ret)), 1.0))
@@ -524,6 +594,33 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
                 episodes_per_regime[g] = len(s_ret)
                 env_steps_total += s_steps
                 self._eval_episode_returns[g] = list(s_ret)
+
+        # Module-2 ablation "argmax" deploy variant (A2): the SAME planner, but
+        # leaf values use the single MAP-regime value head
+        # (set_value_deploy("argmax")) instead of the Bayes average over the
+        # belief posterior (A1, above). Subjective model only; a cheap extra
+        # pass on the same checkpoint (no retraining) so the deploy-mode
+        # ablation reads off one eval. Same RNG seed as the soft-planner pass so
+        # env conditions match. A3 (no MCTS) = the prior pass above.
+        planner_map_per_regime: dict[int, float] = {}
+        planner_map_returns_all: list[float] = []
+        if hasattr(model, "set_value_deploy"):
+            np_random_map = np.random.RandomState(12345)
+            try:
+                model.set_value_deploy("argmax")
+                with torch.no_grad():
+                    for g in regime_grid:
+                        g = int(g)
+                        m_ret, _m_acts, _m_visits, _m_steps, _m_stats = (
+                            self._rollout_planner(
+                                env_fn, g, n_planner, device, np_random_map))
+                        planner_map_per_regime[g] = (
+                            float(np.mean(m_ret)) if m_ret else 0.0)
+                        planner_map_returns_all.extend(m_ret)
+            finally:
+                model.set_value_deploy("bayes")  # restore trained default
+        planner_map_mean = (float(np.mean(planner_map_returns_all))
+                            if planner_map_returns_all else 0.0)
 
         regime_accuracy = (float(belief_hits) / belief_n) if belief_n else None
         prior_mean = float(np.mean(prior_returns_all)) if prior_returns_all else 0.0
@@ -540,7 +637,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         # writes them next to eval_report.json. An all-in-one-action histogram
         # here is the signature of a collapsed policy.
         self._eval_diagnostics = {
-            "schema_version": "evaldiag-v1",
+            "schema_version": "evaldiag-v2",
             "episodes_prior": n_prior,
             "episodes_planner": n_planner,
             "prior_action_histogram": prior_actions.tolist(),
@@ -555,9 +652,26 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             ),
             "return_per_regime_prior": dict(prior_per_regime),
             "return_per_regime_planner": dict(planner_per_regime),
+            # deploy-mode ablation points on this checkpoint (evaldiag-v2):
+            #   A1 Bayes-avg (ours)   = return_per_regime_planner / planner_mean
+            #   A2 argmax (MAP head)  = return_per_regime_planner_map / *_map_mean
+            #   A3 no-MCTS (prior)    = return_per_regime_prior / prior_mean
+            "return_per_regime_planner_map": dict(planner_map_per_regime),
+            "planner_map_return_mean": planner_map_mean,
             "planner_prior_return_gap": planner_mean - prior_mean,
             "prior_logit_margin": float(np.mean(margins)) if margins else 0.0,
             "planner_visit_entropy": float(np.mean(visit_ents)) if visit_ents else 0.0,
+            # evaldiag-v2 (2026-07-20): root-cover health. coverage == 1.0 iff
+            # every action is present for every agent at the root, which is the
+            # precondition for the search being able to correct the prior at
+            # all. Under the old prior-sampling path a collapsed prior gives
+            # child_count 1 and coverage 1/A.
+            "planner_root_child_count_mean": (
+                float(np.mean(root_child_counts)) if root_child_counts else 0.0),
+            "planner_root_action_coverage": (
+                float(np.mean(root_coverages)) if root_coverages else 0.0),
+            "planner_root_policy_mass_covered": (
+                float(np.mean(root_policy_mass)) if root_policy_mass else 0.0),
             "regime_accuracy": regime_accuracy,
         }
 

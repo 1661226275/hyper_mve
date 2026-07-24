@@ -90,7 +90,15 @@ class SampledMCTS(object):
         hidden_states_pool = [batch_hidden_states]         # type: List[torch.Tensor]
         # initialize MCTS tree (select_mode: 0 = joint team-UCB, 1 = decoupled per-agent UCB)
         select_mode = 1 if getattr(self.config, "decoupled_selection", False) else 0
-        trees = cytree.Tree_batch(batch_size, num_agents, action_space_size, sampled_times, self.config.num_simulations, self.config.tree_value_stat_delta_lb, self.np_random.choice(256), rho, lam, select_mode)
+        root_cover_mode = int(getattr(self.config, "root_cover_mode", 0))
+        # Leaf expansion keeps its own (smaller) sample budget. sampled_times
+        # doubles as the replay-buffer width, which the root cover forces up to
+        # 1 + N*A; feeding that same number to every leaf would multiply
+        # per-node selection work and node-pool usage for no benefit -- and the
+        # cost would appear exactly as the policy de-collapses and leaf draws
+        # stop deduping. 0 means "same as sampled_times" (upstream behaviour).
+        leaf_sampled_times = int(getattr(self.config, "leaf_sampled_times", 0)) or sampled_times
+        trees = cytree.Tree_batch(batch_size, num_agents, action_space_size, sampled_times, self.config.num_simulations, self.config.tree_value_stat_delta_lb, self.np_random.choice(256), rho, lam, select_mode, root_cover_mode)
 
         # (a) prepare root node with re-sampled actions
         if sampled_actions_res is None:
@@ -152,7 +160,7 @@ class SampledMCTS(object):
                 batch_values = widen(batch_values)
                 batch_policy_probs = batch_policy_probs.astype(np.float32)
                 batch_beta = batch_beta.astype(np.float32)
-                trees.batch_expansion_and_backup(index_simulation + 1, discount, sampled_times,
+                trees.batch_expansion_and_backup(index_simulation + 1, discount, leaf_sampled_times,
                                                  batch_rewards, batch_values, batch_policy_probs, batch_beta)
 
         # get target value/policy from MCTS results

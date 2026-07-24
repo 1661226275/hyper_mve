@@ -195,7 +195,7 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
 
             probe = PeriodicEvalProbe(
                 env_fn, cfg, probe_writer, act_fn=_probe_act,
-                every_train_steps=500, episodes_per_regime=8,
+                every_train_steps=200, episodes_per_regime=8,
                 fidelity_fn=_fidelity_fn,
             )
 

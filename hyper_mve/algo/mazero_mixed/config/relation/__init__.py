@@ -76,6 +76,8 @@ class GameConfig(BaseConfig):
                 model_cfg=ModelConfig(),
                 n_regimes=5,
                 belief_point_estimate=getattr(self, "belief_point_estimate", False),
+                belief_blind=getattr(self, "belief_blind", False),
+                value_hard_select=getattr(self, "value_hard_select", False),
                 belief_grad_gating_steps=getattr(self, "belief_grad_gating_steps", 5000),
                 conditioning=getattr(self, "conditioning", "hyper"),
                 proj_hid=self.proj_hid, proj_out=self.proj_out,

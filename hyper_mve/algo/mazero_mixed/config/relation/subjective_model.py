@@ -170,6 +170,8 @@ class HyperMAMuZeroNet(BaseNet):
         model_cfg=None,                  # v5 ModelConfig (ctx dims, gru hidden)
         n_regimes: int = 5,
         belief_point_estimate: bool = False,
+        belief_blind: bool = False,
+        value_hard_select: bool = False,
         belief_grad_gating_steps: int = 5000,
         conditioning: str = "hyper",
 
@@ -185,6 +187,8 @@ class HyperMAMuZeroNet(BaseNet):
         self.hidden_state_size = hidden_state_size
         self.n_regimes = n_regimes
         self.belief_point_estimate = belief_point_estimate
+        self.belief_blind = belief_blind
+        self.value_hard_select = value_hard_select
 
         # ---- objective pathway (inherited h / e+g / projection) ----
         self.representation_network = RepresentationNetwork(
@@ -245,6 +249,11 @@ class HyperMAMuZeroNet(BaseNet):
         self._theta_rew = None       # (B*N, ·)
         self._theta_val = None       # point-estimate θ_val (B*N, ·)
         self._theta_val_G = None     # per-regime θ_val list len |G| of (B*N, ·)
+        self._head_diversity = None  # across-regime variance of v_g (monitor)
+        self._g_true = None          # oracle regime for hard-select value (train only)
+        self._value_deploy_mode = "bayes"  # deploy-time value aggregation (diagnostic)
+        self._value_deploy_temp = 1.0
+        self._deploy_g = None        # oracle regime for the oracle-deploy diagnostic
         self._step = 0
 
     # ------------------------------------------------------------- context
@@ -255,6 +264,22 @@ class HyperMAMuZeroNet(BaseNet):
             self._step = int(step)
         self._belief = g_hat
 
+    def set_oracle_regime(self, g_true):
+        """Cache the oracle regime id (B,) for hard-select value training, or None
+        to disable it. Set only during the training forward and cleared after, so
+        eval / reanalyze / deploy always Bayes-average regardless of train/eval mode."""
+        self._g_true = g_true
+
+    def set_value_deploy(self, mode="bayes", temp=1.0, deploy_g=None):
+        """Deploy-time value aggregation over the per-regime heads (diagnostic).
+        Default 'bayes' is bit-exact the trained behaviour. 'argmax' hard-selects
+        the belief's top regime; 'temp' uses the tempered posterior w ∝ belief**(1/T)
+        (T=1 -> Bayes, T->0 -> argmax); 'oracle' hard-selects deploy_g (cheating,
+        diagnostic only). Affects only the Bayes/deploy path, never train hard-select."""
+        self._value_deploy_mode = mode
+        self._value_deploy_temp = float(temp)
+        self._deploy_g = deploy_g
+
     def _extract_rows(self, obs_flat: torch.Tensor) -> torch.Tensor:
         # obs_flat (B, N, obs_size); own row w_i· = trailing (N-1) dims
         return obs_flat[..., -(self.num_agents - 1):]
@@ -262,8 +287,9 @@ class HyperMAMuZeroNet(BaseNet):
     def _build_context(self, obs_flat: torch.Tensor):
         B, N, _ = obs_flat.shape
         device = obs_flat.device
-        if self._belief is None or self._belief.shape[0] != B:
-            # cold fallback: uniform posterior (workers must set_belief per step)
+        if self.belief_blind or self._belief is None or self._belief.shape[0] != B:
+            # belief_blind (capacity-matched control) forces the uniform posterior;
+            # same path as the cold fallback (workers set_belief per step otherwise).
             belief = torch.full((B, N, self.n_regimes), 1.0 / self.n_regimes, device=device)
         else:
             belief = self._belief.to(device)
@@ -314,6 +340,21 @@ class HyperMAMuZeroNet(BaseNet):
         # per-regime Python loop this replaces was ~38% of search step time
         v_g = self.value_head.forward_multi(
             gs, torch.stack(self._theta_val_G, dim=0))           # (B*N, 1, |G|)
+        # head-diversity monitor (belief_blind caveat): across-regime variance of
+        # the per-regime value heads. Near 0 => the hypernet collapsed to identical
+        # heads, so uniform averaging changes nothing and a belief_blind tie is
+        # uninformative.
+        self._head_diversity = v_g.detach().float().var(dim=-1).mean()
+        if self.value_hard_select and self._g_true is not None:
+            # gradient-diffusion fix (train only): route the value gradient to the
+            # TRUE-regime head only (v = v_{g_true}) so each head gets a clean
+            # per-regime signal instead of the belief-diffused blend. self._g_true
+            # is set solely during the training forward and cleared after, so
+            # eval / reanalyze / deploy fall through to the Bayes average below.
+            idx = (self._g_true.view(B, 1).expand(B, self.num_agents)
+                   .reshape(B * self.num_agents).clamp(min=0))
+            v = v_g.gather(dim=-1, index=idx.view(-1, 1, 1)).squeeze(-1)   # (B*N, 1)
+            return v.reshape(B, self.num_agents, 1)
         # _belief_probs was built at the ROOT batch size by _build_context. This
         # reshape is only valid because the search expands exactly one leaf per
         # tree per simulation, so every recurrent_inference batch matches the
@@ -324,7 +365,19 @@ class HyperMAMuZeroNet(BaseNet):
             "search that follows"
         )
         b = self._belief_probs.reshape(B * self.num_agents, 1, self.n_regimes)
-        v = (v_g * b).sum(-1)                                    # (B*N, 1)
+        mode = self._value_deploy_mode
+        if mode == "oracle" and self._deploy_g is not None:
+            # cheating diagnostic: hard-select the TRUE regime head at deploy.
+            v = v_g[..., int(self._deploy_g)]                    # (B*N, 1)
+        elif mode == "argmax":
+            idx = b.argmax(dim=-1, keepdim=True)                 # (B*N, 1, 1)
+            v = v_g.gather(dim=-1, index=idx).squeeze(-1)        # (B*N, 1)
+        elif mode == "temp":
+            # tempered posterior w ∝ belief**(1/T); T=1 -> Bayes, T->0 -> argmax.
+            w = torch.softmax(torch.log(b.clamp_min(1e-9)) / self._value_deploy_temp, dim=-1)
+            v = (v_g * w).sum(-1)                                # (B*N, 1)
+        else:  # bayes (default, bit-exact the trained behaviour)
+            v = (v_g * b).sum(-1)                                # (B*N, 1)
         return v.reshape(B, self.num_agents, 1)
 
     def _predict_reward(self, hidden_state: torch.Tensor, action_onehot: torch.Tensor) -> torch.Tensor:

@@ -59,7 +59,14 @@ class RelationCommonsGame(Game):
         if self._seed is not None and not self._seed_consumed:
             seed = self._seed
             self._seed_consumed = True
-        obs_dict, info = self.env.reset(seed=seed)
+        # Optional regime pinning for the per-regime periodic eval probe: g=None
+        # (the default) preserves the env's own regime sampling; g=<id> forces
+        # that regime via the PettingZoo reset-options protocol (same hook the
+        # fidelity probe / runner rollouts use). Eval stays oracle-free — the
+        # env is regime g, but the belief net still infers it from observations.
+        g = kwargs.get("g", None)
+        options = {"g": int(g)} if g is not None else None
+        obs_dict, info = self.env.reset(seed=seed, options=options)
         self._update_g_true(info)
         return self._obs_to_array(obs_dict)
 

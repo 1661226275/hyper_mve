@@ -39,6 +39,113 @@ def reward_nonzero_weight(target_reward_step: torch.Tensor, upweight: float, eps
     return 1.0 + upweight * nz
 
 
+def policy_target_weights(target_sampled_adv_step, sampled_action_mask_step, temperature):
+    """Per-agent policy-target weights from the search's OWN advantage estimates.
+
+    The upstream target is the normalized root visit count. Visits are
+    allocated by UCB, whose prior term dominates the [0,1]-clipped value term
+    when the prior is peaked, so under a collapsed policy the target mostly
+    echoes the prior back at itself. This reads the target from what the search
+    actually *evaluated* instead: a softmax over per-agent advantages
+    (``qvalues - root_pred_value``), which no term of the prior enters.
+    (The retired MVEPlanner's ``pi_mve = softmax(return_per_action / temp)``.)
+
+    ``target_sampled_adv_step`` is ``(batch, C, num_agents)`` and
+    ``sampled_action_mask_step`` is ``(batch, C)``. Returns ``(batch, C, N)``
+    rows that sum to 1 over C, or exactly 0 for fully-masked rows.
+    """
+    m = sampled_action_mask_step.unsqueeze(-1)                      # (batch, C, 1)
+    # fp32: under autocast the softmax would run in fp16, where the masking
+    # sentinel below has to stay well inside the 65504 range.
+    logits = target_sampled_adv_step.float() / temperature
+    # -1e4, NOT -inf/-1e9: out-of-trajectory rows have an ALL-False mask
+    # (reanalyze_worker.py zeroes them), and softmax over an all -inf row is
+    # NaN -- which then survives `0 * NaN` and poisons total_loss even though
+    # the row's weight is zero. -1e9 has the same effect via fp16 overflow.
+    w = torch.softmax(logits.masked_fill(m < 0.5, -1e4), dim=1) * m
+    # renormalize over the unmasked children; clamp_min keeps all-masked rows
+    # at exactly 0 instead of 0/0.
+    return w / w.sum(dim=1, keepdim=True).clamp_min(1e-8)
+
+
+def policy_loss_step(config, per_agent_log_prob, sampled_actions_log_prob,
+                     target_sampled_policies_step, target_sampled_adv_step,
+                     sampled_action_mask_step):
+    """One unroll step of the PG_type='none' policy loss. Returns ``(batch,)``."""
+    if getattr(config, "policy_target_type", "visit") == "visit":
+        return -(
+            sampled_actions_log_prob
+            * target_sampled_policies_step                      # visit count
+            * sampled_action_mask_step                          # mask invalid actions
+        ).sum(dim=1)
+    w = policy_target_weights(
+        target_sampled_adv_step, sampled_action_mask_step,
+        config.policy_target_temperature)                       # (batch, C, N)
+    return -(per_agent_log_prob * w.permute(0, 2, 1)).sum(dim=(1, 2))
+
+
+def bc_loss_step(policy_logits, action_step, ref_flag, mask_step, weight_step):
+    """One unroll step of the behavior-cloning loss (2026-07-21 competence fix).
+
+    CE from the policy toward the EXECUTED action, active only on reference-
+    episode steps. On a reference self-play episode the executed action is the
+    scripted-greedy demonstration, but the reanalyze policy target is the
+    (collapsible) MCTS visit distribution -- so without this the demonstrated
+    action never becomes a policy target and the policy re-collapses to HARVEST.
+
+        policy_logits (batch, N, A); action_step (batch, N); ref_flag (batch,);
+        mask_step (batch,); weight_step (batch, N) per-agent reward weight
+        (all-ones = plain uniform BC). Returns ``(batch,)``, exactly 0 on
+        non-reference or out-of-trajectory rows. fp32-forced so the CE is
+        autocast-safe. The per-agent weight is applied BEFORE the sum over agents
+        (general-sum: agent i is weighted by its own return, 2026-07-22).
+    """
+    logp = policy_logits.float().log_softmax(dim=-1)                        # (b, N, A)
+    ce = -logp.gather(dim=2, index=action_step.long().unsqueeze(-1)).squeeze(-1)  # (b, N)
+    return (ce * weight_step).sum(dim=1) * ref_flag * mask_step             # (b,)
+
+
+def bc_reward_weights(config, rtg, regime_id, ref_flag, mask, n_regimes):
+    """Per-(regime, agent) reward weight for reward-weighted BC (2026-07-22).
+
+    Weight each reference step's per-agent BC by how good the demonstrated action
+    was — the agent's own full-episode return-to-go — so walk-toward-resource
+    (high G) is upweighted and idle/low-value steps are not. Only above-own-average
+    steps are upweighted (``clamp(Â, min=0)``); below-average steps get weight 0.
+
+        rtg (B, K+1, N) per-agent return-to-go; regime_id (B,); ref_flag (B,);
+        mask (B, K+1). Returns (B, K+1, N). All-ones when --bc_reward_weighting is
+        off (⇒ bit-exact plain BC). Normalization is per-(regime, agent) because
+        the return is per-agent and asymmetric regimes have per-role scales.
+    """
+    if not getattr(config, "bc_reward_weighting", False):
+        return torch.ones_like(rtg)
+    B, K1, N = rtg.shape
+    # population for the per-group stats: reference AND in-trajectory steps
+    pop = ((ref_flag.view(B, 1, 1) > 0.5) & (mask.view(B, K1, 1) > 0.5)).expand(B, K1, N)
+    # UNIFORM FALLBACK: groups too sparse to normalize keep weight 1 (plain BC),
+    # never 0 — the escape-HARVEST BC signal must not silently vanish just because
+    # a (regime, agent) group has too few samples to standardize this batch.
+    w = torch.ones_like(rtg)
+    for g in range(int(n_regimes)):
+        gsel = (regime_id == g)                                             # (B,)
+        if not bool(gsel.any()):
+            continue
+        gcol = gsel.view(B, 1)                                              # (B,1)
+        for i in range(N):
+            valid = pop[:, :, i] & gcol                                     # (B,K1)
+            if int(valid.sum()) < 2:
+                continue                                                    # keep w=1
+            vals = rtg[:, :, i][valid]
+            mean, std = vals.mean(), vals.std()
+            col = ((rtg[:, :, i] - mean) / (std + 1e-5)).clamp(min=0.0)     # positive-only
+            w[:, :, i] = torch.where(gcol, col, w[:, :, i])
+    cap = getattr(config, "bc_weight_cap", 0.0)
+    if cap and cap > 0:
+        w = w.clamp(max=float(cap))
+    return w
+
+
 def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: tuple, optimizer: optim.Optimizer, scaler: GradScaler, device):
     """update models given a batch data
     Parameters
@@ -52,10 +159,13 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
     """
     inputs_batch, targets_batch, info = batch
     obs_batch, action_batch, mask_batch, indices, weights_lst = inputs_batch[:5]
+    reference_flag_b = inputs_batch[5]          # (B,) behavior-cloning flag
+    returns_to_go_b = inputs_batch[6]           # (B, K+1, N) per-agent full-episode G_t
+    regime_id_b = inputs_batch[7]               # (B,) regime id at the unroll start
     # subjective model extras: belief ctx at unroll start, oracle g, GRU hidden
     belief_ctx_b = g_true_b = belief_hidden_b = None
-    if len(inputs_batch) > 5:
-        belief_ctx_b, g_true_b, belief_hidden_b = inputs_batch[5:8]
+    if len(inputs_batch) > 8:
+        belief_ctx_b, g_true_b, belief_hidden_b = inputs_batch[8:11]
     target_reward, target_value, target_policy = targets_batch
     (
         target_sampled_actions,
@@ -63,6 +173,7 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
         target_sampled_imp_ratio,
         target_sampled_adv,
         sampled_action_mask,
+        target_policy_informative,
     ) = target_policy
     batch_future_return, batch_model_index, target_model_index = info
 
@@ -79,6 +190,13 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
     action_batch = torch.from_numpy(np.array(action_batch)).to(device).long()
     mask_batch = torch.from_numpy(np.array(mask_batch)).to(device).float()
     weights = torch.from_numpy(np.array(weights_lst)).to(device).float()
+    reference_flag_t = torch.from_numpy(np.array(reference_flag_b)).to(device).float()  # (B,)
+    returns_to_go_t = torch.from_numpy(np.array(returns_to_go_b)).to(device).float()    # (B,K+1,N)
+    regime_id_t = torch.from_numpy(np.array(regime_id_b)).to(device).long()             # (B,)
+    # per-(regime,agent) reward-weight for BC (all-ones unless --bc_reward_weighting)
+    bc_weight = bc_reward_weights(
+        config, returns_to_go_t, regime_id_t, reference_flag_t, mask_batch,
+        config.num_agents)                                                              # (B,K+1,N)
 
     target_reward = torch.from_numpy(np.array(target_reward)).to(device).float()
     target_value = torch.from_numpy(np.array(target_value)).to(device).float()
@@ -88,6 +206,7 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
     target_sampled_imp_ratio = torch.from_numpy(np.array(target_sampled_imp_ratio)).to(device).float()
     target_sampled_adv = torch.from_numpy(np.array(target_sampled_adv)).to(device).float()
     sampled_action_mask = torch.from_numpy(np.array(sampled_action_mask)).to(device).float()
+    target_policy_informative = torch.from_numpy(np.array(target_policy_informative)).to(device).float()
 
     batch_size = obs_batch.size(0)
     obs_pad_size = config.image_channel * (config.stacked_observations + config.num_unroll_steps)
@@ -104,6 +223,7 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
     assert target_sampled_imp_ratio.shape == (batch_size, config.num_unroll_steps + 1, config.sampled_action_times)
     assert target_sampled_adv.shape == (batch_size, config.num_unroll_steps + 1, config.sampled_action_times, config.num_agents)
     assert sampled_action_mask.shape == (batch_size, config.num_unroll_steps + 1, config.sampled_action_times)
+    assert target_policy_informative.shape == (batch_size, config.num_unroll_steps + 1)
 
     # transform targets to categorical representation
     target_reward_phi = config.reward_transform(target_reward)
@@ -121,6 +241,10 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
                 torch.from_numpy(np.array(belief_ctx_b)).to(device).float(),
                 step=step_count,
             )
+        if (g_true_b is not None and getattr(config, "value_hard_select", False)
+                and hasattr(model, "set_oracle_regime")):
+            model.set_oracle_regime(
+                torch.from_numpy(np.array(g_true_b)).to(device).long())
         network_output = model.initial_inference(obs_batch[:, :, beg_index:end_index])
 
         # calculate the new priorities for each transition (agent-mean of the
@@ -140,11 +264,10 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
         sampled_actions_log_prob = per_agent_log_prob.sum(dim=1)    # joint log-prob: (batch_size, sampled_times)
 
         if config.PG_type == "none":
-            policy_loss = -(
-                sampled_actions_log_prob
-                * target_sampled_policies[:, step_i]                    # visit count
-                * sampled_action_mask[:, step_i]                        # mask invalid actions
-            ).sum(dim=1)
+            policy_loss = policy_loss_step(
+                config, per_agent_log_prob, sampled_actions_log_prob,
+                target_sampled_policies[:, step_i], target_sampled_adv[:, step_i],
+                sampled_action_mask[:, step_i]) * target_policy_informative[:, step_i]
         else:
             # per-agent AWPO: agent i's factor is weighted by its OWN advantage
             if config.awac_lambda > 0:
@@ -174,6 +297,9 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
             else:
                 raise NotImplementedError
 
+        # behavior-cloning loss at step 0 (accumulated over the unroll below).
+        bc_loss = bc_loss_step(network_output.policy_logits, action_batch[:, 0],
+                               reference_flag_t, mask_batch[:, 0], bc_weight[:, 0])
         reward_loss = torch.zeros(batch_size, device=device)
         value_loss = config.value_loss(network_output.value, target_value_phi[:, 0])
         if config.consistency_coeff > 0:
@@ -194,11 +320,10 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
             sampled_actions_log_prob = per_agent_log_prob.sum(dim=1)    # joint log-prob: (batch_size, sampled_times)
 
             if config.PG_type == "none":
-                policy_loss += -(
-                    sampled_actions_log_prob
-                    * target_sampled_policies[:, step_i]                    # visit count
-                    * sampled_action_mask[:, step_i]                        # mask invalid actions
-                ).sum(dim=1)
+                policy_loss += policy_loss_step(
+                    config, per_agent_log_prob, sampled_actions_log_prob,
+                    target_sampled_policies[:, step_i], target_sampled_adv[:, step_i],
+                    sampled_action_mask[:, step_i]) * target_policy_informative[:, step_i]
             else:
                 # per-agent AWPO: agent i's factor is weighted by its OWN advantage
                 if config.awac_lambda > 0:
@@ -227,6 +352,9 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
                 else:
                     raise NotImplementedError
 
+            bc_loss += bc_loss_step(network_output.policy_logits, action_batch[:, step_i],
+                                    reference_flag_t, mask_batch[:, step_i], bc_weight[:, step_i])
+
             # 2026-07-20 harvest-collapse fix: zero-inflation counter. Under a
             # camping-heavy behaviour policy the overwhelming majority of
             # transitions carry ~0 team reward, so an unweighted reward loss
@@ -250,11 +378,34 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
             # Follow MuZero, set half gradient
             network_output.hidden_state.register_hook(lambda grad: grad * 0.5)
 
+        # Stage C renormalization. Masking transitions out of the policy loss
+        # silently lowers the EFFECTIVE policy learning rate, because
+        # total_loss averages over the full batch either way. Rescale by the
+        # guarded-out fraction, as a global scalar so the per-sample (batch,)
+        # structure the PER `weights` multiply into is preserved.
+        #
+        # `num` must be mask_batch.sum(), not numel(): out-of-trajectory rows
+        # already contribute exactly 0 (reanalyze_worker zeroes their targets),
+        # so counting them would silently deflate the scale on short
+        # trajectories. When the guard never fires den == num -> scale == 1.0,
+        # bit-exact with it disabled. den == 0 -> scale 0, no NaN and no
+        # gradient. The cap bounds gradient-variance inflation on batches where
+        # only a few transitions survive.
+        policy_informative_frac = 1.0
+        if getattr(config, "policy_target_min_qstd", 0.0) > 0:
+            num = mask_batch.sum()
+            den = (target_policy_informative * mask_batch).sum()
+            policy_informative_frac = float((den / num.clamp_min(1.0)).item())
+            scale = (torch.clamp(num / den, max=config.policy_target_renorm_cap)
+                     if den > 0 else torch.zeros((), device=device))
+            policy_loss = policy_loss * scale
+
         # weighted loss with masks (some invalid states which are out of trajectory.)
         loss = (
             config.reward_loss_coeff * reward_loss
             + config.policy_loss_coeff * policy_loss
             + config.value_loss_coeff * value_loss
+            + getattr(config, "bc_loss_coeff", 0.0) * bc_loss
         )
         if config.consistency_coeff > 0:
             loss += config.consistency_coeff * consistency_loss
@@ -293,6 +444,8 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
     torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
     scaler.step(optimizer)
     scaler.update()
+    if hasattr(model, "set_oracle_regime"):
+        model.set_oracle_regime(None)   # clear: reanalyze/eval/deploy Bayes-average
 
     # packing data for logging
     train_logs = {
@@ -302,11 +455,29 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
         'value_loss': (weights * value_loss).mean().item(),
     }
 
+    train_logs['bc_loss'] = (weights * bc_loss).mean().item()
+    train_logs['reference_frac'] = reference_flag_t.mean().item()
+    if getattr(model, "_head_diversity", None) is not None:
+        train_logs['head_diversity'] = model._head_diversity.item()
+    # reward-weighted-BC monitoring over reference & in-trajectory steps
+    _pop = ((reference_flag_t.view(-1, 1, 1) > 0.5)
+            & (mask_batch.unsqueeze(-1) > 0.5)).expand_as(returns_to_go_t)
+    if bool(_pop.any()):
+        train_logs['G_t_mean'] = returns_to_go_t[_pop].mean().item()
+        train_logs['G_t_std'] = returns_to_go_t[_pop].std().item()
+        train_logs['bc_weight_mean'] = bc_weight[_pop].mean().item()
+        for g in range(5):
+            gp = _pop & (regime_id_t == g).view(-1, 1, 1)
+            if bool(gp.any()):
+                train_logs[f'bc_weight_regime_{g}'] = bc_weight[gp].mean().item()
     if config.consistency_coeff > 0:
         train_logs['consistency_loss'] = (weights * consistency_loss).mean().item()
     if belief_total is not None:
         train_logs['belief_loss'] = belief_total.item()
     train_logs['lr'] = lr
+    # Watch this: near 0 means the guard is starving the policy of gradient;
+    # near 1 means it is inert and the threshold is too low to matter.
+    train_logs['policy_target_informative_frac'] = policy_informative_frac
     train_logs['batch_future_return'] = batch_future_return
     train_logs['batch_model_diff'] = step_count - batch_model_index
     train_logs['target_model_diff'] = step_count - target_model_index
@@ -604,6 +775,60 @@ def train_sync_serial(config: BaseConfig, summary_writer, model_path=None):
                             f"fidelity/reward_mae_regime_{g}", float(v),
                             step_count)
 
+    ''' per-regime periodic reward probe (2026-07-24): the fork's test_worker
+    logs only a pooled, agent-AVERAGED test/mean_score -- not comparable to the
+    external baselines' probe, which logs per-regime, agent-SUMMED
+    eval/return_mean + eval/return_regime_{g}. This probe closes that gap so the
+    mazero reward curve overlays the baselines on the shared (env-steps) axis.
+    Same cadence + guard as the fidelity probe. One mixed-regime batch search
+    (reward_episodes per regime) keeps the eval cheap. '''
+    run_reward_probe = None
+    if getattr(config, "case", None) == "relation":
+        env_cfg = getattr(config, "env_cfg_override", None)
+        if env_cfg is not None:
+            from hyper_mve.utils.schemas import get_regime_family as _grf
+
+            reward_grid = tuple(range(_grf(env_cfg).size))
+            _train_ids = getattr(env_cfg, "train_regime_ids", None)
+            reward_seen_ids = (set(reward_grid) if _train_ids is None
+                               else {int(i) for i in _train_ids})
+            reward_probe_rng = np.random.RandomState(2024)
+
+            def run_reward_probe(reward_episodes=2):
+                # test() sets model.eval() + model.to(device); pass the LIVE
+                # device so it stays on GPU, and restore train mode after.
+                was_training = model.training
+                probe_device = next(model.parameters()).device
+                regimes_per_env = [g for g in reward_grid
+                                   for _ in range(reward_episodes)]
+                try:
+                    tlog, _ = test(
+                        config, model, step_count, len(regimes_per_env),
+                        np_random=reward_probe_rng, pin_g=regimes_per_env,
+                        sum_agents=True, verbose=False, device=probe_device)
+                finally:
+                    if was_training:
+                        model.train()
+                scores = tlog['scores']
+                per_regime = {}
+                for idx, g in enumerate(regimes_per_env):
+                    per_regime.setdefault(int(g), []).append(float(scores[idx]))
+                per_regime = {g: float(np.mean(v)) for g, v in per_regime.items()}
+                for g, v in per_regime.items():
+                    summary_writer.add_scalar(f"eval/return_regime_{g}", v, step_count)
+                vals = list(per_regime.values())
+                summary_writer.add_scalar(
+                    "eval/return_mean", float(np.mean(vals)) if vals else 0.0,
+                    step_count)
+                seen = [v for g, v in per_regime.items() if g in reward_seen_ids]
+                unseen = [v for g, v in per_regime.items() if g not in reward_seen_ids]
+                if seen:
+                    summary_writer.add_scalar(
+                        "eval/return_seen", float(np.mean(seen)), step_count)
+                if unseen:
+                    summary_writer.add_scalar(
+                        "eval/return_unseen", float(np.mean(unseen)), step_count)
+
     ''' training loop '''
 
     transitions_collected = 0
@@ -667,6 +892,8 @@ def train_sync_serial(config: BaseConfig, summary_writer, model_path=None):
                     shared_storage.add_test_logs(test_log)
                     if run_fidelity_probe is not None:
                         run_fidelity_probe()
+                    if run_reward_probe is not None:
+                        run_reward_probe()
                 timer.stop('eval')
 
                 train_logs['Tc_perstep'] = timer.sum('collect') / (step_count + 1)

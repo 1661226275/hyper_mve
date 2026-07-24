@@ -15,8 +15,9 @@ Contract:
     the preset family (``reset(options={"g": g})``) on its OWN env instance —
     probe episodes never touch the training env nor count into the budget;
   * TB scalars, all keyed by **cumulative env steps** (the cross-method
-    x-axis): ``eval/return_mean``, ``eval/return_g{g}``, ``eval/return_seen``,
-    ``eval/return_unseen``.
+    x-axis): ``eval/return_mean``, ``eval/return_regime_{g}``,
+    ``eval/return_seen``, ``eval/return_unseen`` (tag names identical to the
+    fork's periodic reward probe + the final eval report).
 
 The first ``maybe_run`` call always fires (near-init anchor point for log-x
 curves); afterwards the cadence aligns to ``every_env_steps`` multiples, or to
@@ -125,7 +126,7 @@ class PeriodicEvalProbe:
         for g in self._grid:
             rets = [self._one_episode(g, n) for _ in range(self._episodes)]
             per_regime[g] = float(np.mean(rets)) if rets else 0.0
-            self._writer.add_scalar(f"{self._prefix}/return_g{g}", per_regime[g], env_steps)
+            self._writer.add_scalar(f"{self._prefix}/return_regime_{g}", per_regime[g], env_steps)
         vals = list(per_regime.values())
         self._writer.add_scalar(f"{self._prefix}/return_mean",
                                 float(np.mean(vals)) if vals else 0.0, env_steps)

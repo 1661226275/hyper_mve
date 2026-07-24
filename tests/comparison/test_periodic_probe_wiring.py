@@ -17,7 +17,7 @@ import pytest
 
 
 _CANDIDATE_TAGS = (
-    b"eval/return_mean", b"eval/return_g0", b"eval/return_seen",
+    b"eval/return_mean", b"eval/return_regime_0", b"eval/return_seen",
     b"fidelity/reward_mae", b"fidelity/reward_mae_regime_0",
 )
 

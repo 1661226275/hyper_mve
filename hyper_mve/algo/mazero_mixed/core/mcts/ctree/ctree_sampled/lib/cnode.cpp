@@ -237,9 +237,9 @@ namespace tree
 
     //*********************************************************
 
-    CTree::CTree(int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, CNode *node_pool_ptr, unsigned int seed, float rho, float lam, int select_mode)
+    CTree::CTree(int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, CNode *node_pool_ptr, unsigned int seed, float rho, float lam, int select_mode, int root_cover_mode)
         : gen(seed), agent_num(agent_num), action_space_size(action_space_size), sampled_times(sampled_times), tot_nodes(0),
-          select_mode(select_mode),
+          select_mode(select_mode), root_cover_mode(root_cover_mode),
           rho(rho), lam(lam),
           node_pool_ptr(node_pool_ptr), root(node_pool_ptr),
           minmax_mean(tree_value_stat_delta_lb),
@@ -291,15 +291,116 @@ namespace tree
             node->pred_value_vec[i] = value_vec[i];
         }
 
-        // compute beta_hat via beta sampling
-        std::map<long, float> beta_hat;
-        std::map<long, std::vector<int>> action_map;
         std::vector<std::discrete_distribution<>> dists;
         dists.reserve(this->agent_num);
         for (int i = 0; i < this->agent_num; ++i)
         {
             dists.push_back(std::discrete_distribution<>(&beta(i, 0), &beta(i + 1, 0)));
         }
+
+        // ---- root "star" cover (root_cover_mode != 0) -------------------
+        // Upstream samples root children from beta, which is the policy prior
+        // blended with Dirichlet noise. Under a collapsed prior those draws
+        // dedup to 1-3 distinct joints, and since select_child_decoupled can
+        // only pick actions that are `present` among the children, the search
+        // never even considers the rest of the action space -- the prior gates
+        // its own correction.
+        //
+        // Instead: for each agent i, draw ONE anchor for the other agents and
+        // hold it fixed while enumerating all A of agent i's actions. A fixed
+        // anchor within a root is Common Random Numbers -- agent i's A
+        // candidates are compared against an identical partner action, so the
+        // differences between them carry no sampling noise. The anchor is
+        // redrawn per root, so the joint space is still covered across
+        // training. The greedy joint is included explicitly because it is what
+        // the policy would actually execute and must always be evaluated.
+        // (This is the retired MVEPlanner's scheme, with MCTS doing the
+        // evaluation instead of hand-rolled rollouts.)
+        if (node->is_root && this->root_cover_mode != 0)
+        {
+            std::vector<std::vector<int>> cover;
+            std::set<long> seen;
+            cover.reserve(1 + this->agent_num * this->action_space_size);
+
+            // greedy joint: argmax of the (noise-free) policy per agent
+            std::vector<int> greedy(this->agent_num, 0);
+            for (int i = 0; i < this->agent_num; ++i)
+            {
+                int best = 0;
+                for (int a = 1; a < this->action_space_size; ++a)
+                    if (policy_probs(i, a) > policy_probs(i, best))
+                        best = a;
+                greedy[i] = best;
+            }
+            long gkey = 0;
+            for (int i = 0; i < this->agent_num; ++i)
+                gkey = gkey * 23333 + greedy[i];
+            cover.push_back(greedy);
+            seen.insert(gkey);
+
+            // per-agent enumeration against a shared CRN anchor
+            for (int i = 0; i < this->agent_num; ++i)
+            {
+                std::vector<int> anchor(this->agent_num, 0);
+                for (int j = 0; j < this->agent_num; ++j)
+                    anchor[j] = (j == i) ? 0 : dists[j](this->gen);
+
+                for (int a = 0; a < this->action_space_size; ++a)
+                {
+                    // Deterministic enumeration can reach actions that
+                    // sampling never could. beta is masked by the legal-action
+                    // list upstream, so beta == 0 marks an illegal action;
+                    // skipping keeps the fork honest for masked envs and
+                    // avoids a 0-probability child.
+                    if (beta(i, a) <= 0.f)
+                        continue;
+                    std::vector<int> joint = anchor;
+                    joint[i] = a;
+                    long key = 0;
+                    for (int j = 0; j < this->agent_num; ++j)
+                        key = key * 23333 + joint[j];
+                    if (seen.insert(key).second)
+                        cover.push_back(joint);
+                }
+            }
+
+            node->num_children = (int)cover.size();
+            node->children.reserve(node->num_children);
+            node->children_action.reserve(node->num_children);
+            for (auto &sampled_action : cover)
+            {
+                float beta_prob = 1.0, pred_prob = 1.0, prior = 1.0;
+                for (int i = 0; i < this->agent_num; ++i)
+                {
+                    beta_prob *= beta(i, sampled_action[i]);
+                    pred_prob *= policy_probs(i, sampled_action[i]);
+                    if (noise_eps > 0)
+                        prior *= policy_probs(i, sampled_action[i]) * (1 - noise_eps) + noises(i, sampled_action[i]) * noise_eps;
+                    else
+                        prior *= policy_probs(i, sampled_action[i]);
+                }
+                // These children were enumerated, not sampled, so there is no
+                // sampling frequency to correct for: set beta_hat == beta so
+                // the exported importance ratio (beta_hat/beta * pred_prob) is
+                // exactly pred_prob, and assign `prior` DIRECTLY rather than
+                // scaling it by beta_hat/beta. The division upstream is safe
+                // only because std::discrete_distribution can never draw a
+                // zero-probability action; enumeration can reach a beta that
+                // underflowed to 0 in float32, and dividing there would emit
+                // inf/NaN into every downstream visit count.
+                beta_prob = std::max(beta_prob, 1e-12f);
+                new (this->node_pool_ptr + this->tot_nodes) CNode(this->agent_num, prior, pred_prob, beta_prob, beta_prob, false, this->rho, this->lam);
+                ++(this->tot_nodes);
+                node->children.push_back(this->node_pool_ptr + this->tot_nodes - 1);
+                node->children_action.push_back(sampled_action);
+            }
+            return;
+        }
+        // ---- end root cover ---------------------------------------------
+
+        // compute beta_hat via beta sampling
+        std::map<long, float> beta_hat;
+        std::map<long, std::vector<int>> action_map;
         for (int k = 0; k < sampled_times; ++k)
         {
             long key = 0;
@@ -695,7 +796,7 @@ namespace tree
 
     //*********************************************************
 
-    CTree_batch::CTree_batch(int root_num, int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, unsigned int random_seed, float rho, float lam, int select_mode)
+    CTree_batch::CTree_batch(int root_num, int agent_num, int action_space_size, int sampled_times, int simulation_num, float tree_value_stat_delta_lb, unsigned int random_seed, float rho, float lam, int select_mode, int root_cover_mode)
     {
         /*
         Overview:
@@ -704,7 +805,20 @@ namespace tree
         this->root_num = root_num;
         this->agent_num = agent_num;
         this->action_space_size = action_space_size;
-        this->pool_size_per_root = sampled_times * (simulation_num + 2);
+        // The root's deterministic cover (root_cover_mode != 0) can hold up to
+        // 1 + agent_num * action_space_size children, which may exceed
+        // sampled_times; size the pool for whichever branch is wider so the
+        // node pool cannot overflow regardless of how the caller configures it.
+        {
+            int max_root_children = sampled_times;
+            if (root_cover_mode != 0)
+            {
+                int cover_max = 1 + agent_num * action_space_size;
+                if (cover_max > max_root_children)
+                    max_root_children = cover_max;
+            }
+            this->pool_size_per_root = max_root_children * (simulation_num + 2);
+        }
         this->thread_num = 1;
 
         // allocate memory
@@ -717,7 +831,7 @@ namespace tree
         {
             auto ptr_i = this->node_pool + i * this->pool_size_per_root;
             unsigned int seed_i = random_seed * 2333 + i;
-            new (this->trees + i) CTree(agent_num, action_space_size, sampled_times, simulation_num, tree_value_stat_delta_lb, ptr_i, seed_i, rho, lam, select_mode);
+            new (this->trees + i) CTree(agent_num, action_space_size, sampled_times, simulation_num, tree_value_stat_delta_lb, ptr_i, seed_i, rho, lam, select_mode, root_cover_mode);
         }
     }
 

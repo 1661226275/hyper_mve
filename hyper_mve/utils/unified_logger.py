@@ -1,13 +1,16 @@
 """UnifiedLogger — the single TensorBoard funnel for ALL experimental scalars.
 
-Realignment lock (2026-07-17): the canonical x-axis for every scalar of every
-algorithm is **train_steps** (gradient-update rounds). Algorithms that
-natively count env steps either declare an env→train ratio
-(:meth:`UnifiedLogger.declare_ratio`) or advance the train counter explicitly
-(:meth:`UnifiedLogger.advance`); every emit also records
-``progress/env_steps`` at the same x, so either axis is recoverable post-hoc
-(this replaces the two contradictory converters that used to live in
-``plot_eval_result.py`` and ``make_baseline_comparison.py``).
+Realignment lock (2026-07-24): the canonical x-axis for every scalar of every
+algorithm is **env_steps** (cumulative environment transitions). Different
+algorithms take a different number of gradient updates per env step, so only
+the env-step axis aligns them on the shared 1M-env-step budget. The
+train-native fork maps its gradient-step x to env steps via a self-calibrated
+env→train ratio (from ``train/transitions_collected``); env-native callers
+(the ported baselines + their eval probes) key on env steps directly. Every
+emit also records ``progress/train_steps`` (and ``progress/env_steps``) at the
+same x, so either axis is recoverable post-hoc (this replaces the two
+contradictory converters that used to live in ``plot_eval_result.py`` and
+``make_baseline_comparison.py``).
 
 Tag schema (enforced by convention, not assertion):
 
@@ -116,21 +119,36 @@ class UnifiedLogger:
     def log_scalar(self, tag: str, value: float, *,
                    train_step: Optional[int] = None,
                    env_step: Optional[int] = None) -> None:
-        """Write one scalar at the canonical x. Exactly ONE step kwarg."""
+        """Write one scalar at the canonical x = ENV steps. Exactly ONE step kwarg.
+
+        The canonical x-axis is env_steps (see the module docstring): only that
+        axis aligns algorithms with different env-steps-per-gradient-step ratios
+        on the shared 1M-env-step budget. ``progress/train_steps`` is emitted as
+        the recoverable companion.
+        """
         if (train_step is None) == (env_step is None):
             raise ValueError("pass exactly one of train_step= / env_step=")
         if env_step is not None:
+            # env-native caller (baselines + PeriodicEvalProbe): x IS env steps.
             self.set_progress(env_steps=int(env_step))
-            x = self.to_train_step(int(env_step))
-            # env-native emissions advance the canonical counter too, so a
-            # later default-x emit (e.g. the final eval report) lands at the
-            # run's end rather than at 0
-            self.set_progress(train_steps=x)
+            x = int(env_step)
+            if self._ratio:
+                self.set_progress(
+                    train_steps=int(math.ceil(int(env_step) / self._ratio)))
         else:
-            x = int(train_step)
-            self.set_progress(train_steps=x)
+            # train-native caller (the fork): map its gradient-step x to env
+            # steps via the self-calibrated ratio (train/transitions_collected).
+            # round(train_step * ratio) is monotonic in train_step, so emits
+            # within one collect-burst don't collapse onto a single x.
+            self.set_progress(train_steps=int(train_step))
+            if self._ratio:
+                x = int(round(int(train_step) * self._ratio))
+            else:
+                x = int(self._env_steps)  # until the first transitions_collected
+            self.set_progress(env_steps=x)
         self._writer.add_scalar(tag, float(value), x)
         self._writer.add_scalar("progress/env_steps", float(self._env_steps), x)
+        self._writer.add_scalar("progress/train_steps", float(self._train_steps), x)
 
     def log_scalars(self, scalars: Mapping[str, float], *,
                     train_step: Optional[int] = None,
@@ -143,7 +161,9 @@ class UnifiedLogger:
                         env_step: Optional[int] = None) -> None:
         """Emit the eval/* scalar family from a rel-v1 EvalReport."""
         if train_step is None and env_step is None:
-            train_step = self._train_steps
+            # canonical axis is env_steps: land the final point at cumulative
+            # env steps (~budget) rather than the train-step high-water mark.
+            env_step = self._env_steps
         scalars = {
             "eval/return_mean": report.return_mean,
             "eval/return_seen": report.return_zero_shot_seen,
@@ -157,7 +177,7 @@ class UnifiedLogger:
         self.log_scalars(scalars, train_step=train_step, env_step=env_step)
         self._writer.add_scalar(
             "progress/wall_s", time.time() - self._t0,
-            self._train_steps,
+            self._env_steps,
         )
 
     # ------------------------------------- SummaryWriter duck-type surface

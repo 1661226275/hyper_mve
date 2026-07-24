@@ -11,7 +11,8 @@ from gymnasium.utils import seeding
 from core.config import BaseConfig
 from core.mcts import SampledMCTS
 from core.game import GameHistory
-from core.utils import prepare_observation_lst, concat_with_zero_padding, LinearSchedule
+from core.utils import (prepare_observation_lst, concat_with_zero_padding,
+                        LinearSchedule, policy_target_informative)
 
 
 class ReanalyzeWorker(object):
@@ -74,6 +75,21 @@ class ReanalyzeWorker(object):
         td_steps_lst = []   # off-policy correction
         subjective = getattr(self.config, "subjective_model", False)
         belief_lst = []     # stored beliefs aligned with value_obs positions
+        # value_hard_select routes train.py's PREDICTION-side value to the
+        # true-regime head only (v = v_{g_true}), but this bootstrap TARGET was
+        # still built from a plain initial_inference() call that never sets
+        # set_oracle_regime -- it silently fell through to the Bayes-averaged
+        # value (see subjective_model.py's _predict_value fallthrough comment).
+        # So the "clean" hard-selected prediction was being trained to match a
+        # belief-contaminated target: in the aliased regimes (g2/g3), where
+        # belief confidently collapses onto the WRONG symmetric partner, the
+        # bootstrap value baked into the target is that wrong regime's value,
+        # not g2/g3's own -- undermining the fix at exactly the regimes it was
+        # meant to help. g_true_lst mirrors belief_lst's bootstrap_index
+        # alignment (not state_index) so the oracle regime always matches the
+        # state initial_inference is actually being run on.
+        value_hard_select = getattr(self.config, "value_hard_select", False)
+        g_true_lst = []     # oracle regime aligned with value_obs positions
 
         for idx, game, state_index in zip(indices, games, game_pos_lst):
             traj_len = len(game)
@@ -100,12 +116,16 @@ class ReanalyzeWorker(object):
                     obs = game_obs[beg_index:end_index]
                     if subjective:
                         belief_lst.append(game.beliefs[bootstrap_index])
+                        if value_hard_select:
+                            g_true_lst.append(game.g_trues[bootstrap_index])
                 else:
                     value_mask.append(0)
                     legal_actions_lst.append(game.legal_actions[0])
                     obs = self.zero_obs
                     if subjective:
                         belief_lst.append(game.beliefs[0])
+                        if value_hard_select:
+                            g_true_lst.append(game.g_trues[0])
                 value_obs_lst.append(obs)
 
         # (2) generate target reward & value from reanalyzing
@@ -120,8 +140,14 @@ class ReanalyzeWorker(object):
             self.model.set_belief(
                 torch.from_numpy(np.asarray(belief_lst)).to(self.device).float()
             )
+            if value_hard_select:
+                self.model.set_oracle_regime(
+                    torch.from_numpy(np.asarray(g_true_lst)).to(self.device).long()
+                )
         with autocast():
             network_output = self.model.initial_inference(value_obs_tensor)
+        if subjective and value_hard_select:
+            self.model.set_oracle_regime(None)  # clear: don't leak into later calls
 
         # use the root values from MCTS
         if self.config.use_root_value:
@@ -342,6 +368,8 @@ class ReanalyzeWorker(object):
         obs_lst, action_lst, mask_lst = [], [], []
         belief_ctx_lst, g_true_lst, belief_hidden_lst = [], [], []
         future_return_lst, model_index_lst = [], []
+        reference_flag_lst = []
+        returns_to_go_lst, regime_id_lst = [], []
         for game, state_index in zip(game_lst, game_pos_lst):
             _obs = game.obs(state_index, self.config.num_unroll_steps, padding=True)
             _actions = game.actions[state_index:state_index + self.config.num_unroll_steps + 1].tolist()
@@ -355,6 +383,26 @@ class ReanalyzeWorker(object):
             mask_lst.append(_mask)
             future_return_lst.append(np.sum(game.rewards[state_index:]))
             model_index_lst.append(game.model_indices[state_index])
+            # per-episode reference flag at the unroll start (constant within an
+            # episode, so it labels the whole K+1 unroll window; padded steps are
+            # masked out downstream). Absent on histories predating this field.
+            reference_flag_lst.append(
+                float(game.reference_flags[state_index])
+                if len(getattr(game, "reference_flags", [])) > state_index else 0.0)
+            # per-agent full-episode return-to-go over the K+1 window (padded) and
+            # the regime id at the unroll start — for the reward-weighted BC target.
+            K1, Na = self.config.num_unroll_steps + 1, self.config.num_agents
+            if hasattr(game, "returns_to_go") and len(game.returns_to_go) > state_index:
+                _rtg = np.asarray(game.returns_to_go[state_index:state_index + K1],
+                                  dtype=np.float32)
+                if len(_rtg) < K1:
+                    _rtg = np.concatenate(
+                        [_rtg, np.zeros((K1 - len(_rtg), Na), dtype=np.float32)], axis=0)
+                _rg = int(game.regime_ids[state_index])
+            else:
+                _rtg, _rg = np.zeros((K1, Na), dtype=np.float32), -1
+            returns_to_go_lst.append(_rtg)
+            regime_id_lst.append(_rg)
             if subjective:
                 # subjective context at the unroll start (frozen through unroll)
                 belief_ctx_lst.append(game.beliefs[state_index])
@@ -362,7 +410,11 @@ class ReanalyzeWorker(object):
                 belief_hidden_lst.append(game.belief_hiddens[state_index])
         obs_lst = prepare_observation_lst(obs_lst, self.config.image_based)
         # inputs_shape: (B, N, (S+K)xC, W, H) | (B, K+1, N) | (B, K+1) | (B,) | (B,)
-        inputs_batch = [obs_lst, action_lst, mask_lst, indices_lst, weights_lst]
+        # fixed positions: [5]=reference_flag, [6]=returns_to_go (B,K+1,N),
+        # [7]=regime_id (B,); the subjective block follows at [8:11] (train.py
+        # unpacks by these fixed positions).
+        inputs_batch = [obs_lst, action_lst, mask_lst, indices_lst, weights_lst,
+                        reference_flag_lst, returns_to_go_lst, regime_id_lst]
         if subjective:
             inputs_batch += [belief_ctx_lst, g_true_lst, belief_hidden_lst]
         for i in range(len(inputs_batch)):
@@ -425,6 +477,16 @@ class ReanalyzeWorker(object):
         batch_sampled_adv = (batch_sampled_adv - adv_mean) / (adv_std + 1e-5)
         batch_sampled_adv[~batch_sampled_masks] = 0.
 
+        # (6b) zero-information guard (stage C). Computed AFTER normalization on
+        # purpose: batch_sampled_adv is already divided by the batch-pooled
+        # adv_std, so a per-root spread measured here is inherently relative and
+        # the threshold transfers across arms whose value heads differ in scale.
+        batch_policy_informative = policy_target_informative(
+            batch_sampled_adv, batch_sampled_masks, batch_sampled_policies,
+            getattr(self.config, "policy_target_min_qstd", 0.0),
+            getattr(self.config, "policy_target_min_children", 2),
+        )
+
         # (7) reshape policy data
         batch_sampled_actions = batch_sampled_actions.reshape(B, K + 1, C, N)
         batch_sampled_policies = batch_sampled_policies.reshape(B, K + 1, C)
@@ -432,8 +494,11 @@ class ReanalyzeWorker(object):
         batch_sampled_adv = batch_sampled_adv.reshape(B, K + 1, C, N)
         batch_sampled_masks = batch_sampled_masks.reshape(B, K + 1, C)
 
+        batch_policy_informative = batch_policy_informative.reshape(B, K + 1)
+
         batch_policies = (batch_sampled_actions, batch_sampled_policies,
-                          batch_sampled_imp_ratio, batch_sampled_adv, batch_sampled_masks)
+                          batch_sampled_imp_ratio, batch_sampled_adv, batch_sampled_masks,
+                          batch_policy_informative)
         targets_batch = (batch_rewards, batch_values, batch_policies)
 
         info = (np.mean(future_return_lst), np.mean(model_index_lst), self.last_model_index)

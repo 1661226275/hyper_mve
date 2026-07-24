@@ -60,6 +60,10 @@ def test(
     envs: List[Game] = None,
     np_random: np.random.RandomState = None,
     save_video: bool = False,
+    pin_g: int = None,
+    sum_agents: bool = False,
+    verbose: bool = True,
+    device=None,
 ):
     """evaluation test
     Parameters
@@ -71,11 +75,28 @@ def test(
     test_episodes: int
         number of test episodes
         True -> use tqdm bars
+    pin_g: int | sequence | None
+        None keeps the env's own regime sampling; a scalar forces every temp env
+        into that regime; a per-env sequence forces env i into ``pin_g[i]`` (one
+        mixed-regime batch search). Used by the per-regime periodic reward probe.
+        Eval stays oracle-free (belief inferred from obs, options={"g": g} only
+        pins the environment's regime).
+    sum_agents: bool
+        per-episode score sums the per-agent reward vector (team return, matches
+        the external baselines' probe) instead of averaging over agents. The
+        summed per-episode scores are returned in ``test_logs['scores']``.
+    verbose: bool
+        gate the stdout prints (the periodic probe calls this many times).
     """
 
-    print('Start evaluation for model {}.'.format(counter))
+    if verbose:
+        print('Start evaluation for model {}.'.format(counter))
 
-    device = 'cuda' if (config.selfplay_on_gpu and torch.cuda.is_available()) else 'cpu'
+    # device=None keeps the historical behaviour (temp TestWorker model copy);
+    # the in-training per-regime reward probe passes the LIVE model's device so
+    # test() never yanks the training model onto CPU (selfplay_on_gpu is False).
+    if device is None:
+        device = 'cuda' if (config.selfplay_on_gpu and torch.cuda.is_available()) else 'cpu'
     model.to(device)
     model.eval()
 
@@ -88,8 +109,16 @@ def test(
 
     with torch.no_grad():
         max_episode_steps = envs[0].get_max_episode_steps()
-        # initializations
-        init_obses = [env.reset() for env in envs]
+        # initializations. pin_g may be None (env samples its own regime), a
+        # scalar (all envs -> that regime), or a per-env sequence (one regime
+        # id per env -> a single mixed-regime batch search, which the per-regime
+        # reward probe uses to keep the batch wide + GPU-efficient).
+        if pin_g is None:
+            init_obses = [env.reset() for env in envs]
+        elif isinstance(pin_g, (list, tuple, np.ndarray)):
+            init_obses = [env.reset(g=int(pin_g[i])) for i, env in enumerate(envs)]
+        else:
+            init_obses = [env.reset(g=int(pin_g)) for env in envs]
         dones = np.array([False for _ in range(test_episodes)])
         game_histories = [
             GameHistory(config=config, ray_store_obs=False) for _ in range(test_episodes)]
@@ -162,7 +191,8 @@ def test(
                 next_obs, reward, done, info = envs[i].step(action)
                 dones[i] = done
                 eps_steps_lst[i] += 1
-                eps_reward_lst[i] += float(np.mean(reward))
+                eps_reward_lst[i] += float(np.sum(reward) if sum_agents
+                                           else np.mean(reward))
 
                 game_histories[i].store_transition(action, reward, next_obs)
 
@@ -182,6 +212,13 @@ def test(
         'max_score': eps_reward_lst.max(),
         'min_score': eps_reward_lst.min(),
     }
+    if sum_agents:
+        # per-episode team returns for the per-regime reward probe. Gated on
+        # sum_agents (only the probe sets it) because the default test_worker
+        # path forwards test_logs to core/log.py::_log, which logs one SCALAR
+        # per key — an array here crashes that loop. The probe reads this back
+        # directly and never forwards test_logs to _log.
+        test_logs['scores'] = eps_reward_lst.copy()
     if config.case in ['smac', 'gfootball']:
         test_logs['win_rate'] = np.mean(battle_won_lst)
 
@@ -189,7 +226,8 @@ def test(
                ''.format(test_logs['test_counter'], config.env_name, test_logs["mean_score"], test_logs["max_score"], test_logs["min_score"], test_logs["std_score"])
     if 'win_rate' in test_logs:
         test_msg += ' | WinRate: {:.2f}'.format(test_logs['win_rate'])
-    print(test_msg)
+    if verbose:
+        print(test_msg)
 
     return test_logs, step
 

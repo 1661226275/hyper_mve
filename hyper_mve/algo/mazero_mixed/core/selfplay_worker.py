@@ -325,6 +325,8 @@ class DataWorker(object):
                     # store data
                     self.game_histories[i].store_transition(action, reward, next_obs, legal_actions_lst[i], self.last_model_index)
                     self.game_histories[i].store_search_stats(root_value, pred_value, sampled_actions, sampled_policy, sampled_qvalues)
+                    self.game_histories[i].store_reference(bool(self.reference_flags[i]))
+                    self.game_histories[i].store_regime(int(self.envs[i].oracle_g()))
                     if blend_np is not None:
                         self.game_histories[i].store_context(
                             blend_np[i], int(g_true_arr[i]), prev_hidden_np[i]

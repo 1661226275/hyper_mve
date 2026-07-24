@@ -445,3 +445,64 @@ class Timer:
         self.start_times.clear()
         self.durations.clear()
         self.block_counts.clear()
+
+
+def policy_target_informative(adv_norm, masks, visit_policies,
+                              min_qstd=0.0, min_children=2):
+    """Which transitions carry a policy target worth learning from? -> (rows,)
+
+    Stage C of the prior-collapse fix — the modern analogue of the retired
+    architecture's ``planner_on`` mask, which excluded self-distilled targets
+    from the policy CE ("the zero-information fixed point").
+
+    Under ``--policy_target_type q_softmax`` the target is
+    ``softmax(adv/temp)`` over the root's children. When those advantages are
+    flat, that softmax is near-UNIFORM — and a uniform target is not a weak
+    gradient, it is a gradient actively pushing the policy toward uniform. The
+    retired planner guarded the same case with ``mve_qstd_floor`` (uniform
+    fallback when candidate returns are noise-level flat).
+
+    Measured live: in relation/g1 (``mutual_comp``, zero-sum) the advantage
+    spread is ~0.29 of the batch-pooled spread on the main method, so ~20% of
+    training transitions would contribute near-uniform targets.
+
+    ``adv_norm`` is ``(rows, C, N)`` ALREADY divided by the batch-pooled
+    per-agent ``adv_std``. That is what makes ``min_qstd`` scale-free: a value
+    of 0.4 means "this root's advantage spread is under 40% of the batch-typical
+    spread", which transfers across architectures and across training as the
+    value head sharpens. An ABSOLUTE threshold would not: the Bayes-averaged
+    head runs 2.6x wider than the single head, so one fixed number masks g1
+    alone on one arm and every regime on the other.
+
+    ``min_qstd <= 0`` disables the guard, returning all-ones — bit-exact with
+    not applying it at all.
+    """
+    import warnings
+
+    import numpy as np
+
+    rows = adv_norm.shape[0]
+    if min_qstd <= 0:
+        return np.ones(rows, dtype=np.float32)
+
+    m = np.asarray(masks, dtype=bool)                       # (rows, C)
+    # a root with too few live children cannot express a preference at all
+    n_children = m.sum(axis=1)                              # (rows,)
+    # ...and children that were never visited carry no evaluation
+    n_visited = ((np.asarray(visit_policies) > 0) & m).sum(axis=1)
+
+    a = np.array(adv_norm, dtype=np.float64)
+    a[~m] = np.nan
+    # A fully-masked row is an all-NaN slice: nanstd warns and returns NaN,
+    # which nan_to_num maps to 0 (and n_children == 0 rejects it anyway).
+    # Expected and handled, so don't let it spam the training log.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        # spread over the sampled children, then the agent-mean; a target is
+        # uninformative only when it is flat for EVERY agent, so the mean (not
+        # the min) is the right reduction.
+        row_std = np.nanstd(a, axis=1).mean(axis=-1)        # (rows,)
+    row_std = np.nan_to_num(row_std, nan=0.0)
+
+    ok = (n_children >= min_children) & (n_visited >= 2) & (row_std >= min_qstd)
+    return ok.astype(np.float32)
