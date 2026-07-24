@@ -238,7 +238,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             from hyper_mve.ablation.arms import apply_arm_argv
 
             argv = apply_arm_argv(argv, self._ablation)
-        if self._ablation == "ref_bc_anneal_scaled":
+        if self._ablation and "anneal_scaled" in self._ablation:
             # ref_bc's hardcoded 28000-step anneal validated at 600K
             # (training_steps=37500) is 74.7% of that budget; preserve the
             # FRACTION rather than the absolute count so longer budgets don't

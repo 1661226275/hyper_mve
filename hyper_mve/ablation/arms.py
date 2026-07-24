@@ -46,6 +46,7 @@ ARMS: tuple[str, ...] = (
     "ref_bc_rw",
     "ref_bc_hardval",
     "ref_bc_anneal_scaled",
+    "ref_bc_anneal_scaled_no_subjective",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -151,6 +152,15 @@ _ARGV_REMOVE["ref_bc_hardval"] = _ARGV_REMOVE["ref_bc"]
 # override after apply_arm_argv runs, so it wins regardless of what's here.
 _ARGV_ADD["ref_bc_anneal_scaled"] = _ARGV_ADD["ref_bc"]
 _ARGV_REMOVE["ref_bc_anneal_scaled"] = _ARGV_REMOVE["ref_bc"]
+
+# 2026-07-24 Module-1 ablation matched to the anneal-scaled MAIN method: plain
+# MAZero (drop --subjective_model) carrying the SAME budget-proportional BC
+# anneal (applied in runner._build_game_config for any arm whose name contains
+# "anneal_scaled"), so the ablation changes ONLY the subjective module, not the
+# BC schedule. This is the fair "revert to baseline MAZero" cell at 1M.
+_ARGV_ADD["ref_bc_anneal_scaled_no_subjective"] = _ARGV_ADD["ref_bc"]
+_ARGV_REMOVE["ref_bc_anneal_scaled_no_subjective"] = (
+    _ARGV_REMOVE["ref_bc"] + _ARGV_REMOVE["no_subjective"])
 
 
 def _validate(arm: str) -> str:
