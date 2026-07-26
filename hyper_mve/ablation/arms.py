@@ -47,6 +47,7 @@ ARMS: tuple[str, ...] = (
     "ref_bc_hardval",
     "ref_bc_anneal_scaled",
     "ref_bc_anneal_scaled_no_subjective",
+    "ref_bc_anneal_scaled_decoupled",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -161,6 +162,17 @@ _ARGV_REMOVE["ref_bc_anneal_scaled"] = _ARGV_REMOVE["ref_bc"]
 _ARGV_ADD["ref_bc_anneal_scaled_no_subjective"] = _ARGV_ADD["ref_bc"]
 _ARGV_REMOVE["ref_bc_anneal_scaled_no_subjective"] = (
     _ARGV_REMOVE["ref_bc"] + _ARGV_REMOVE["no_subjective"])
+
+# 2026-07-26 deployment-cost cell: the anneal-scaled main method with the
+# ORIGINAL per-agent decoupled selection re-enabled (the base argv no longer
+# passes --decoupled_selection, since centralized/joint search is now the
+# user-locked default). Measures what the complexity reduction of centralized
+# action broadcasting actually costs, on the same budget/logging as the main
+# run. First measurement (seed0, 1M): centralized 56.51 vs decoupled 67.49
+# under the older logging -- this arm reproduces the pair apples-to-apples.
+_ARGV_ADD["ref_bc_anneal_scaled_decoupled"] = (
+    _ARGV_ADD["ref_bc"] + ("--decoupled_selection",))
+_ARGV_REMOVE["ref_bc_anneal_scaled_decoupled"] = _ARGV_REMOVE["ref_bc"]
 
 
 def _validate(arm: str) -> str:
