@@ -48,6 +48,7 @@ ARMS: tuple[str, ...] = (
     "ref_bc_anneal_scaled",
     "ref_bc_anneal_scaled_no_subjective",
     "ref_bc_anneal_scaled_decoupled",
+    "ref_bc_anneal_scaled_hardval_decoupled",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -173,6 +174,24 @@ _ARGV_REMOVE["ref_bc_anneal_scaled_no_subjective"] = (
 _ARGV_ADD["ref_bc_anneal_scaled_decoupled"] = (
     _ARGV_ADD["ref_bc"] + ("--decoupled_selection",))
 _ARGV_REMOVE["ref_bc_anneal_scaled_decoupled"] = _ARGV_REMOVE["ref_bc"]
+
+# 2026-07-26 (user request): the hardval configuration carried to 1M with the
+# budget-proportional anneal and the original decoupled selection -- i.e. the
+# combination that has never been run. Its two ingredients were each validated
+# separately and are orthogonal:
+#   value_hard_select : trains the TRUE-regime value head (train-time g_true,
+#                       same disclosed CTDE envelope as belief supervision;
+#                       deploy still Bayes-averages). At 600K it lifted
+#                       head_diversity 0.002 -> 0.318 but NOT return
+#                       (62.56 vs plain ref_bc's 66.59).
+#   anneal_scaled     : preserves the validated 74.7% BC-anneal fraction at any
+#                       budget (recovered 49.82 -> 67.49 at 1M).
+# Registry-protocol reference points at 1M: anneal_scaled decoupled 67.49,
+# centralized 56.51. (The ~72-74 figure sometimes quoted for hardval comes from
+# value_deploy_probe.py's own eval protocol, not the registry protocol.)
+_ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] = (
+    _ARGV_ADD["ref_bc"] + ("--value_hard_select", "--decoupled_selection"))
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled"] = _ARGV_REMOVE["ref_bc"]
 
 
 def _validate(arm: str) -> str:
