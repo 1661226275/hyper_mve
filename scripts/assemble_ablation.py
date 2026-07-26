@@ -38,10 +38,20 @@ def _mean(vals):
 
 
 def _load_diag(run_dir: pathlib.Path):
-    p = run_dir / "eval_diagnostics.json"
-    if not p.exists():
-        return None
-    return json.loads(p.read_text(encoding="utf-8"))
+    """Diagnostics for a run, preferring the reeval file when present.
+
+    Runs trained before the oracle deploy pass landed have no
+    return_per_regime_planner_oracle in their original eval_diagnostics.json;
+    scripts/reeval_checkpoint.py backfills it into eval_diagnostics_reeval.json
+    using the same (deterministic) protocol, so that file supersedes.
+    """
+    for name in ("eval_diagnostics_reeval.json", "eval_diagnostics.json"):
+        p = run_dir / name
+        if p.exists():
+            d = json.loads(p.read_text(encoding="utf-8"))
+            d["_source"] = name
+            return d
+    return None
 
 
 def _regime_mean(d, key):
@@ -80,8 +90,14 @@ def main(argv=None):
     p.add_argument("--registry", default=None)
     p.add_argument("--root", default="results/v5_final")
     p.add_argument("--main-arm", default=None,
-                   help="main subjective arm variant suffix, e.g. ref_bc or "
-                        "ref_bc_anneal_scaled; auto-detected if omitted")
+                   help="ablation arm of the SELECTED method, e.g. "
+                        "ref_bc_anneal_scaled_hardval_decoupled. Required once the "
+                        "registry holds more than one subjective mazero variant "
+                        "(otherwise the last one silently wins).")
+    p.add_argument("--nosubj-arm", default=None,
+                   help="ablation arm of the matched Module-1 control, e.g. "
+                        "ref_bc_anneal_scaled_no_subjective. Auto-detected only if "
+                        "exactly one no_subjective variant is present.")
     p.add_argument("--out", default=None, help="write assembled JSON here")
     args = p.parse_args(argv)
 
@@ -93,13 +109,44 @@ def main(argv=None):
     rows = [json.loads(l) for l in reg_path.read_text().splitlines() if l.strip()]
     mazero = [r for r in rows if r.get("algo") == "mazero_mixed"
               and r.get("status") == "completed"]
-    # main = subjective (variant not ending in _no_subjective); nosubj = the arm.
+    # Role assignment. Inferring "main" as "any variant not ending in
+    # _no_subjective" breaks as soon as the registry holds several subjective
+    # variants (the 2x2 selection screen puts 4 in one file) -- the last row read
+    # would silently become "main". So: match the explicit arm names when given,
+    # and refuse to guess when the choice is ambiguous.
+    def _arm_of(row):
+        return row.get("ablation_cell") or row.get("ablation") or "none"
+
+    subj = [r for r in mazero if not _arm_of(r).endswith("no_subjective")]
+    nosubj = [r for r in mazero if _arm_of(r).endswith("no_subjective")]
+    if args.main_arm is None:
+        arms = sorted({_arm_of(r) for r in subj})
+        if len(arms) > 1:
+            raise SystemExit(
+                f"--main-arm is required: {len(arms)} subjective mazero variants "
+                f"present {arms}. Pass the SELECTED method's arm explicitly."
+            )
+    if args.nosubj_arm is None:
+        narms = sorted({_arm_of(r) for r in nosubj})
+        if len(narms) > 1:
+            raise SystemExit(
+                f"--nosubj-arm is required: {len(narms)} no_subjective variants "
+                f"present {narms}."
+            )
     by_seed: dict[int, dict] = {}
     for r in mazero:
-        seed = int(r["seed"])
-        variant = r.get("variant", "")
-        role = "nosubj" if variant.endswith("no_subjective") else "main"
-        by_seed.setdefault(seed, {})[role] = r
+        arm = _arm_of(r)
+        if args.main_arm is not None and arm == args.main_arm:
+            role = "main"
+        elif args.nosubj_arm is not None and arm == args.nosubj_arm:
+            role = "nosubj"
+        elif args.main_arm is None and not arm.endswith("no_subjective"):
+            role = "main"
+        elif args.nosubj_arm is None and arm.endswith("no_subjective"):
+            role = "nosubj"
+        else:
+            continue  # a screening cell that is neither the method nor its control
+        by_seed.setdefault(int(r["seed"]), {})[role] = r
 
     assembled = {}
     for seed in sorted(by_seed):
@@ -113,6 +160,11 @@ def main(argv=None):
                 out["A1_bayes_mean"], out["A1_bayes_per_regime"] = _regime_mean(d, "return_per_regime_planner")
                 out["A2_argmax_mean"], out["A2_argmax_per_regime"] = _regime_mean(d, "return_per_regime_planner_map")
                 out["A3_prior_mean"], out["A3_prior_per_regime"] = _regime_mean(d, "return_per_regime_prior")
+                # UB: privileged upper bound (true g at deploy) -- diagnostic only.
+                out["UB_oracle_mean"], out["UB_oracle_per_regime"] = _regime_mean(d, "return_per_regime_planner_oracle")
+                if out["UB_oracle_mean"] is not None and out["A1_bayes_mean"] is not None:
+                    out["UB_minus_A1"] = out["UB_oracle_mean"] - out["A1_bayes_mean"]
+                out["diag_source"] = d.get("_source")
             budget = int(main_r.get("total_env_steps", 1_000_000))
             out["head_diversity_back_half"] = head_diversity_back_half(
                 pathlib.Path(main_r["tensorboard_dir"]), budget)
@@ -125,17 +177,25 @@ def main(argv=None):
         assembled[seed] = out
 
     # print a compact table
-    hdr = f"{'seed':>4} {'A1 bayes':>9} {'A2 argmax':>9} {'A3 prior':>9} {'A4 plain':>9} {'A5 prior':>9} {'head_div_bh':>11}"
+    hdr = (f"{'seed':>4} {'A1 bayes':>9} {'A2 argmax':>9} {'A3 prior':>9} "
+           f"{'A4 plain':>9} {'A5 prior':>9} {'UB oracle':>9} {'UB-A1':>7} {'head_div_bh':>11}")
     print(hdr)
     print("-" * len(hdr))
     for seed, o in assembled.items():
-        def f(k):
+        def f(k, w=9):
             v = o.get(k)
-            return f"{v:9.2f}" if isinstance(v, (int, float)) else f"{'--':>9}"
+            return f"{v:{w}.2f}" if isinstance(v, (int, float)) else f"{'--':>{w}}"
         hd = o.get("head_diversity_back_half")
         hd_s = f"{hd:11.5f}" if isinstance(hd, (int, float)) else f"{'--':>11}"
         print(f"{seed:>4} {f('A1_bayes_mean')} {f('A2_argmax_mean')} {f('A3_prior_mean')} "
-              f"{f('A4_plainMAZero_mean')} {f('A5_prior_mean')} {hd_s}")
+              f"{f('A4_plainMAZero_mean')} {f('A5_prior_mean')} {f('UB_oracle_mean')} "
+              f"{f('UB_minus_A1', 7)} {hd_s}")
+    print("\nUB = oracle (true g at deploy): PRIVILEGED upper bound, not a method result.")
+    print("UB-A1 ~ 0  => belief accuracy is not the limiter (value heads are).")
+    print("UB-A1 >> 0 => regime inference is the limiter.")
+    src = {o.get("diag_source") for o in assembled.values() if o.get("diag_source")}
+    if src:
+        print(f"diagnostics source: {', '.join(sorted(src))}")
 
     if args.out:
         pathlib.Path(args.out).write_text(json.dumps(assembled, indent=2), encoding="utf-8")

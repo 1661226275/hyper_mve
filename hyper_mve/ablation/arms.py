@@ -49,6 +49,7 @@ ARMS: tuple[str, ...] = (
     "ref_bc_anneal_scaled_no_subjective",
     "ref_bc_anneal_scaled_decoupled",
     "ref_bc_anneal_scaled_hardval_decoupled",
+    "ref_bc_anneal_scaled_hardval",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -192,6 +193,17 @@ _ARGV_REMOVE["ref_bc_anneal_scaled_decoupled"] = _ARGV_REMOVE["ref_bc"]
 _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] = (
     _ARGV_ADD["ref_bc"] + ("--value_hard_select", "--decoupled_selection"))
 _ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled"] = _ARGV_REMOVE["ref_bc"]
+
+# 2026-07-26 the CENTRALIZED half of the hardval pair -- completes the version
+# selection 2x2 {plain, hardval} x {centralized, decoupled} at 1M/seed0. The
+# base argv is already centralized (no --decoupled_selection), so this arm is
+# the decoupled one minus that single flag.
+#   selection rule: gate on head_diversity (the per-regime heads must actually
+#   be differentiated -- belief_blind scores 62.94 at head_diversity 0.0000, so
+#   return alone cannot identify the right version), then max return.
+_ARGV_ADD["ref_bc_anneal_scaled_hardval"] = (
+    _ARGV_ADD["ref_bc"] + ("--value_hard_select",))
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval"] = _ARGV_REMOVE["ref_bc"]
 
 
 def _validate(arm: str) -> str:

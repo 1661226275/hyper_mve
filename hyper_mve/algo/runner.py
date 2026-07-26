@@ -622,6 +622,40 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         planner_map_mean = (float(np.mean(planner_map_returns_all))
                             if planner_map_returns_all else 0.0)
 
+        # Oracle deploy variant (UB): leaf values come from the TRUE regime's
+        # value head (set_value_deploy("oracle", deploy_g=g)). This is a
+        # PRIVILEGED upper bound, not a method result -- it consumes the true
+        # regime id at deploy time -- and is reported purely as the diagnostic
+        # that attributes any shortfall:
+        #   oracle ~= bayes -> belief accuracy is NOT the limiter; the value
+        #                      heads are (more inference work would not help).
+        #   oracle >> bayes -> regime inference is the limiter.
+        # At 600K/hardval this was oracle 74.24 vs bayes 74.21 (the mean tie hid
+        # a real per-regime structure: g2 +5.2, g3 +3.4, g0 -8.4), so the
+        # per-regime breakdown matters as much as the mean.
+        # The headline return_mean stays the BAYES planner below; nothing here
+        # touches it, info_gating_strict, or set_context_subjective_oracle_leak.
+        planner_oracle_per_regime: dict[int, float] = {}
+        planner_oracle_returns_all: list[float] = []
+        if hasattr(model, "set_value_deploy"):
+            np_random_oracle = np.random.RandomState(12345)
+            try:
+                with torch.no_grad():
+                    for g in regime_grid:
+                        g = int(g)
+                        # deploy_g must be re-pinned per regime
+                        model.set_value_deploy("oracle", deploy_g=g)
+                        o_ret, _o_acts, _o_visits, _o_steps, _o_stats = (
+                            self._rollout_planner(
+                                env_fn, g, n_planner, device, np_random_oracle))
+                        planner_oracle_per_regime[g] = (
+                            float(np.mean(o_ret)) if o_ret else 0.0)
+                        planner_oracle_returns_all.extend(o_ret)
+            finally:
+                model.set_value_deploy("bayes")  # restore trained default
+        planner_oracle_mean = (float(np.mean(planner_oracle_returns_all))
+                               if planner_oracle_returns_all else 0.0)
+
         regime_accuracy = (float(belief_hits) / belief_n) if belief_n else None
         prior_mean = float(np.mean(prior_returns_all)) if prior_returns_all else 0.0
         planner_mean = (float(np.mean(planner_returns_all))
@@ -656,8 +690,14 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             #   A1 Bayes-avg (ours)   = return_per_regime_planner / planner_mean
             #   A2 argmax (MAP head)  = return_per_regime_planner_map / *_map_mean
             #   A3 no-MCTS (prior)    = return_per_regime_prior / prior_mean
+            #   UB oracle (true g)    = return_per_regime_planner_oracle /
+            #                           *_oracle_mean -- PRIVILEGED upper bound,
+            #                           never the method's reported result.
             "return_per_regime_planner_map": dict(planner_map_per_regime),
             "planner_map_return_mean": planner_map_mean,
+            "return_per_regime_planner_oracle": dict(planner_oracle_per_regime),
+            "planner_oracle_return_mean": planner_oracle_mean,
+            "planner_oracle_bayes_gap": planner_oracle_mean - planner_mean,
             "planner_prior_return_gap": planner_mean - prior_mean,
             "prior_logit_margin": float(np.mean(margins)) if margins else 0.0,
             "planner_visit_entropy": float(np.mean(visit_ents)) if visit_ents else 0.0,
