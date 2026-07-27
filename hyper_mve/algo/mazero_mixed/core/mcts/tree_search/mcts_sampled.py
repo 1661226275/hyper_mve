@@ -107,8 +107,35 @@ class SampledMCTS(object):
             # mask policy_probs with legal_action_lst if given
             if legal_actions_lst is not None:
                 batch_beta *= legal_actions_lst
-                # avoid zero denominator when normalized
-                assert ~(np.sum(batch_beta, axis=-1) == 0).sum()
+            # Degenerate-row guard (2026-07-27). A row that is all-zero or
+            # non-finite normalises to nan/inf; the C++ selection below then
+            # divides by a zero visit count and the process dies of SIGFPE with
+            # NO Python traceback (reproduced at mcts_sampled.py:131
+            # trees.batch_selection with a 3x-wide network, whose early logits
+            # can overflow under the inherited lr). The previous guard,
+            # `assert ~(np.sum(batch_beta, axis=-1) == 0).sum()`, was malformed:
+            # `~0` is -1 (truthy), so the assertion passed for exactly the
+            # all-zero case it was meant to catch.
+            # Falls back to the uniform distribution over legal actions. This is
+            # a strict no-op whenever every row is finite and positive, so
+            # healthy runs are bit-for-bit unchanged.
+            _legal = (legal_actions_lst if legal_actions_lst is not None
+                      else np.ones_like(batch_beta))
+            _bad = ((~np.isfinite(batch_beta).all(axis=-1))
+                    | (np.sum(batch_beta, axis=-1) <= 0))
+            if np.any(_bad):
+                batch_beta = np.where(
+                    _bad[..., None], np.asarray(_legal, dtype=batch_beta.dtype),
+                    batch_beta)
+            # policy_probs is handed to the tree separately; sanitize it too.
+            if not np.isfinite(batch_policy_probs).all():
+                batch_policy_probs = np.nan_to_num(
+                    batch_policy_probs, nan=0.0, posinf=0.0, neginf=0.0)
+                _ps = np.sum(batch_policy_probs, axis=-1, keepdims=True)
+                batch_policy_probs = np.where(
+                    _ps > 0, batch_policy_probs / np.maximum(_ps, 1e-12),
+                    np.asarray(_legal, dtype=batch_policy_probs.dtype)
+                    / np.maximum(np.sum(_legal, axis=-1, keepdims=True), 1e-12))
             batch_beta = batch_beta / np.sum(batch_beta, axis=-1, keepdims=True)
 
             batch_rewards = widen(batch_rewards)

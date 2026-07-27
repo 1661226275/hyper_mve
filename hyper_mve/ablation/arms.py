@@ -52,6 +52,7 @@ ARMS: tuple[str, ...] = (
     "ref_bc_anneal_scaled_hardval",
     "ref_bc_anneal_scaled_no_subjective_decoupled",
     "ref_bc_anneal_scaled_hardval_decoupled_big",
+    "ref_bc_anneal_scaled_hardval_decoupled_big2",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -228,6 +229,17 @@ _ARGV_REMOVE["ref_bc_anneal_scaled_no_subjective_decoupled"] = (
 _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_big"] = (
     _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] + ("--model_scale", "3.0"))
 _ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_big"] = _ARGV_REMOVE["ref_bc"]
+
+# 2026-07-27 scale 3.0 (5.25M) crashes with SIGFPE inside the vendored C++ tree
+# (mcts_sampled.py:131 trees.batch_selection) about 60 s into selfplay: the wider
+# net at the inherited lr=0.02 produces a degenerate/NaN root distribution, and
+# the C++ selection then divides by a zero visit count. (The Python guard at
+# mcts_sampled.py:111 is malformed -- `assert ~(...).sum()` is truthy for an
+# all-zero row -- so it does not catch it.) This 2x variant (2.78M, 2.21x the
+# method) is the fallback high-parameter point.
+_ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_big2"] = (
+    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] + ("--model_scale", "2.0"))
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_big2"] = _ARGV_REMOVE["ref_bc"]
 
 
 def _validate(arm: str) -> str:
