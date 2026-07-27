@@ -50,6 +50,7 @@ ARMS: tuple[str, ...] = (
     "ref_bc_anneal_scaled_decoupled",
     "ref_bc_anneal_scaled_hardval_decoupled",
     "ref_bc_anneal_scaled_hardval",
+    "ref_bc_anneal_scaled_no_subjective_decoupled",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -204,6 +205,19 @@ _ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled"] = _ARGV_REMOVE["ref_bc"]
 _ARGV_ADD["ref_bc_anneal_scaled_hardval"] = (
     _ARGV_ADD["ref_bc"] + ("--value_hard_select",))
 _ARGV_REMOVE["ref_bc_anneal_scaled_hardval"] = _ARGV_REMOVE["ref_bc"]
+
+# 2026-07-27 Module-1 ablation control MATCHED to the selected method
+# (ref_bc_anneal_scaled_hardval_decoupled): plain MAZero -- no subjective heads --
+# carrying the same scaled BC anneal AND the same decoupled selection, so the only
+# difference from the method is Module 1 itself.
+# Disclosed asymmetry: removing the subjective module deletes the per-regime value
+# heads, so --value_hard_select has nothing to act on and is necessarily absent
+# here. The control is "plain MAZero + same anneal + same selection mode", not
+# "the method minus one flag".
+_ARGV_ADD["ref_bc_anneal_scaled_no_subjective_decoupled"] = (
+    _ARGV_ADD["ref_bc"] + ("--decoupled_selection",))
+_ARGV_REMOVE["ref_bc_anneal_scaled_no_subjective_decoupled"] = (
+    _ARGV_REMOVE["ref_bc"] + _ARGV_REMOVE["no_subjective"])
 
 
 def _validate(arm: str) -> str:
