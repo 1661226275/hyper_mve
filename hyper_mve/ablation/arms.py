@@ -53,6 +53,7 @@ ARMS: tuple[str, ...] = (
     "ref_bc_anneal_scaled_no_subjective_decoupled",
     "ref_bc_anneal_scaled_hardval_decoupled_big",
     "ref_bc_anneal_scaled_hardval_decoupled_big2",
+    "ref_bc_anneal_scaled_hardval_decoupled_lrctl",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -226,9 +227,25 @@ _ARGV_REMOVE["ref_bc_anneal_scaled_no_subjective_decoupled"] = (
 # every network width (and the hypernet/context widths): 1.26M -> 5.25M params
 # (4.18x), i.e. roughly the capacity mamba originally had (8.4M net) while the
 # parameter-matched baselines sit at ~1.2-1.3M alongside the method.
+# lr 0.005 is REQUIRED, not a tuning choice: at the inherited lr=0.02 every
+# scale>1 model drives transient extremes into the vendored C++ tree and the
+# process dies of SIGFPE (exit 136, no traceback) inside trees.batch_selection
+# within ~10 min. Measured: scale 2.0 @0.02 crashes with FINITE losses (so NaN
+# is not the trigger), while scale 2.0 and 3.0 @0.005 both survive with finite
+# losses. See results/analysis/parameter_matching.md.
+# Because this changes lr as well as capacity, the *_lrctl arm below runs the
+# method's own width at the same lr, so capacity is the only difference between
+# the control and this row.
 _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_big"] = (
-    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] + ("--model_scale", "3.0"))
+    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"]
+    + ("--model_scale", "3.0", "--lr", "0.005"))
 _ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_big"] = _ARGV_REMOVE["ref_bc"]
+
+# lr control: the method of record's architecture (scale 1.0) at the
+# high-parameter row's lr. Isolates the lr change from the capacity change.
+_ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_lrctl"] = (
+    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] + ("--lr", "0.005"))
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_lrctl"] = _ARGV_REMOVE["ref_bc"]
 
 # 2026-07-27 scale 3.0 (5.25M) crashes with SIGFPE inside the vendored C++ tree
 # (mcts_sampled.py:131 trees.batch_selection) about 60 s into selfplay: the wider
