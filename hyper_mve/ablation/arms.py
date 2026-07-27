@@ -51,6 +51,7 @@ ARMS: tuple[str, ...] = (
     "ref_bc_anneal_scaled_hardval_decoupled",
     "ref_bc_anneal_scaled_hardval",
     "ref_bc_anneal_scaled_no_subjective_decoupled",
+    "ref_bc_anneal_scaled_hardval_decoupled_big",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -218,6 +219,15 @@ _ARGV_ADD["ref_bc_anneal_scaled_no_subjective_decoupled"] = (
     _ARGV_ADD["ref_bc"] + ("--decoupled_selection",))
 _ARGV_REMOVE["ref_bc_anneal_scaled_no_subjective_decoupled"] = (
     _ARGV_REMOVE["ref_bc"] + _ARGV_REMOVE["no_subjective"])
+
+# 2026-07-27 high-parameter version of the method for the capacity comparison.
+# Identical to the method of record except --model_scale 3.0, which multiplies
+# every network width (and the hypernet/context widths): 1.26M -> 5.25M params
+# (4.18x), i.e. roughly the capacity mamba originally had (8.4M net) while the
+# parameter-matched baselines sit at ~1.2-1.3M alongside the method.
+_ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_big"] = (
+    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] + ("--model_scale", "3.0"))
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_big"] = _ARGV_REMOVE["ref_bc"]
 
 
 def _validate(arm: str) -> str:

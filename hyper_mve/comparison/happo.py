@@ -44,6 +44,15 @@ from hyper_mve.comparison.base import (
 
 _HARL_DIR = Path(__file__).resolve().parent / "vendor" / "HARL"
 
+#: 2026-07-27 capacity variants (disclosed deviation from the vendored
+#: happo.yaml). Upstream's [128, 128] gives ~73k parameters on this env — ~1/17
+#: of the method under comparison (1.26M) — so a loss could be blamed on
+#: capacity rather than algorithm. ``happo`` keeps upstream's widths; the
+#: registered ``happo_pm`` variant widens to (512, 512) = ~882k, the same order
+#: of magnitude as the method. Measured, not estimated.
+_UPSTREAM_HIDDEN_SIZES: tuple = (128, 128)
+_MATCHED_HIDDEN_SIZES: tuple = (512, 512)
+
 # Side channel for live (non-JSON-safe) objects: HARL json-dumps env_args via
 # save_config, so the EnvConfig / UnifiedLogger cannot ride in env_args. The
 # clone's relation_env.py / relation_logger.py read these slots instead.
@@ -85,6 +94,9 @@ def _check_forbidden_info(info_dict) -> None:
 class HAPPORunner(ExternalBaselineRunner):
     name = "happo"
 
+    #: capacity variant; overridden by HAPPOParamMatchedRunner ("happo_pm")
+    HIDDEN_SIZES: tuple = _UPSTREAM_HIDDEN_SIZES
+
     def __init__(self, cfg: V4Config):
         self.cfg = cfg
         self._runner = None            # harl OnPolicyHARunner
@@ -110,6 +122,8 @@ class HAPPORunner(ExternalBaselineRunner):
         algo_args["train"]["log_interval"] = 1
         algo_args["eval"]["use_eval"] = False
         algo_args["render"]["use_render"] = False
+        # 2026-07-27 capacity variant (see _MATCHED_HIDDEN_SIZES).
+        algo_args["model"]["hidden_sizes"] = list(self.HIDDEN_SIZES)
         if lr and lr > 0:
             algo_args["model"]["lr"] = float(lr)
             algo_args["model"]["critic_lr"] = float(lr)
@@ -322,3 +336,14 @@ class HAPPORunner(ExternalBaselineRunner):
         n = sum(p.numel() for a in self._runner.actor for p in a.actor.parameters())
         n += sum(p.numel() for p in self._runner.critic.critic.parameters())
         return int(n)
+
+
+class HAPPOParamMatchedRunner(HAPPORunner):
+    """HAPPO widened to the method's parameter scale (~882k vs upstream ~73k).
+
+    Registered as ``happo_pm``. The unmodified ``happo`` keeps the vendored
+    happo.yaml widths so the baseline is also reported at its own tuned size.
+    """
+
+    name = "happo_pm"
+    HIDDEN_SIZES: tuple = _MATCHED_HIDDEN_SIZES

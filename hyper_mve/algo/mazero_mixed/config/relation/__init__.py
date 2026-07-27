@@ -42,6 +42,26 @@ class GameConfig(BaseConfig):
         self.pred_hid = 64
         self.pred_out = 128
 
+        # 2026-07-27 capacity control for the parameter-matched comparison.
+        # --model_scale multiplies every width above (and the hypernet/context
+        # widths in ModelConfig below), so a higher-parameter variant of the
+        # method is a config change rather than a second model definition.
+        # scale=1.0 is bit-identical to the numbers above (no-op by construction:
+        # int(128*1.0)==128), so existing runs stay reproducible.
+        scale = float(getattr(self, "model_scale", 1.0) or 1.0)
+        if scale != 1.0:
+            _w = lambda v: max(1, int(round(v * scale)))
+            self.hidden_state_size = _w(self.hidden_state_size)
+            self.fc_representation_layers = [_w(v) for v in self.fc_representation_layers]
+            self.fc_dynamic_layers = [_w(v) for v in self.fc_dynamic_layers]
+            self.fc_reward_layers = [_w(v) for v in self.fc_reward_layers]
+            self.fc_value_layers = [_w(v) for v in self.fc_value_layers]
+            self.fc_policy_layers = [_w(v) for v in self.fc_policy_layers]
+            self.proj_hid = _w(self.proj_hid)
+            self.proj_out = _w(self.proj_out)
+            self.pred_hid = _w(self.pred_hid)
+            self.pred_out = _w(self.pred_out)
+
         if self.use_vectorization:
             # Per-step team reward is a mean of relational rewards (|r| ≲ 3);
             # values pass through the MuZero invertible scaling transform.
@@ -73,7 +93,7 @@ class GameConfig(BaseConfig):
                 self.inverse_value_transform,
                 self.inverse_reward_transform,
                 env_cfg=env_cfg,
-                model_cfg=ModelConfig(),
+                model_cfg=self._scaled_model_cfg(),
                 n_regimes=5,
                 belief_point_estimate=getattr(self, "belief_point_estimate", False),
                 belief_blind=getattr(self, "belief_blind", False),
@@ -129,6 +149,30 @@ class GameConfig(BaseConfig):
                 "expected 'rel_duo', 'rel_duo_coop', 'mpe_tag' or 'mpe_tag_fixed'."
             )
         return env_cfg
+
+    def _scaled_model_cfg(self):
+        """ModelConfig with the subjective/hypernet widths scaled by model_scale.
+
+        The dimension fields with hard architectural constraints (d_role,
+        d_belief, d_id_emb, d_row_emb — checked in ModelConfig.__post_init__)
+        are left alone; only the free capacity knobs scale, so a scaled config
+        still satisfies those constraints.
+        """
+        from dataclasses import replace
+        from hyper_mve.utils.configs import ModelConfig
+
+        cfg = ModelConfig()
+        scale = float(getattr(self, "model_scale", 1.0) or 1.0)
+        if scale == 1.0:
+            return cfg
+        _w = lambda v: max(1, int(round(v * scale)))
+        return replace(
+            cfg,
+            latent_dim=_w(cfg.latent_dim),
+            hidden_dim=_w(cfg.hidden_dim),
+            hyper_hidden_dims=tuple(_w(v) for v in cfg.hyper_hidden_dims),
+            hyper_rew_hidden_dims=tuple(_w(v) for v in cfg.hyper_rew_hidden_dims),
+        )
 
     def new_game(self, seed=None, oracle=False, **kwargs):
         from hyper_mve.envs.adapters.pettingzoo_wrapper import (

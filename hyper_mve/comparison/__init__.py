@@ -28,6 +28,16 @@ REGISTRY: Mapping[str, str] = MappingProxyType({
     "mbom":         "hyper_mve.comparison.mbom:MBOMRunner",
     "mbom_oracle":  "hyper_mve.comparison.mbom:MBOMOracleRunner",
     "m3w_adapted":  "hyper_mve.comparison.m3w_adapted.runner:M3WAdaptedRunner",
+    # 2026-07-27 parameter-matched capacity variants. The plain keys keep each
+    # baseline's own tuned widths (never report a baseline only in a handicapped
+    # form); these "_pm" keys size the network to the method's ~1.26M so the
+    # comparison is capacity-controlled. Measured net params on this env:
+    #   mamba 8.4M -> mamba_pm 1.24M | happo 73k -> happo_pm 882k
+    #   mbom 24k   -> mbom_pm  (see hyper_mve/comparison/mbom.py)
+    # m3w_adapted (561k) is already the same order as the method and is unchanged.
+    "mamba_pm":     "hyper_mve.comparison.mamba:MAMBAParamMatchedAlgorithm",
+    "happo_pm":     "hyper_mve.comparison.happo:HAPPOParamMatchedRunner",
+    "mbom_pm":      "hyper_mve.comparison.mbom:MBOMParamMatchedRunner",
 })
 
 

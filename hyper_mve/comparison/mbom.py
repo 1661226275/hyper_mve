@@ -53,6 +53,7 @@ import numpy as np
 
 from hyper_mve.utils.configs import V4Config
 from hyper_mve.utils.eval.eval_report import EvalReport
+
 from hyper_mve.comparison.base import (
     ExternalBaselineRunner,
     _FORBIDDEN_INFO_KEYS,
@@ -60,6 +61,14 @@ from hyper_mve.comparison.base import (
 )
 
 _MBOM_DIR = Path(__file__).resolve().parent / "vendor" / "MBOM"
+
+#: 2026-07-27 capacity variants (disclosed deviation from upstream). Upstream's
+#: [64, 32] hidden layers give only ~24k parameters on this env — ~1/52 of the
+#: method under comparison (1.26M) — so a loss could be blamed on capacity
+#: rather than algorithm. ``mbom``/``mbom_oracle`` keep upstream's widths; the
+#: registered ``mbom_pm`` variant widens to the method's order of magnitude.
+_UPSTREAM_HIDDEN: tuple = (64, 32)
+_MATCHED_HIDDEN: tuple = (512, 256)
 
 # RelationCommons action encoding (envs/relation_commons/spaces.py):
 # 0=NOOP, 1=UP(+y), 2=DOWN(-y), 3=LEFT(-x), 4=RIGHT(+x), 5=HARVEST
@@ -224,7 +233,8 @@ class RelationDuoEnvModel:
 
 
 # --------------------------------------------------------------------- confs
-def _build_confs(env_cfg, *, lr: float, eps_per_epoch: int) -> tuple[dict, dict]:
+def _build_confs(env_cfg, *, lr: float, eps_per_epoch: int,
+                 hidden: tuple = _UPSTREAM_HIDDEN) -> tuple[dict, dict]:
     """Two conf dicts modeled on ``config/gfootball_conf.py`` (n_state=39,
     n_action=6). Level-1 recursion (num_om_layers=2) with roll_out_length=2
     (imagined branching 6²=36 per step)."""
@@ -241,8 +251,8 @@ def _build_confs(env_cfg, *, lr: float, eps_per_epoch: int) -> tuple[dict, dict]
         "action_bounding": 0,
         "action_scaling": [1, 1],
         "action_offset": [0, 0],
-        "v_hidden_layers": [64, 32],
-        "a_hidden_layers": [64, 32],
+        "v_hidden_layers": list(hidden),
+        "a_hidden_layers": list(hidden),
         "v_learning_rate": lr,
         "a_learning_rate": lr,
         "gamma": 0.99,
@@ -253,7 +263,7 @@ def _build_confs(env_cfg, *, lr: float, eps_per_epoch: int) -> tuple[dict, dict]
         "v_update_times": 10,
         "buffer_memory_size": buffer_size,
         "num_om_layers": 1,
-        "opponent_model_hidden_layers": [64, 32],
+        "opponent_model_hidden_layers": list(hidden),
         "opponent_model_memory_size": 1000,
         "opponent_model_learning_rate": 0.001,
         "opponent_model_batch_size": 64,
@@ -278,6 +288,9 @@ def _build_confs(env_cfg, *, lr: float, eps_per_epoch: int) -> tuple[dict, dict]
 class MBOMRunner(ExternalBaselineRunner):
     name = "mbom"
     _reward_mode = "own_harvest"
+
+    #: capacity variant; overridden by MBOMParamMatchedRunner ("mbom_pm")
+    HIDDEN_LAYERS: tuple = _UPSTREAM_HIDDEN
 
     def __init__(self, cfg: V4Config):
         self.cfg = cfg
@@ -321,7 +334,7 @@ class MBOMRunner(ExternalBaselineRunner):
         args = self._make_args(eps_per_epoch=eps_per_epoch, max_epoch=max_epoch)
         conf_ppo, conf_mbom = _build_confs(
             self.cfg.env, lr=(lr if lr and lr > 0 else 0.001),
-            eps_per_epoch=eps_per_epoch,
+            eps_per_epoch=eps_per_epoch, hidden=self.HIDDEN_LAYERS,
         )
         logger = Logger(log_root, "mbom_runner", 0)
         self._env_model = RelationDuoEnvModel(
@@ -557,3 +570,14 @@ class MBOMRunner(ExternalBaselineRunner):
 class MBOMOracleRunner(MBOMRunner):
     name = "mbom_oracle"
     _reward_mode = "true_W"
+
+
+class MBOMParamMatchedRunner(MBOMRunner):
+    """MBOM widened to the method's parameter scale (upstream ~24k is ~1/52 of it).
+
+    Registered as ``mbom_pm``. The unmodified ``mbom`` keeps upstream's widths so
+    the baseline is also reported at its own tuned size.
+    """
+
+    name = "mbom_pm"
+    HIDDEN_LAYERS: tuple = _MATCHED_HIDDEN

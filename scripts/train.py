@@ -41,9 +41,10 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 # User-locked allocation. Was {3,4,5} from the 2026-07-17 realignment; GPU 6
-# was secured on 2026-07-18 and authorised for the formal experiment grid.
-# GPUs 0-2 and 7-9 remain policy-forbidden (7-9 carry other users' work).
-ALLOWED_GPUS = (3, 4, 5, 6)
+# was secured on 2026-07-18 and authorised for the formal experiment grid;
+# GPUs 7 and 8 were secured on 2026-07-27. GPUs 0-2 and 9 remain
+# policy-forbidden (9 still carries another user's work).
+ALLOWED_GPUS = (3, 4, 5, 6, 7, 8)
 
 # env id → V4Config preset name. mpe_tag / mpe_tag_fixed land in phase 3.
 ENV_PRESETS = {
@@ -64,6 +65,9 @@ NATIVE_STEP_UNIT = {
     "mbom": "env",          # phase 5
     "mbom_oracle": "env",   # phase 5
     "m3w_adapted": "env",   # phase 6
+    "mamba_pm": "env",      # 2026-07-27 parameter-matched capacity variants
+    "happo_pm": "env",
+    "mbom_pm": "env",
 }
 
 

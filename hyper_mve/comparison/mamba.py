@@ -59,6 +59,40 @@ _VENDORED_FROM: str = (
     "vendored 2026-07-10 under baselines/external/_mamba/"
 )
 
+#: 2026-07-27 PARAMETER-MATCHED CAPACITY (disclosed deviation from upstream).
+#: Upstream's SMAC-flavoured defaults give a ~8.4M-parameter network on this
+#: env — 6.7x the method under comparison (1.26M) — so a win could be bought
+#: with capacity rather than algorithm. These widths were chosen by measuring
+#: DreamerModel+Actor+Critic parameter counts offline and picking the setting
+#: closest to the method: 1,235,645 vs 1,260,293 (within 2%).
+#:
+#: Capacity is a RUNNER VARIANT, not a global switch: ``mamba`` keeps upstream's
+#: own tuned widths (shrinking a baseline to match us would look like
+#: handicapping it) and ``mamba_pm`` is the parameter-matched control. Both are
+#: registered in hyper_mve.comparison, so the two rows coexist in one registry
+#: without overwriting each other's run directories.
+#: Upstream values (``mamba``): HIDDEN/MODEL_HIDDEN/EMBED/DETERMINISTIC = 256,
+#: N_CATEGORICALS = N_CLASSES = 32 (STOCHASTIC = 1024), heads = 256.
+_MATCHED_CAPACITY: dict = {
+    "HIDDEN": 128, "MODEL_HIDDEN": 128, "EMBED": 128, "DETERMINISTIC": 128,
+    "N_CATEGORICALS": 16, "N_CLASSES": 16,
+    "VALUE_HIDDEN": 128, "ACTION_HIDDEN": 128,
+    "REWARD_HIDDEN": 128, "PCONT_HIDDEN": 128,
+}
+
+
+def _apply_capacity(mcfg) -> None:
+    """Apply the parameter-matched capacity in place.
+
+    Derived fields (STOCHASTIC / FEAT / GLOBAL_FEAT) are recomputed here because
+    MambaConfig.__init__ folds them in at construction time.
+    """
+    for k, v in _MATCHED_CAPACITY.items():
+        setattr(mcfg, k, v)
+    mcfg.STOCHASTIC = mcfg.N_CATEGORICALS * mcfg.N_CLASSES
+    mcfg.FEAT = mcfg.STOCHASTIC + mcfg.DETERMINISTIC
+    mcfg.GLOBAL_FEAT = mcfg.FEAT + mcfg.EMBED
+
 _DEFAULT_LR: float = 3e-4        # actor/value LR (grid midpoint)
 
 
@@ -75,6 +109,9 @@ def _check_forbidden_info(info_dict: dict[str, dict]) -> None:
 
 class _MAMBAStub(ExternalBaselineRunner):
     """Stub fallback kept for the ``IS_SOURCED=False`` binding path (§4.5)."""
+
+    #: capacity variant flag; True only in MAMBAParamMatchedAlgorithm ("mamba_pm")
+    PARAM_MATCHED: bool = False
 
     def __init__(self, cfg: V4Config) -> None:
         super().__init__(cfg)
@@ -99,6 +136,9 @@ class _MAMBAStub(ExternalBaselineRunner):
 class _RealMAMBA(ExternalBaselineRunner):
     """Vendored MAMBA impl (spec 06 §4.4), real port — see module docstring."""
 
+    #: capacity variant flag; True only in MAMBAParamMatchedAlgorithm ("mamba_pm")
+    PARAM_MATCHED: bool = False
+
     def __init__(self, cfg: V4Config, lr: Optional[float] = None) -> None:
         super().__init__(cfg)
         self._vendored_from: str = _VENDORED_FROM
@@ -117,13 +157,15 @@ class _RealMAMBA(ExternalBaselineRunner):
 
     # ------------------------------------------------------------- building
 
-    def _build(self, obs_dim: int) -> None:
+    def _build(self, obs_dim: int) -> None:  # noqa: D401 (see _apply_capacity)
         from hyper_mve.comparison._mamba.config import MambaConfig
         from hyper_mve.comparison._mamba.learner import DreamerLearner
 
         mcfg = MambaConfig()
         mcfg.IN_DIM = int(obs_dim)
         mcfg.ACTION_SIZE = int(self.cfg.env.A)
+        if self.PARAM_MATCHED:
+            _apply_capacity(mcfg)
         # Comparability: inherit the suite-wide discount like mappo.py does.
         mcfg.GAMMA = float(self.cfg.train.gamma)
         mcfg.DISCOUNT = float(self.cfg.train.gamma)
@@ -497,4 +539,15 @@ class _RealMAMBA(ExternalBaselineRunner):
 MAMBAAlgorithm = _RealMAMBA if IS_SOURCED else _MAMBAStub
 
 
-__all__ = ["MAMBAAlgorithm", "IS_SOURCED"]
+class MAMBAParamMatchedAlgorithm(MAMBAAlgorithm):  # type: ignore[misc,valid-type]
+    """MAMBA at the parameter-matched capacity (~1.24M vs upstream's ~8.4M).
+
+    Registered as ``mamba_pm``. The unmodified ``mamba`` keeps upstream's own
+    tuned widths so the baseline is never reported only in a handicapped form;
+    this subclass is the capacity control for the like-for-like row.
+    """
+
+    PARAM_MATCHED = True
+
+
+__all__ = ["MAMBAAlgorithm", "MAMBAParamMatchedAlgorithm", "IS_SOURCED"]

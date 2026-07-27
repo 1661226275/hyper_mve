@@ -213,6 +213,11 @@ def parse_args(args):
                         help="Use the stage-3 HyperMAMuZeroNet: hypernet-generated per-agent "
                              "reward/value heads conditioned on [role|belief], Bayes-averaged "
                              "leaf values over the regime family.")
+    groups.add_argument("--model_scale", type=float, default=1.0,
+                        help="2026-07-27 capacity control for the parameter-matched "
+                             "comparison: multiplies every network width (hidden_state_size, "
+                             "fc_*_layers, proj/pred dims, and the hypernet/context widths in "
+                             "ModelConfig). 1.0 is the historical architecture, bit-identical.")
     groups.add_argument("--belief_point_estimate", action="store_true", default=False,
                         help="Ablation arm: leaf values from a single posterior-blended head "
                              "instead of the Bayes average over the regime family.")
@@ -485,6 +490,7 @@ class BaseConfig(ABC):
         self.use_mcts_test = args.use_mcts_test
         self.decoupled_selection = args.decoupled_selection
         self.subjective_model = args.subjective_model
+        self.model_scale = args.model_scale
         self.belief_point_estimate = args.belief_point_estimate
         self.belief_blind = args.belief_blind
         self.value_hard_select = args.value_hard_select
