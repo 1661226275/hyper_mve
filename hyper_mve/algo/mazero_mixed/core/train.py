@@ -21,6 +21,14 @@ from core.selfplay_worker import DataWorker, RemoteDataWorker
 from core.reanalyze_worker import ReanalyzeWorker, RemoteReanalyzeWorker
 from core.utils import Timer, remote_worker_handles
 
+#: Uniform env-step cadence for the eval/* + fidelity/* curves, matching the
+#: external baselines (see _PROBE_EVERY_ENV_STEPS in hyper_mve/comparison/*.py).
+#: Gating these on gradient steps gave every algorithm a different curve
+#: resolution (800 / 3200 / 20000 / 80000 env-steps per point) because each does
+#: a different number of updates per env step. 5000 -> 200 points per 1M run for
+#: EVERY algorithm, on the canonical env-step x-axis.
+_PROBE_EVERY_ENV_STEPS = 5000
+
 
 def reward_nonzero_weight(target_reward_step: torch.Tensor, upweight: float, eps: float) -> torch.Tensor:
     """2026-07-20 harvest-collapse fix: per-sample reward-loss weight that
@@ -834,6 +842,7 @@ def train_sync_serial(config: BaseConfig, summary_writer, model_path=None):
     transitions_collected = 0
     start_training = False
     step_count = 0
+    next_probe_env = 0
     timer = Timer()
 
     while step_count < config.training_steps + config.last_steps:
@@ -890,6 +899,16 @@ def train_sync_serial(config: BaseConfig, summary_writer, model_path=None):
                     test_worker.update_model(step_count, model.get_weights())
                     test_log, eval_steps = test_worker.run()
                     shared_storage.add_test_logs(test_log)
+                # 2026-07-28: the eval/* + fidelity/* curves fire on ENV steps,
+                # not gradient steps. Gating them on step_count gave every
+                # algorithm a different curve resolution (m3w 800 env-steps per
+                # point, this fork 3200, mamba/happo 20000, mbom 80000) because
+                # each does a different number of updates per env step -- and
+                # the canonical x-axis is env steps. A fixed env-step cadence
+                # puts every algorithm on the SAME grid (5000 -> 200 points).
+                if transitions_collected >= next_probe_env:
+                    next_probe_env = ((transitions_collected // _PROBE_EVERY_ENV_STEPS)
+                                      + 1) * _PROBE_EVERY_ENV_STEPS
                     if run_fidelity_probe is not None:
                         run_fidelity_probe()
                     if run_reward_probe is not None:

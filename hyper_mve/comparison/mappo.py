@@ -37,6 +37,14 @@ from hyper_mve.utils.configs import V4Config
 from hyper_mve.comparison.base import split_seen_unseen_regimes
 from hyper_mve.utils.eval.eval_report import EvalReport
 
+#: 2026-07-28 UNIFORM eval cadence. Was every_train_steps=200, which produced
+#: wildly different curve resolution because each algorithm takes a different
+#: number of gradient steps per env step: m3w 800 env-steps/point, mazero 3200,
+#: mamba/happo 20000, mbom 80000 -- a 100x spread, and only 14 points for mbom
+#: across a whole 1M-step run. The canonical x-axis is env steps, so the cadence
+#: must be too: 5000 env steps => 200 points for EVERY algorithm.
+_PROBE_EVERY_ENV_STEPS: int = 5000
+
 
 def _check_forbidden_info(info_dict: dict[str, dict]) -> None:
     """pkg-07 spec 05 §5.2 / spec 06 §6.2 runtime guard — every per-agent
@@ -242,7 +250,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
 
             probe = PeriodicEvalProbe(
                 env_fn, cfg, tb_writer, act_fn=_probe_act,
-                every_train_steps=200, episodes_per_regime=8,
+                every_env_steps=_PROBE_EVERY_ENV_STEPS, episodes_per_regime=8,
             )
 
         total_steps = 0
