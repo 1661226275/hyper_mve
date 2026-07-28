@@ -37,13 +37,12 @@ import numpy as np
 from hyper_mve.utils.configs import V4Config
 from hyper_mve.utils.eval.eval_report import EvalReport
 
-#: 2026-07-28 UNIFORM eval cadence. Was every_train_steps=200, which produced
-#: wildly different curve resolution because each algorithm takes a different
-#: number of gradient steps per env step: m3w 800 env-steps/point, mazero 3200,
-#: mamba/happo 20000, mbom 80000 -- a 100x spread, and only 14 points for mbom
-#: across a whole 1M-step run. The canonical x-axis is env steps, so the cadence
-#: must be too: 5000 env steps => 200 points for EVERY algorithm.
-_PROBE_EVERY_ENV_STEPS: int = 5000
+#: 2026-07-28 eval cadence in ENV steps (user-locked). Gating on gradient steps
+#: gave this algorithm far too few points: mamba/happo logged every ~20000 env
+#: steps (52 points) and mbom every ~80000 (14 points across a whole 1M run),
+#: because each takes a different number of updates per env step. 4000 env steps
+#: => 250 points. mazero and m3w_adapted keep their original schedules.
+_PROBE_EVERY_ENV_STEPS: int = 4000
 from hyper_mve.comparison.base import (
     ExternalBaselineRunner,
     _FORBIDDEN_INFO_KEYS,
