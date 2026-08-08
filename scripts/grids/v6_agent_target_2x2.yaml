@@ -15,12 +15,22 @@
 #   ..._agentq                 (new)            none        agent_q_softmax
 #   ..._agentq_cover           (new)            star        agent_q_softmax
 #
-# Only the two agentq cells need running: the q_softmax row already exists at
-# seeds 0-1 in results_v6_2x2/ under an identical config. Re-running it would
-# cost 4 runs to reproduce numbers we have. If you would rather not compare
-# across waves, add the two qtarget/mctsfix arms back to `ablations` below --
-# but note the cross-session reproducibility floor of a few points documented
-# in v6_reporting_protocol.md, which is why matched-wave is the safer read.
+# STATUS 2026-08-08: the 8 agentq runs (2 arms x seeds 0-3) are LAUNCHED on
+# GPUs 0-7. The q_softmax row is NOT yet matched -- it exists only at seeds 0-1
+# in results_v6_2x2/, from a different session.
+#
+# REMAINING FOLLOW-UP, in priority order:
+#   1. Re-run qtarget + mctsfix at seeds 0-3 IN ONE SESSION (8 runs) once GPUs
+#      free. That gives a fully matched n=4 2x2 and removes the cross-session
+#      reproducibility floor (v6_reporting_protocol.md: archived g4 100.905
+#      re-runs at 96.969 through the identical code path).
+#   2. Until then, any agentq-vs-q_softmax difference is BOTH cross-session and
+#      unbalanced (n=4 vs n=2). Treat ~4-point gaps as potentially artefactual
+#      and do not headline them.
+#
+# Ordering rationale: seed noise dominates session drift here (star/q_softmax
+# spread ~13-19 vs a few points of drift), so buying seeds on the NEW arms
+# first is worth more than matched pairs at n=2.
 #
 # Why the star cell is the discriminating one
 # -------------------------------------------
@@ -99,7 +109,12 @@ envs: [relation_recip]
 ablations:
   - ref_bc_anneal_scaled_hardval_decoupled_agentq
   - ref_bc_anneal_scaled_hardval_decoupled_agentq_cover
-seeds: [0, 1]
+# n=4, NOT the n=2 the previous waves used. star/q_softmax's measured seed
+# spread is 18.98 on g1 NashConv and ~13 on return -- LARGER than the effects
+# under test -- so n=2 cannot resolve the star comparison this wave exists for.
+# Every prior v6 conclusion carries an explicit "everything is n=2" caveat;
+# this is the first wave that does not.
+seeds: [0, 1, 2, 3]
 total_env_steps: 1000000
 lr: 0.02
 episodes: 128
