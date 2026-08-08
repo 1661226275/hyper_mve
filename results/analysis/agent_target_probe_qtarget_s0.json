@@ -1,0 +1,73 @@
+{
+  "schema": "agent-target-probe-v1",
+  "run_dir": "/home/data/zhengwenbo/hyper_mve/results_v6_2x2/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_qtarget/relation_recip/seed0",
+  "arm": "ref_bc_anneal_scaled_hardval_decoupled_qtarget",
+  "num_simulations": 25,
+  "episodes": 8,
+  "tau_q": 1.0,
+  "span_ratio": 0.8906833615308187,
+  "tau_agent": 0.8906833615308187,
+  "adv_std": [
+    0.6301169806470837,
+    0.6377458406487361
+  ],
+  "per_regime": {
+    "0": {
+      "roots": 775,
+      "children": 4.1974193548387095,
+      "vis_per_child": 5.956040577928067,
+      "distinct": 3.2385257301808066,
+      "max_mult": 1.9478442280945758,
+      "mass_q": 0.4545918644863015,
+      "mass_agent": 0.3631095811006175,
+      "tv": 0.09914878382247123,
+      "tv_matched": 0.10068454551494055
+    },
+    "1": {
+      "roots": 756,
+      "children": 3.9153439153439153,
+      "vis_per_child": 6.385135135135135,
+      "distinct": 3.0466321243523318,
+      "max_mult": 1.9074759437453739,
+      "mass_q": 0.4927769639601709,
+      "mass_agent": 0.37923933610559946,
+      "tv": 0.12027468684487774,
+      "tv_matched": 0.11984603207491284
+    },
+    "2": {
+      "roots": 758,
+      "children": 3.887862796833773,
+      "vis_per_child": 6.430268069222939,
+      "distinct": 3.0827689992475547,
+      "max_mult": 1.8735891647855532,
+      "mass_q": 0.46498817946590854,
+      "mass_agent": 0.3626306140086124,
+      "tv": 0.10780691274476062,
+      "tv_matched": 0.10867962907490725
+    },
+    "3": {
+      "roots": 769,
+      "children": 3.9921976592977892,
+      "vis_per_child": 6.262214983713355,
+      "distinct": 3.1314079422382672,
+      "max_mult": 1.8873646209386281,
+      "mass_q": 0.4681432977458768,
+      "mass_agent": 0.36835597771611117,
+      "tv": 0.10545639726410884,
+      "tv_matched": 0.10729023991555883
+    },
+    "4": {
+      "roots": 714,
+      "children": 4.022408963585434,
+      "vis_per_child": 6.215181058495822,
+      "distinct": 3.18828125,
+      "max_mult": 1.86015625,
+      "mass_q": 0.44696294806454456,
+      "mass_agent": 0.3462074612168102,
+      "tv": 0.10790444120268654,
+      "tv_matched": 0.10862533207687
+    }
+  },
+  "tv_pooled": 0.10811824437578099,
+  "tv_pooled_matched": 0.1090251557314379
+}

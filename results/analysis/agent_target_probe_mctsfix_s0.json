@@ -1,0 +1,73 @@
+{
+  "schema": "agent-target-probe-v1",
+  "run_dir": "/home/data/zhengwenbo/hyper_mve/results_v6_2x2/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_mctsfix/relation_recip/seed0",
+  "arm": "ref_bc_anneal_scaled_hardval_decoupled_mctsfix",
+  "num_simulations": 25,
+  "episodes": 8,
+  "tau_q": 1.0,
+  "span_ratio": 0.8004483920619954,
+  "tau_agent": 0.8004483920619954,
+  "adv_std": [
+    0.6281284121697944,
+    0.6239880132509071
+  ],
+  "per_regime": {
+    "0": {
+      "roots": 800,
+      "children": 11.23375,
+      "vis_per_child": 2.2254367419606096,
+      "distinct": 6.0,
+      "max_mult": 6.0,
+      "mass_q": 0.552751231506817,
+      "mass_agent": 0.2394671571444597,
+      "tv": 0.3138524568316754,
+      "tv_matched": 0.30480099210807476
+    },
+    "1": {
+      "roots": 800,
+      "children": 11.24125,
+      "vis_per_child": 2.223951962637607,
+      "distinct": 6.0,
+      "max_mult": 6.0,
+      "mass_q": 0.5764801807880751,
+      "mass_agent": 0.1974991410814906,
+      "tv": 0.3804084852875448,
+      "tv_matched": 0.37107525893284
+    },
+    "2": {
+      "roots": 800,
+      "children": 11.28125,
+      "vis_per_child": 2.21606648199446,
+      "distinct": 6.0,
+      "max_mult": 6.0,
+      "mass_q": 0.5545382850277475,
+      "mass_agent": 0.2164909488053774,
+      "tv": 0.34109358239298887,
+      "tv_matched": 0.33363488790782453
+    },
+    "3": {
+      "roots": 800,
+      "children": 11.26875,
+      "vis_per_child": 2.218524681087077,
+      "distinct": 6.0,
+      "max_mult": 6.0,
+      "mass_q": 0.5570220361269146,
+      "mass_agent": 0.20589106467752438,
+      "tv": 0.3526286421053972,
+      "tv_matched": 0.3454591052162678
+    },
+    "4": {
+      "roots": 800,
+      "children": 11.16875,
+      "vis_per_child": 2.2383883603805264,
+      "distinct": 6.0,
+      "max_mult": 6.0,
+      "mass_q": 0.5945853893953735,
+      "mass_agent": 0.2838719172667867,
+      "tv": 0.31153649810844164,
+      "tv_matched": 0.3020383047617729
+    }
+  },
+  "tv_pooled": 0.3399039329452096,
+  "tv_pooled_matched": 0.331401709785356
+}

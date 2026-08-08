@@ -69,8 +69,23 @@ def test_arm_set_is_the_locked_five_plus_diagnostics():
         "ref_bc_anneal_scaled_hardval_decoupled_blend_t1",
         "ref_bc_anneal_scaled_hardval_decoupled_blend_t2",
     }
+    # 2026-08-08 action-axis (per-agent marginal) target. Distinct from the
+    # blend, which was disconfirmed as a monotone interpolation between two
+    # known endpoints: this changes the children->actions AGGREGATION RULE from
+    # a sum of exp outside to a visit-weighted average inside, dropping the
+    # multiplicity term the sampled-child targets carry
+    # (core/train.py:agent_marginal_target,
+    # tests/algo/test_policy_target_agent_marginal.py). The _cover cell is
+    # included because root_cover=star is where multiplicity is predicted to
+    # bite hardest -- it pins each agent at one prior draw across A of the ~2A
+    # children -- so it is the discriminating cell, not a spare one.
+    agent_target = {
+        "ref_bc_anneal_scaled_hardval_decoupled_agentq",
+        "ref_bc_anneal_scaled_hardval_decoupled_agentq_cover",
+    }
     assert set(ARMS) - locked == (
-        diagnostics | ref_bc_family | policy_target_2x2 | blend_tau_sweep)
+        diagnostics | ref_bc_family | policy_target_2x2 | blend_tau_sweep
+        | agent_target)
 
 
 def test_unknown_arm_rejected():
@@ -364,6 +379,63 @@ def test_policy_target_2x2_is_a_clean_factorial():
             f"{arm} differs from the baseline cell outside the 2x2 factors: "
             f"{sorted(differing - factors)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# v6 action-axis (per-agent marginal) target (2026-08-08)
+# ---------------------------------------------------------------------------
+
+_AGENT_2X2 = {
+    "ref_bc_anneal_scaled_hardval_decoupled_qtarget":      ("none", "q_softmax"),
+    "ref_bc_anneal_scaled_hardval_decoupled_mctsfix":      ("star", "q_softmax"),
+    "ref_bc_anneal_scaled_hardval_decoupled_agentq":       ("none", "agent_q_softmax"),
+    "ref_bc_anneal_scaled_hardval_decoupled_agentq_cover": ("star", "agent_q_softmax"),
+}
+
+
+@pytest.mark.parametrize("arm,expected", sorted(_AGENT_2X2.items()))
+def test_agent_target_2x2_cells_parse_to_the_intended_config(arm, expected):
+    cfg = _parse(apply_arm_argv(list(_BASELINE_ARGV), arm))
+    assert (cfg.root_cover, cfg.policy_target_type) == expected
+
+
+def test_agent_target_arms_do_not_inherit_the_default_temperature():
+    """tau must be set explicitly, and must NOT be 1.0.
+
+    Averaging within a collision group shrinks the advantage span, so the
+    action-axis target at a fixed tau is systematically flatter than
+    q_softmax. Running the wave at the inherited default would confound
+    "per-agent marginalization" with "a flatter target" — the same class of
+    mistake blend_tau_probe.py exists to prevent, and the reason
+    scripts/probes/agent_target_probe.py reports a span-matched tau.
+    """
+    for arm in ("ref_bc_anneal_scaled_hardval_decoupled_agentq",
+                "ref_bc_anneal_scaled_hardval_decoupled_agentq_cover"):
+        cfg = _parse(apply_arm_argv(list(_BASELINE_ARGV), arm))
+        assert cfg.policy_target_temperature != 1.0, (
+            f"{arm} left policy_target_temperature at the default")
+
+
+def test_agent_target_2x2_is_a_clean_factorial():
+    """The four cells differ only in root_cover, the target, and the width
+    flags star requires — plus the temperature, which is a property of the
+    target being tested and is held equal across both agent_* cells."""
+    parsed = {a: _parse(apply_arm_argv(list(_BASELINE_ARGV), a))
+              for a in _AGENT_2X2}
+    base = vars(parsed["ref_bc_anneal_scaled_hardval_decoupled_qtarget"])
+    factors = {"policy_target_type", "policy_target_temperature", "root_cover",
+               "sampled_action_times", "leaf_sampled_times"}
+    for arm, cfg in parsed.items():
+        differing = {k for k, v in vars(cfg).items() if base.get(k) != v}
+        assert differing <= factors, (
+            f"{arm} differs from the q_softmax cell outside the factors: "
+            f"{sorted(differing - factors)}")
+    # the two agent cells must share a temperature, or the star comparison is
+    # confounded by the knob rather than by the cover.
+    assert (parsed["ref_bc_anneal_scaled_hardval_decoupled_agentq"]
+            .policy_target_temperature
+            == parsed["ref_bc_anneal_scaled_hardval_decoupled_agentq_cover"]
+            .policy_target_temperature)
 
 
 def test_root_cover_star_cells_satisfy_the_width_contract():

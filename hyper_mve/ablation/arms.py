@@ -63,6 +63,9 @@ ARMS: tuple[str, ...] = (
     "ref_bc_anneal_scaled_hardval_decoupled_blend_t05",
     "ref_bc_anneal_scaled_hardval_decoupled_blend_t1",
     "ref_bc_anneal_scaled_hardval_decoupled_blend_t2",
+    # v6 action-axis (per-agent marginal) target 2x2 vs q_softmax
+    "ref_bc_anneal_scaled_hardval_decoupled_agentq",
+    "ref_bc_anneal_scaled_hardval_decoupled_agentq_cover",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -333,6 +336,62 @@ for _tau_name, _tau in (("t025", "0.25"), ("t05", "0.5"),
            "--policy_target_temperature", _tau))
     _ARGV_REMOVE[_blend_arm] = _ARGV_REMOVE["ref_bc"]
 del _tau_name, _tau, _blend_arm
+
+# --- action-axis (per-agent marginal) target -------------------------------
+#
+# The blend was disconfirmed: across tau in {0.25, 0.5, 1.0, 2.0} it
+# interpolates monotonically from q_softmax to visit with NO interior optimum,
+# and the only tau retaining the gain has a WORSE seed spread than q_softmax
+# (18.04 vs 10.85). Both endpoints are proven exactly in
+# tests/algo/test_policy_target_blend.py, so it is not an implementation bug --
+# restoring the visit allocation is simply the wrong lever.
+#
+# agent_q_softmax attacks the same variance from the other side. Because the
+# policy head is factorized, EVERY target is already a per-agent cross-entropy
+# over the (N, A) grid, and the shipped ones differ only in how they aggregate
+# the root's children onto action slots. q_softmax SUMS exp(adv/tau) over a
+# group, so an action carried by m children gets m exp-terms; this AVERAGES
+# inside the exponent, so it gets one estimated from all m.
+#
+# That multiplicity term is not a corner case under root_cover=star: the cover
+# pins each agent at one draw from its own noised prior across A of the ~2A
+# children (cnode.cpp:341-365), so in the flat-advantage limit q_softmax puts
+# ~50% of that agent's target mass on a single prior sample -- against ~24%
+# for visit and 1/A here. That predicts the measured g1 NashConv seed-spread
+# rank order (none/visit 0.21 < none/q_softmax 1.06 < star/visit 8.03 <
+# star/q_softmax 18.98), which is why the star cell is the discriminating one
+# and is included rather than dropped.
+#
+# The mechanism was MEASURED before these arms were written
+# (scripts/probes/agent_target_probe.py, seed 0 of the qtarget and mctsfix
+# cells, 8 eps/regime; results/analysis/agent_target_probe_*.json):
+#
+#   arm            children  vis/child  distinct  max mult  mass_q  mass_agent   TV
+#   none/q_softmax     4.0       6.25      3.14      1.90    0.466      0.364  0.108
+#   star/q_softmax    11.2       2.22      6.00      6.00    0.567      0.228  0.340
+#
+# max multiplicity under star is exactly 6.00 = A in every regime, and
+# q_softmax puts 0.567 of that agent's target mass on it -- the single prior
+# draw the cover pinned. agent_q_softmax puts 0.228. TV is 3.1x larger under
+# star than none, which is the predicted signature. Two incidental corrections:
+# the star root holds ~11.2 children, not the 1 + N*A = 13 upper bound (the
+# anchor joint dedups), so the budget is 2.22 visits/child, not 1.9.
+#
+# tau is NOT inherited: averaging shrinks the advantage span, so a fixed tau
+# would confound "per-agent marginalization" with "a flatter target". The
+# measured span ratio is 0.891 (none) and 0.800 (star); 0.85 is the pooled
+# value and is held EQUAL across both agent cells so that root_cover stays the
+# only factor separating them. See core/train.py:agent_marginal_target.
+_ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_agentq"] = (
+    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"]
+    + ("--policy_target_type", "agent_q_softmax",
+       "--policy_target_temperature", "0.85"))
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_agentq"] = _ARGV_REMOVE["ref_bc"]
+
+_ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_agentq_cover"] = (
+    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_agentq"]
+    + _ARGV_ADD["mcts_fix_cover"])
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_agentq_cover"] = _ARGV_REMOVE["ref_bc"]
 
 
 def _validate(arm: str) -> str:

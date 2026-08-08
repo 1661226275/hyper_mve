@@ -1,0 +1,84 @@
+# v6 action-axis (per-agent marginal) policy target -- 2x2, 2 seeds, 8 runs.
+#
+# NOT LAUNCHED. Registered so the wave is one command away; the GPU spend is
+# the user's call.
+#
+# The question
+# ------------
+# Does aggregating the root's children onto per-agent action slots by a
+# visit-weighted AVERAGE inside the exponent (agent_q_softmax) beat the SUM of
+# exp outside it (q_softmax), and does it specifically repair root_cover=star?
+#
+#   arm                                         root_cover  policy_target
+#   ..._qtarget                (already run)    none        q_softmax
+#   ..._mctsfix                (already run)    star        q_softmax
+#   ..._agentq                 (new)            none        agent_q_softmax
+#   ..._agentq_cover           (new)            star        agent_q_softmax
+#
+# Only the two agentq cells need running: the q_softmax row already exists at
+# seeds 0-1 in results_v6_2x2/ under an identical config. Re-running it would
+# cost 4 runs to reproduce numbers we have. If you would rather not compare
+# across waves, add the two qtarget/mctsfix arms back to `ablations` below --
+# but note the cross-session reproducibility floor of a few points documented
+# in v6_reporting_protocol.md, which is why matched-wave is the safer read.
+#
+# Why the star cell is the discriminating one
+# -------------------------------------------
+# Measured with scripts/probes/agent_target_probe.py (seed 0, 8 eps/regime):
+#
+#   arm            children  vis/child  distinct  max mult  mass_q  mass_agent    TV
+#   none/q_softmax     4.0       6.25      3.14      1.90   0.466       0.364  0.108
+#   star/q_softmax    11.2       2.22      6.00      6.00   0.567       0.228  0.340
+#
+# The star cover enumerates each agent's actions against a CRN anchor drawn
+# from every OTHER agent's noised prior (cnode.cpp:341-365), so it pins each
+# agent at ONE prior draw across exactly A = 6 of its ~11.2 children. Because
+# q_softmax sums exp-terms, that single draw collects 0.567 of the agent's
+# target mass; agent_q_softmax gives it 0.228. So star -- built to break prior
+# self-reinforcement -- re-injects each agent's own prior at A-fold
+# multiplicity, and q_softmax amplifies it.
+#
+# That predicts the measured g1 NashConv seed-spread rank order:
+#   none/visit 0.21 < none/q_softmax 1.06 < star/visit 8.03 < star/q_softmax 18.98
+#
+# PRE-REGISTERED READ. The wave is informative either way:
+#   * If agentq_cover collapses the star seed spread toward the none cells,
+#     the multiplicity account is supported.
+#   * If it does not, the account is FALSIFIED and the visits-per-child budget
+#     explanation (2.22/child under star vs 6.25 under none) survives instead.
+# Do not reinterpret after the fact.
+#
+# tau = 0.85 on both agent cells: the measured span ratio is 0.891 (none) and
+# 0.800 (star), and averaging within a collision group shrinks the advantage
+# span, so inheriting tau=1.0 would compare "per-agent marginalization" against
+# "a flatter target". Held EQUAL across the two agent cells so root_cover stays
+# the only factor between them.
+#
+# Scoring (results/analysis/v6_reporting_protocol.md -- return_mean is NOT the
+# headline; it is structurally blind in 3 of 5 regimes):
+#   g0, g4 -> team return           eval_report.json:return_per_regime
+#   g2, g3 -> PER-AGENT return      eval_diagnostics.json
+#   g1     -> NashConv ONLY         scripts/eval_game_metrics.py --br-steps 20000
+# Select on the last-20% of each run's own periodic eval, not the final
+# checkpoint (single-point sd ~ 8-12).
+#
+# LAUNCH. _run_grid is sequential, so run one tmux session per (arm, seed) on
+# its own GPU -- 4 runs, ~12 h each, sharing one --out because each (arm, seed)
+# resolves to a distinct run_dir:
+#
+#   scripts/launch_grid.sh v6aq_s0 3 scripts/grids/v6_agent_target_2x2.yaml \
+#       --ablation ref_bc_anneal_scaled_hardval_decoupled_agentq --seed 0 \
+#       --out results_v6_agentq/
+#
+# GPUs 0-8 are allowed (ALLOWED_GPUS in scripts/train.py); 9 is another user's.
+
+algos: [mazero_mixed]
+envs: [relation_recip]
+ablations:
+  - ref_bc_anneal_scaled_hardval_decoupled_agentq
+  - ref_bc_anneal_scaled_hardval_decoupled_agentq_cover
+seeds: [0, 1]
+total_env_steps: 1000000
+lr: 0.02
+episodes: 128
+num_pmcts: 16
