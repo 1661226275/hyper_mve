@@ -330,6 +330,58 @@ test, and `adv_scale_probe` cannot separate "collapsed action set" from "flat
 game" by construction. A direct test would count *distinct* sampled root actions
 per arm.
 
+## The `star` instability has a mechanism: prior multiplicity (2026-08-08)
+
+The seed spread under `root_cover=star` was attributed above to the thin
+budget (~1.9 visits/child). There is a second, larger, and *structural* cause,
+found by reading the cover construction and then measured.
+
+`expand` under `root_cover=star` (`cnode.cpp:341-365`) enumerates, for each
+agent `i`, all of agent `i`'s actions against a CRN anchor in which every
+*other* agent `j` is pinned at one draw `z_j` from **its own noised policy
+prior**. So the block built for agent `j` pins agent `i` at the single sample
+`z_i` across `A` of the root's children.
+
+Because the policy head is factorized, every policy target is really an
+action-axis weight `W_i(a) = Σ_{c: a_i^c=a} (per-child term)` — and
+`q_softmax` sums `exp(adv_i(c)/τ)`, so an action carried by `m` children
+collects `m` exp-terms. Under star, `m = A` for exactly one action per agent:
+the prior draw. Measured with `scripts/probes/agent_target_probe.py`, seed 0
+of each arm, 8 eps/regime:
+
+| arm | children | vis/child | distinct | max mult | mass `q_softmax` | mass `agent_q` | TV |
+|---|---|---|---|---|---|---|---|
+| none/q_softmax | 4.0 | 6.25 | 3.14 | 1.90 | 0.466 | 0.364 | 0.108 |
+| star/q_softmax | 11.2 | **2.22** | **6.00** | **6.00** | **0.567** | 0.228 | 0.340 |
+
+Max multiplicity is exactly `A = 6` in all five regimes, and `q_softmax` puts
+**0.567** of that agent's target mass on that one prior sample — resampled at
+every root. So `star`, whose purpose was to break prior self-reinforcement,
+re-injects each agent's own prior into its own marginal at A-fold multiplicity,
+and `q_softmax` amplifies it (`visit` only reaches ~24%, via the forced cover
+visits).
+
+This predicts the measured g1 NashConv seed-spread rank order across all four
+wave-1 cells: none/visit 0.21 < none/q_softmax 1.06 < star/visit 8.03 <
+star/q_softmax 18.98. **It is a prediction awaiting its wave, not a result** —
+`agent_q_softmax` (`core/train.py:agent_marginal_target`) removes the
+multiplicity term exactly, so if the star seed spread does *not* collapse under
+`..._agentq_cover`, this account is falsified and the visits-per-child account
+survives. Pre-registered in `scripts/grids/v6_agent_target_2x2.yaml`.
+
+**Two figures elsewhere are corrected by this table.** The star root holds
+**~11.2** children, not the `1 + N·A = 13` upper bound quoted in
+`train.py:policy_target_weights` and the handoff — the anchor joint
+`(z_0, …, z_N)` is enumerated once per agent block and deduped
+(`cnode.cpp:362`). The budget is therefore **2.22** visits/child, not 1.9.
+
+**And it answers the open question below** about counting *distinct* sampled
+root actions: the `none` baseline carries only **3.14** distinct actions per
+agent out of `A = 6`, against star's 6.00. That is direct evidence for the
+"collapsed action set" reading of the small `adv_std` — the sampled children
+genuinely are near-duplicates — rather than the "flat game" reading, which
+`adv_scale_probe` could not separate by construction.
+
 ## Selected lr for v6: **0.02** (sweep, 2026-08-06)
 
 Step-1.5 sweep on the baseline cell (`ref_bc_anneal_scaled_hardval_decoupled`,

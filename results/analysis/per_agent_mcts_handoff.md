@@ -4,6 +4,77 @@ Written at the close of the policy-target investigation, for a fresh session
 starting the per-agent MCTS work. Everything below is measured, not assumed;
 sources are named so nothing has to be re-derived.
 
+---
+
+> ## ⚠️ RESOLVED 2026-08-08 — read this before acting on the plan below
+>
+> **The proposed first step in this document is a provable no-op. Do not build
+> it.** Section ["Most of the machinery already exists and is
+> unused"](#most-of-the-machinery-already-exists-and-is-unused) proposes
+> plumbing `marginal_visit_count` through as a per-agent visit target. That is
+> *mathematically identical* to the `visit` target already shipped.
+>
+> The policy head is factorized — `sampled_actions_log_prob =
+> per_agent_log_prob.sum(dim=1)` — so the `visit` loss
+> `-Σ_c π(c)·Σ_i log p_i(a_i^c)` reassociates into
+> `-Σ_i Σ_a [Σ_{c: a_i^c=a} π(c)]·log p_i(a)`, and that bracket is exactly what
+> `get_marginal_visit_count` computes (`cnode.cpp:95-105`). Both normalizers are
+> `num_simulations` — every `marginal_visits` row in
+> `hyper_mve/algo/mazero_mixed/test/ctree_golden.json` sums to exactly 25 — so
+> not even a scale factor differs. (That also means the commented-out invariant
+> at `mcts_sampled.py:213` is **true**; it was disabled as collateral with the
+> two genuinely broken assertions beside it.) Pinned as an executable proof:
+> `tests/algo/test_policy_target_agent_marginal.py::test_visit_prior_at_huge_temperature_is_the_visit_loss`.
+>
+> **The corollary is the useful part.** The sampled-child axis is *not* an
+> independent design space — it is a parameterization of the `(N, A)` marginal,
+> and every target differs only in how it aggregates children onto actions:
+>
+> | target | induced action-axis weight `W_i(a)` |
+> |---|---|
+> | `visit` | `Σ_{c: a_i^c=a} visit(c)` |
+> | `marginal_visit` (proposed here) | **the same expression** |
+> | `q_softmax` | `Σ_{c: a_i^c=a} exp(adv_i(c)/τ)` |
+> | `visit_q_blend` | `Σ_{c: a_i^c=a} visit(c)·exp(adv_i(c)/τ)` |
+> | `agent_q_softmax` (new) | `exp( [Σ visit·adv_i]/[Σ visit] / τ )` |
+>
+> The last row is what was built instead: it averages *inside* the exponent
+> where the others sum *outside* it, which removes a **multiplicity** term —
+> `q_softmax` gives an action carried by `m` children `m` exp-terms.
+>
+> **This also supplies the mechanism for the star instability this document
+> could only attribute to "1.9 visits per child."** The star cover pins each
+> agent at one draw from its own noised prior across `A` of its children
+> (`cnode.cpp:341-365`). Measured (`scripts/probes/agent_target_probe.py`,
+> seed 0, 8 eps/regime):
+>
+> | arm | children | vis/child | distinct | max mult | mass `q_softmax` | mass `agent_q` | TV |
+> |---|---|---|---|---|---|---|---|
+> | none/q_softmax | 4.0 | 6.25 | 3.14 | 1.90 | 0.466 | 0.364 | 0.108 |
+> | star/q_softmax | 11.2 | 2.22 | 6.00 | **6.00** | **0.567** | 0.228 | 0.340 |
+>
+> Multiplicity under star is exactly `A = 6` in every regime, and `q_softmax`
+> puts 0.567 of that agent's target mass on that one prior draw. This predicts
+> the measured g1 NashConv seed-spread rank order — none/visit 0.21 <
+> none/q_softmax 1.06 < star/visit 8.03 < star/q_softmax 18.98.
+>
+> Two figures below are also corrected by that table: the star root holds
+> **~11.2** children, not `1 + N·A = 13` (the anchor joint dedups), so the
+> budget is **2.22** visits/child, not 1.9. And the `none` baseline carries only
+> ~3.1 *distinct* actions per agent out of 6 — the direct count this document's
+> protocol asks for.
+>
+> Status: `agent_q_softmax` / `agent_q_blend` implemented
+> (`core/train.py:agent_marginal_target`), tested, probed, and registered as
+> arms `..._agentq` / `..._agentq_cover` with `scripts/grids/v6_agent_target_2x2.yaml`.
+> **The wave is not launched.** The "intent-count" variant (recording each
+> agent's pre-projection choice in `select_child_decoupled`) was considered and
+> rejected: the exploration bonus is driven by *realized* child visits, so
+> intent never self-corrects and drifts toward the actions the search could not
+> evaluate.
+
+---
+
 ## Why we are here
 
 `rel_recip` (v6) is the current env: N=2, L=3, K=2, logistic regrowth,
@@ -63,6 +134,13 @@ only per-agent target — is the only one that lifts the disadvantaged agent in
 the asymmetric regimes g2/g3.
 
 ### Most of the machinery already exists and is unused
+<a id="most-of-the-machinery-already-exists-and-is-unused"></a>
+
+> **SUPERSEDED — see the box at the top of this file.** Point 1 below is the
+> no-op. Points 2-3 (`select_child_decoupled`, `--decoupled_selection`) remain
+> accurate, and note that the method of record already passes
+> `--decoupled_selection`, so *selection* is already per-agent; only the target
+> was not.
 
 1. **`get_marginal_visit_count`** (`cnode.cpp:95-103`) marginalises joint child
    visits onto per-agent action slots:
