@@ -129,19 +129,37 @@ def parse_args(args):
                         help="clip parameter in advantage (default: %(default)s)")
     groups.add_argument("--PG_type", type=str, default="none", choices=["none", "sharp", "raw"], help="type of PG loss")
     groups.add_argument("--policy_target_type", type=str, default="visit",
-                        choices=["visit", "q_softmax", "visit_q_blend"],
-                        help="Source of the policy target under PG_type=none. 'visit' = upstream "
-                             "normalized root visit counts, which are UCB-allocated and therefore "
-                             "carry the prior's bias. 'q_softmax' = per-agent softmax over the "
-                             "search's own advantage estimates, which does not -- but which also "
-                             "discards the visit allocation, so a 1-visit Q is weighted like a "
-                             "20-visit Q. 'visit_q_blend' = softmax(log visit + adv/temperature), "
-                             "keeping the visit counts as a per-child RELIABILITY prior; it has "
-                             "'visit' and 'q_softmax' as its two exact endpoints. "
+                        choices=["visit", "q_softmax", "visit_q_blend",
+                                 "agent_q_softmax", "agent_q_blend"],
+                        help="Source of the policy target under PG_type=none. Because the policy "
+                             "head is factorized, every choice here is really an AGGREGATION RULE "
+                             "mapping the root's sampled children onto per-agent action slots -- "
+                             "W_i(a) = sum over the children c with a_i^c = a of: "
+                             "'visit' -> visit(c) (upstream normalized root visit counts, "
+                             "UCB-allocated and therefore carrying the prior's bias); "
+                             "'q_softmax' -> exp(adv_i(c)/temperature) (the search's own advantage "
+                             "estimates, prior-free, but discarding the visit allocation so a "
+                             "1-visit Q is weighted like a 20-visit Q); "
+                             "'visit_q_blend' -> visit(c)*exp(adv_i(c)/temperature), keeping the "
+                             "visits as a per-child RELIABILITY prior, with 'visit' and "
+                             "'q_softmax' as its two exact endpoints. The 'agent_*' pair instead "
+                             "aggregates by a visit-weighted AVERAGE inside the exponent -- "
+                             "exp(qbar_i(a)/temperature) with qbar the visit-weighted mean "
+                             "advantage over the group -- which drops the MULTIPLICITY term the "
+                             "three above carry (an action on m children gets m exp-terms). That "
+                             "matters most under --root_cover star, which pins each agent at one "
+                             "draw from its own prior across A of the ~2A children. "
+                             "'agent_q_blend' restores the marginal visit count as a prior and "
+                             "recovers 'visit' exactly as temperature -> inf. See "
+                             "core/train.py::agent_marginal_target. "
                              "(default: %(default)s)")
     groups.add_argument("--policy_target_temperature", type=float, default=1.0,
-                        help="Temperature for --policy_target_type q_softmax / visit_q_blend. The "
-                             "advantages are already batch-std-normalized, so 1.0 is a sane base. "
+                        help="Temperature for every --policy_target_type except 'visit'. The "
+                             "advantages are already batch-std-normalized, so 1.0 is a sane base "
+                             "-- EXCEPT for the 'agent_*' targets, whose within-group averaging "
+                             "shrinks the advantage span, so a span-matched temperature must be "
+                             "measured (scripts/probes/agent_target_probe.py) rather than "
+                             "inherited, or a flatter target reads as a worse target. "
                              "Under visit_q_blend this is the ONLY knob trading the advantage term "
                              "off against the log-visit term: large => visit-dominated (the visit "
                              "target in the limit), small => advantage-dominated (q_softmax in the "
@@ -152,7 +170,10 @@ def parse_args(args):
                              "batch-pooled spread (the advantages are already pooled-normalized, "
                              "so this is scale-free across arms). A flat-advantage root yields a "
                              "near-uniform q_softmax target, which actively flattens the policy. "
-                             "0 = off. (default: %(default)s)")
+                             "0 = off. NOTE: this spread is measured on the SAMPLED-CHILD axis, "
+                             "so it measures the wrong object for the action-axis 'agent_*' "
+                             "targets; do not enable it with those without reworking the guard. "
+                             "(default: %(default)s)")
     groups.add_argument("--policy_target_min_children", type=int, default=2,
                         help="Zero-information guard: minimum live root children for a transition "
                              "to contribute to the policy loss. Only active when "

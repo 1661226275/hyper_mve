@@ -43,6 +43,113 @@ def reward_nonzero_weight(target_reward_step: torch.Tensor, upweight: float, eps
 _VISIT_PRIOR_EPS = 1e-8
 
 
+def agent_marginal_target(actions_step, visit_step, adv_step, mask_step,
+                          action_space_size, temperature,
+                          use_visit_prior=False):
+    """Per-agent policy target on the ACTION axis, not the sampled-child axis.
+
+    Returns ``(batch, num_agents, action_space_size)`` rows summing to 1 over
+    the actions present among the root's children, or exactly 0 for a
+    fully-masked row.
+
+    Why an action-axis target exists at all
+    ---------------------------------------
+    The policy head is factorized -- ``sampled_actions_log_prob`` is
+    ``per_agent_log_prob.sum(dim=1)`` -- so EVERY target of the form
+    ``-sum_c w_i(c) log p_i(a_i^c)`` is identically a per-agent cross-entropy
+    over the ``(N, A)`` grid, with the action-axis weight obtained by summing
+    ``w_i(c)`` over the children that carry that action. The sampled-child
+    axis is therefore not an independent design space: it is a
+    *parameterization* of the action-axis marginal, and the shipped targets
+    differ only in how they aggregate children onto actions:
+
+        visit          W_i(a) = sum_{c: a_i^c=a} visit(c)
+        q_softmax      W_i(a) = sum_{c: a_i^c=a} exp(adv_i(c) / tau)
+        visit_q_blend  W_i(a) = sum_{c: a_i^c=a} visit(c) exp(adv_i(c) / tau)
+
+    A corollary worth recording because it retires a proposal: using the C++
+    tree's ``marginal_visit_count`` (``cnode.cpp:95-105``) as a target would be
+    a NO-OP, exactly equal to ``visit``. That routine computes
+    ``sum_{c: a_i^c=a} visit(c)`` -- the first row of the table -- and its rows
+    sum to ``num_simulations`` just as ``target_sampled_policies`` does, so
+    even the normalizer matches. ``test_policy_target_agent_marginal.py`` pins
+    this as an executable proof.
+
+    What this target does differently
+    ---------------------------------
+    It aggregates by an AVERAGE INSIDE the exponent rather than a sum outside
+    it::
+
+        n_i(a)    = sum_{c: a_i^c=a} visit(c)
+        qbar_i(a) = sum_{c: a_i^c=a} visit(c) adv_i(c) / n_i(a)
+        T_i(a)    proportional to  exp(qbar_i(a) / tau)
+
+    The difference is exactly a MULTIPLICITY term. ``q_softmax`` gives an
+    action carried by ``m`` children ``m`` exp-terms; this gives it one,
+    estimated from all ``m``. The two coincide iff every agent's child->action
+    map is injective, which it is not in practice.
+
+    Multiplicity is not a rounding error under ``--root_cover star``. The
+    cover (``cnode.cpp:341-365``) enumerates, for each agent ``i``, all of
+    agent ``i``'s actions against a CRN anchor drawn from every OTHER agent's
+    noised policy prior. So the block built for agent ``j != i`` pins agent
+    ``i`` at one prior sample ``z_i`` across ``A`` of the ~``1 + N*(A-1)``
+    children. In the flat-advantage limit agent ``i``'s target mass on that
+    single draw from its own prior is ~24% under ``visit`` (the forced cover
+    visits), ~50% under ``q_softmax`` (A of ~2A exp-terms), and ``1/A`` here.
+    That is, ``star`` -- whose purpose was to break prior self-reinforcement --
+    re-injects each agent's own prior into its own marginal at A-fold
+    multiplicity, and ``q_softmax`` amplifies it. This target removes it.
+
+    ``qbar_i(a)`` is also exactly ``wq[a] / vis[a]`` as already computed inside
+    ``select_child_decoupled`` (``cnode.cpp:552-570``), i.e. the statistic the
+    search itself selects on under ``--decoupled_selection``. Search and target
+    are consistent by construction.
+
+    ``use_visit_prior=True`` (``agent_q_blend``) additionally multiplies by the
+    normalized marginal visit count, which recovers the ``visit`` target
+    exactly as ``temperature -> inf``.
+
+    Arguments
+    ---------
+    ``actions_step`` ``(batch, C, num_agents)`` integer joint actions;
+    ``visit_step`` ``(batch, C)`` normalized root visit counts;
+    ``adv_step`` ``(batch, C, num_agents)`` per-agent normalized advantages;
+    ``mask_step`` ``(batch, C)`` live-child mask.
+    """
+    batch, _, num_agents = adv_step.shape
+    device = adv_step.device
+    # (batch, N, C) throughout: agent-major, matching per_agent_log_prob.
+    idx = actions_step.permute(0, 2, 1).long()
+    # fp32 for the same reason as policy_target_weights: under autocast the
+    # softmax below would run in fp16, where the -1e4 sentinel must stay well
+    # inside the 65504 range. scatter_add_ in fp16 would also lose counts.
+    w = (visit_step * mask_step).float().unsqueeze(1).expand(-1, num_agents, -1)
+    a = adv_step.permute(0, 2, 1).float()
+    # Masked/padded slots already carry adv == 0 exactly (reanalyze_worker.py
+    # zeroes them), and w == 0 there keeps them out of both accumulators
+    # regardless, so a padded slot's action index -- which is a real index, not
+    # a sentinel -- contributes nothing.
+    shape = (batch, num_agents, action_space_size)
+    n = torch.zeros(shape, dtype=torch.float32, device=device).scatter_add_(2, idx, w)
+    s = torch.zeros(shape, dtype=torch.float32, device=device).scatter_add_(2, idx, w * a)
+
+    present = n > 0
+    qbar = s / n.clamp_min(1e-8)
+    logits = qbar / temperature
+    if use_visit_prior:
+        # clamp_min, not +eps, and finite rather than -inf: same reasoning as
+        # policy_target_weights. An action absent from every child is removed
+        # by `present` below regardless.
+        n_norm = n / n.sum(dim=2, keepdim=True).clamp_min(1e-8)
+        logits = logits + torch.log(n_norm.clamp_min(_VISIT_PRIOR_EPS))
+    # -1e4, NOT -inf/-1e9: a fully-masked row has no present action at all, and
+    # softmax over an all -inf row is NaN, which survives `0 * NaN` and poisons
+    # total_loss even though the row's weight is zero.
+    T = torch.softmax(logits.masked_fill(~present, -1e4), dim=2) * present
+    return T / T.sum(dim=2, keepdim=True).clamp_min(1e-8)
+
+
 def policy_target_weights(target_sampled_adv_step, sampled_action_mask_step,
                           temperature, visit_policy_step=None):
     """Per-agent policy-target weights from the search's OWN advantage estimates.
@@ -67,10 +174,13 @@ def policy_target_weights(target_sampled_adv_step, sampled_action_mask_step,
       keeps the weights non-negative and normalizable for any advantage sign.
     * **Why visits belong here at all.** Visit counts are a reliability weight.
       At ``num_simulations=25`` the budget per child is ~5.0 at
-      ``root_cover=none`` (5 children) but only ~1.9 at ``root_cover=star``
-      (1 + N*A = 13 children), so a child's ``adv`` can be a nearly raw network
-      output with almost no search behind it. Pure ``q_softmax`` weights a
-      1-visit Q identically to a 20-visit Q; this does not.
+      ``root_cover=none`` (5 children) but only ~2.1 at ``root_cover=star``,
+      so a child's ``adv`` can be a nearly raw network output with almost no
+      search behind it. Pure ``q_softmax`` weights a 1-visit Q identically to
+      a 20-visit Q; this does not. (The star child count is ~11-12, NOT the
+      ``1 + N*A = 13`` upper bound: the anchor joint ``(z_0, ..., z_N)`` is
+      enumerated once per agent block and deduped by ``seen.insert``
+      (``cnode.cpp:362``). ``blend_tau_probe`` measured 11.2.)
 
     Endpoints, both exact:
       * ``temperature -> inf``  =>  ``softmax(log visit)`` = the visit target;
@@ -120,8 +230,14 @@ def policy_target_weights(target_sampled_adv_step, sampled_action_mask_step,
 
 def policy_loss_step(config, per_agent_log_prob, sampled_actions_log_prob,
                      target_sampled_policies_step, target_sampled_adv_step,
-                     sampled_action_mask_step):
-    """One unroll step of the PG_type='none' policy loss. Returns ``(batch,)``."""
+                     sampled_action_mask_step,
+                     log_prob_full=None, target_sampled_actions_step=None):
+    """One unroll step of the PG_type='none' policy loss. Returns ``(batch,)``.
+
+    ``log_prob_full`` ``(batch, N, A)`` and ``target_sampled_actions_step``
+    ``(batch, C, N)`` are required only by the action-axis targets
+    (``agent_q_softmax`` / ``agent_q_blend``); see ``agent_marginal_target``.
+    """
     target_type = getattr(config, "policy_target_type", "visit")
     if target_type == "visit":
         return -(
@@ -129,6 +245,16 @@ def policy_loss_step(config, per_agent_log_prob, sampled_actions_log_prob,
             * target_sampled_policies_step                      # visit count
             * sampled_action_mask_step                          # mask invalid actions
         ).sum(dim=1)
+    if target_type in ("agent_q_softmax", "agent_q_blend"):
+        # Action-axis (per-agent marginal) targets: aggregate children onto
+        # actions by a visit-weighted AVERAGE inside the exponent, which drops
+        # the multiplicity term the sampled-child targets carry.
+        T = agent_marginal_target(
+            target_sampled_actions_step, target_sampled_policies_step,
+            target_sampled_adv_step, sampled_action_mask_step,
+            config.action_space_size, config.policy_target_temperature,
+            use_visit_prior=(target_type == "agent_q_blend"))    # (batch, N, A)
+        return -(log_prob_full.float() * T).sum(dim=(1, 2))
     # 'q_softmax' drops the visit allocation entirely; 'visit_q_blend' keeps it
     # as a multiplicative reliability prior. See policy_target_weights.
     visit_prior = (target_sampled_policies_step
@@ -312,9 +438,12 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
 
         # loss of the first step
 
-        per_agent_log_prob = (
-            network_output.policy_logits.log_softmax(dim=-1)        # (batch_size, num_agents, action_space_size)
-            .gather(dim=2, index=target_sampled_actions[:, step_i].transpose(1, 2))  # index: (.., sampled_times, num_agents) -> (.., num_agents, sampled_times)
+        # hoisted so the action-axis targets can reuse it; the gather below is
+        # the same op in the same order, so this is bit-exact for every
+        # sampled-child target.
+        log_prob_full = network_output.policy_logits.log_softmax(dim=-1)  # (batch_size, num_agents, action_space_size)
+        per_agent_log_prob = log_prob_full.gather(
+            dim=2, index=target_sampled_actions[:, step_i].transpose(1, 2)  # index: (.., sampled_times, num_agents) -> (.., num_agents, sampled_times)
         )                       # (batch_size, num_agents, sampled_times)
         sampled_actions_log_prob = per_agent_log_prob.sum(dim=1)    # joint log-prob: (batch_size, sampled_times)
 
@@ -322,7 +451,8 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
             policy_loss = policy_loss_step(
                 config, per_agent_log_prob, sampled_actions_log_prob,
                 target_sampled_policies[:, step_i], target_sampled_adv[:, step_i],
-                sampled_action_mask[:, step_i]) * target_policy_informative[:, step_i]
+                sampled_action_mask[:, step_i],
+                log_prob_full, target_sampled_actions[:, step_i]) * target_policy_informative[:, step_i]
         else:
             # per-agent AWPO: agent i's factor is weighted by its OWN advantage
             if config.awac_lambda > 0:
@@ -368,9 +498,12 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
 
             # loss of the unrolled steps (k=1,...,K)
 
-            per_agent_log_prob = (
-                network_output.policy_logits.log_softmax(dim=-1)        # (batch_size, num_agents, action_space_size)
-                .gather(dim=2, index=target_sampled_actions[:, step_i].transpose(1, 2))  # index: (.., sampled_times, num_agents) -> (.., num_agents, sampled_times)
+            # hoisted so the action-axis targets can reuse it; the gather below
+            # is the same op in the same order, so this is bit-exact for every
+            # sampled-child target.
+            log_prob_full = network_output.policy_logits.log_softmax(dim=-1)  # (batch_size, num_agents, action_space_size)
+            per_agent_log_prob = log_prob_full.gather(
+                dim=2, index=target_sampled_actions[:, step_i].transpose(1, 2)  # index: (.., sampled_times, num_agents) -> (.., num_agents, sampled_times)
             )                       # (batch_size, num_agents, sampled_times)
             sampled_actions_log_prob = per_agent_log_prob.sum(dim=1)    # joint log-prob: (batch_size, sampled_times)
 
@@ -378,7 +511,8 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
                 policy_loss += policy_loss_step(
                     config, per_agent_log_prob, sampled_actions_log_prob,
                     target_sampled_policies[:, step_i], target_sampled_adv[:, step_i],
-                    sampled_action_mask[:, step_i]) * target_policy_informative[:, step_i]
+                    sampled_action_mask[:, step_i],
+                    log_prob_full, target_sampled_actions[:, step_i]) * target_policy_informative[:, step_i]
             else:
                 # per-agent AWPO: agent i's factor is weighted by its OWN advantage
                 if config.awac_lambda > 0:
