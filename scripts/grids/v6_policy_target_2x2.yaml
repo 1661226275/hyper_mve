@@ -1,0 +1,68 @@
+# v6 policy-target 2x2 — visit vs q_softmax  x  root_cover none vs star,
+# on the method of record, on the rel_recip (v6) environment.
+#
+# WHY re-screen a rejected fix: the prior-collapse fix was screened once on v5
+# (seed 0, 200k) and took return 22.1 -> 13.3, so runner.py still emits the
+# upstream defaults. That verdict moved BOTH stages at once, and it was scored
+# on the summed team return — which on this reward cannot respond in g1 (the
+# harvests cancel to -eps*(moves) exactly) and sees only one agent in g2/g3,
+# i.e. exactly the regimes v6 changes. See
+# results/analysis/regime_knowledge_ceiling.md.
+#
+# SCORING (do not read return_mean alone):
+#   g0, g4  team return                          — works as-is
+#   g2, g3  per-agent return                     — eval_diagnostics.json
+#           "return_per_regime_planner_per_agent", or game metrics v_pi
+#   g1      NashConv only                        — scripts/eval_game_metrics.py
+#           return is pinned at -eps*(moves) and is not a quality signal
+#
+# lr: SET BY THE STEP-1.5 SWEEP -> 0.02 (2026-08-06). The inherited v5 value
+# survives the move to v6, winning by >2x: last-20% 41.96 vs 19.15 (lr 0.01) and
+# 18.32 (lr 0.005), and 46.68 +/- 1.8 vs 23.78 +/- 1.3 at n=128. lr 0.04 does not
+# merely underperform, it SIGFPEs in the C++ tree before the first eval, so the
+# usable range is bounded above somewhere in (0.02, 0.04). Full table in
+# results/analysis/v6_reporting_protocol.md.
+#
+# _run_grid runs rows SEQUENTIALLY within one session, so this file describes
+# the experiment but is not how it is launched in parallel: one session per
+# (arm, seed) pinned to its own GPU gives 8 runs in ~12 h wall clock. Each
+# (arm, seed) already resolves to a distinct run_dir
+# (out/{algo}_{arm}/{env}/seed{k}), so a shared --out is safe here — unlike the
+# lr sweep, where every row shared arm+seed and needed separate --out roots.
+algos:
+  - mazero_mixed
+envs:
+  - relation_recip
+ablations:
+  - ref_bc_anneal_scaled_hardval_decoupled            # baseline: none  / visit
+  - ref_bc_anneal_scaled_hardval_decoupled_cover      # stage A:  star  / visit
+  - ref_bc_anneal_scaled_hardval_decoupled_qtarget    # stage B:  none  / q_softmax
+  - ref_bc_anneal_scaled_hardval_decoupled_mctsfix    # A + B:    star  / q_softmax
+# 4 seeds x 4 arms = 16 runs, launched as two waves of 8 (one per GPU 0-7).
+#
+# Seeds 2-3 were added after the first wave showed the seed spread swamping the
+# effect. At n=2 on g0: baseline spread 2.6, but A-cover 31.5, B-qtarget 20.5,
+# A+B 19.1 -- so B's +18.7 point estimate over baseline sat INSIDE its own seed
+# spread and nothing was resolved. The only evidence beyond point estimates was
+# that B's two seeds and the baseline's two seeds did not overlap on g0 or
+# return_mean, which is p ~ 0.17 under a permutation test.
+#
+# Note the heteroscedasticity is itself a result: the baseline is stable while
+# every arm carrying the prior-collapse fix is 7-12x noisier across seeds. Pool
+# per arm at n=4; do not assume a common variance across cells.
+seeds: [0, 1, 2, 3]
+total_env_steps: 1000000
+# 128, not the usual 16. Episode sampling is the DOMINANT error here, far above
+# any numerical or cross-session artifact, and it is almost free to beat down
+# because _rollout_planner batches a whole regime into ONE lockstep search, so
+# CUDA wall-time is nearly flat in episode count. Measured on the v5 method-of-
+# record checkpoint, g4:
+#     episodes    mean     SEM    planner wall-s
+#           16   96.97   10.27              10.8
+#           64  110.97    5.00              14.4
+#          128  106.64    3.54              19.2
+# i.e. 2.9x less noise for 1.8x the time -- seconds against a 12 h run. At 16
+# the SEM (~10) is larger than most of the differences this 2x2 is trying to
+# resolve, so 16 would have made the whole comparison unreadable.
+episodes: 128
+num_pmcts: 16

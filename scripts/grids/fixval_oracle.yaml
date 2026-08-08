@@ -1,0 +1,28 @@
+# Prior-collapse fix — DIAGNOSTIC: full fix (A+B) with belief pinned to the
+# true regime for the entire run.
+#
+# The A+B fix de-collapsed the prior but destroyed the asymmetric regimes
+# (g2/g3: ~20 -> ~0), dragging return 22.1 -> 13.3. Two hypotheses for why the
+# value head misleads the de-collapsed policy in g2/g3:
+#   (H1) the BELIEF NET can't identify those regimes (regime_acc ~0.50), so the
+#        Bayes-averaged value is a wrong blend.
+#   (H2) the VALUE/REWARD HEAD is wrong in g2/g3 even given the true regime
+#        (the representation bottleneck).
+#
+# This run pins belief to the oracle regime. Read against results_fixval/
+# mazero_mixed/ (A+B, no oracle, return 13.3, g2=-0.1 g3=0.3):
+#   g2/g3 RECOVER  -> H1: the belief net is the culprit; fix regime inference.
+#   g2/g3 STILL DIE -> H2: the value head is wrong given the regime; the
+#                          representation is the binding constraint.
+#
+# Writes to results_fixval/mazero_mixed_mcts_fix_oracle/.
+algos:
+  - mazero_mixed
+ablations:
+  - mcts_fix_oracle
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 200000
+episodes: 16
+num_pmcts: 1

@@ -23,6 +23,11 @@ _VARIANTS = [
     ("mbom", "hyper_mve.comparison.mbom", "MBOMRunner"),
     ("mbom_oracle", "hyper_mve.comparison.mbom", "MBOMOracleRunner"),
     ("m3w_adapted", "hyper_mve.comparison.m3w_adapted.runner", "M3WAdaptedRunner"),
+    # 2026-07-27 parameter-matched capacity variants: the baselines re-run at
+    # the method's parameter scale, so a comparison is not confounded by width.
+    ("happo_pm", "hyper_mve.comparison.happo", "HAPPOParamMatchedRunner"),
+    ("mamba_pm", "hyper_mve.comparison.mamba", "MAMBAParamMatchedAlgorithm"),
+    ("mbom_pm", "hyper_mve.comparison.mbom", "MBOMParamMatchedRunner"),
 ]
 
 

@@ -137,6 +137,11 @@ class GameConfig(BaseConfig):
         if self.env_name in ("mpe_tag", "mpe_tag_fixed"):
             return V4Config.from_preset(self.env_name).env
 
+        # v6 presets carry their own physics (logistic regrowth + reciprocal
+        # reward), so they must not be derived from the rel_duo table below.
+        if self.env_name in ("rel_recip", "rel_recip_holdout"):
+            return V4Config.from_preset(self.env_name).env
+
         base = V4Config.from_preset("rel_duo")
         env_cfg = base.env
         if self.env_name == "rel_duo_coop":
@@ -145,8 +150,9 @@ class GameConfig(BaseConfig):
             pass  # full hidden 5-regime family
         else:
             raise ValueError(
-                f"Unknown relation env_name {self.env_name!r}; "
-                "expected 'rel_duo', 'rel_duo_coop', 'mpe_tag' or 'mpe_tag_fixed'."
+                f"Unknown relation env_name {self.env_name!r}; expected "
+                "'rel_duo', 'rel_duo_coop', 'rel_recip', 'rel_recip_holdout', "
+                "'mpe_tag' or 'mpe_tag_fixed'."
             )
         return env_cfg
 

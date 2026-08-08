@@ -1,0 +1,24 @@
+# Gradient-diffusion diagnostic (2026-07-23): hard-select the true-regime value
+# head during TRAINING (v = v_{g_true}); Bayes-average at deploy/eval.
+#
+# The per-regime value hypernet collapsed in every prior run (head_diversity ~0),
+# making the Bayes-average mechanism inert. Two hypotheses: (a) gradient diffusion
+# (soft-MoE standard: belief-weighted gradient never gives a head a clean signal)
+# or (b) row leak (regime already in the obs row, so explicit conditioning is
+# redundant). Hard-selecting the true head during training routes a clean
+# per-regime gradient to each head:
+#   head_diversity RISES  -> gradient diffusion; adopt hard-train / Bayes-deploy.
+#   head_diversity ~0      -> row leak or value-independent-of-regime; run --blind_row.
+#
+# Cheap: 200k. Launch:  python scripts/train.py --grid \
+#   scripts/grids/competence_ref_bc_hardval.yaml --gpus 5 --out results_competence
+algos:
+  - mazero_mixed
+ablations:
+  - ref_bc_hardval
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 600000
+episodes: 16
+num_pmcts: 16

@@ -81,6 +81,12 @@ _DEFAULT_NUM_PMCTS = 1
 # costs ~num_regimes * T_max * 63 ms ≈ 30 s.
 _DEFAULT_PLANNER_EPISODES = None   # None -> match the prior episode count
 
+# Tie-break RNG for the search at eval time. Every eval pass re-creates it from
+# this constant so the Bayes / MAP / oracle passes see identical env conditions,
+# and make_act_fn re-seeds from it too — the act_fn only reproduces evaluate()
+# step for step while the two agree on this number, so they share one.
+_EVAL_SEARCH_SEED = 12345
+
 
 def _ensure_fork_on_path() -> None:
     p = str(_FORK_DIR)
@@ -401,6 +407,89 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         }
         return returns, action_counts, steps_total, stats
 
+    def make_act_fn(self, mode: str = "planner", *, device=None,
+                    search_seed: int = _EVAL_SEARCH_SEED):
+        """A deterministic ``act_fn(obs, t) -> (N,) int64`` over this model.
+
+        ``obs`` is the stacked ``(N, obs_dim)`` float32 observation and ``t`` is
+        the in-episode step index, with ``t == 0`` meaning "new episode" — the
+        contract ``FrozenExternalPolicy`` (``utils/eval/game_metrics.py``) and
+        ``PeriodicEvalProbe`` already consume. It exists so anything that needs
+        to *drive* this policy one step at a time — best-response training for
+        NashConv, cross-play between two checkpoints — can do so without
+        reimplementing the belief/search plumbing that ``_rollout_prior`` and
+        ``_rollout_planner`` inline.
+
+        ``mode``:
+          * ``"prior"``   — argmax of the distilled prediction net, no search.
+          * ``"planner"`` — MCTS, i.e. what actually deploys. On v5 these are
+            very different policies (A3 prior 14.28 vs A1 planner 61.94), so
+            which one gets frozen changes what a metric means.
+
+        **Reproduces ``evaluate()`` exactly at MATCHED batch size**, and only
+        there. ``_rollout_planner(episodes=1)`` and this act_fn agree bit-for-bit
+        on returns and action histograms (``tests/algo/test_act_fn_contract.py``).
+        Three things make that work: the compiled tree is batch-size invariant
+        (element 0's sampled actions and visit counts are identical at B=1 and
+        B=16 in both root-cover modes, also pinned there);
+        ``select_action(deterministic=True)`` is a pure argmax and draws no
+        randomness; and the tree seed lines up because the search draws
+        ``np_random.choice(256)`` per ``batch_search`` call while
+        ``_rollout_planner`` shares one draw across every episode at a given
+        step, so this re-seeds at ``t == 0`` rather than continuing the stream.
+
+        Against the *16-episode lockstep* batch that ``evaluate()`` actually
+        runs, expect a few percent of drift (measured: g0 82.23 at B=16 vs 77.04
+        driven at B=1 on the same v5 checkpoint). The tree is batch-invariant but
+        the model forward is not bit-identical across batch sizes on GPU, and
+        over 100 steps those last-bit differences occasionally flip an argmax.
+        Both are the same policy; their numbers are not interchangeable to the
+        last point, so do not mix act_fn-driven values with ``eval_report``
+        values in one table.
+        """
+        _ensure_fork_on_path()
+        import torch
+
+        if mode not in ("prior", "planner"):
+            raise ValueError(f"mode must be 'prior' or 'planner', got {mode!r}")
+
+        model = self._lazy_model()
+        device = device or self._device_of(model)
+        N, A = int(self.cfg.env.N), int(self.cfg.env.A)
+        subjective = hasattr(model, "belief_net")
+        np_random = np.random.RandomState(search_seed)
+        mcts = None
+        if mode == "planner":
+            from core.mcts import SampledMCTS
+            mcts = SampledMCTS(self._game_config, np_random)
+        # No action masking in this env (core/game.py legal_actions is all-ones).
+        legal = np.ones((1, N, A), dtype=np.float32)
+        state = {"hidden": None}
+
+        def act_fn(obs, t: int):
+            from core.utils import select_action
+
+            if int(t) == 0:
+                np_random.seed(search_seed)
+                state["hidden"] = (model.belief_net.init_hidden(1, N, device=device)
+                                   if subjective else None)
+            obs_t = torch.from_numpy(
+                np.asarray(obs, dtype=np.float32)).unsqueeze(0).to(device)
+            if subjective:
+                state["hidden"], g_hat = model.belief_net.step(obs_t, state["hidden"])
+                model.set_belief(g_hat)
+            out = model.initial_inference(obs_t)
+            if mode == "prior":
+                logits = np.asarray(out.policy_logits).reshape(N, -1)
+                return np.argmax(logits, axis=-1).astype(np.int64)
+            search = mcts.batch_search(model, out, legal, device, False, 1.0)
+            pos, _ = select_action(search.sampled_visit_count[0], temperature=1,
+                                   deterministic=True, np_random=np_random)
+            return np.asarray(
+                search.sampled_actions[0][pos]).reshape(-1).astype(np.int64)
+
+        return act_fn
+
     def _rollout_planner(self, env_fn, g: int, episodes: int, device, np_random):
         """The acting policy: MCTS search over the learned model.
 
@@ -434,6 +523,12 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         legal = np.ones((B, N, A), dtype=np.float32)
 
         returns = np.zeros(B, dtype=np.float64)
+        # Per-agent, UNsummed. The headline return sums over agents, which on
+        # this reward is structurally blind in three of five regimes: g1 cancels
+        # to -eps*(moves) exactly, and g2/g3 reduce to a single agent's harvest,
+        # so an improvement in the other agent is invisible. See
+        # results/analysis/regime_knowledge_ceiling.md.
+        agent_returns = np.zeros((B, N), dtype=np.float64)
         action_counts = np.zeros(A, dtype=np.int64)
         visit_counts = np.zeros((N, A), dtype=np.float64)
         visit_entropies: list[float] = []
@@ -487,6 +582,8 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
                     action_counts[a] += 1
                 obs_dicts[i], rew, term, trunc, _ = envs[i].step(acts)
                 returns[i] += float(sum(rew.values()))
+                for k, a in enumerate(agents):
+                    agent_returns[i, k] += float(rew[a])
                 steps_total += 1
                 dones[i] = bool(any(term.values()) or any(trunc.values()))
             # Lockstep is only valid while every episode ends together; the
@@ -506,6 +603,8 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             "root_action_coverage": float(np.mean(coverages)) if coverages else 0.0,
             "root_policy_mass_covered": (float(np.mean(policy_mass))
                                          if policy_mass else 0.0),
+            "per_agent_return": (agent_returns.mean(axis=0).tolist()
+                                 if B else [0.0] * N),
         }
         return list(returns), action_counts, visit_counts, steps_total, stats
 
@@ -543,11 +642,12 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         # Seeds the C-tree's own RNG (mcts_sampled.py: np_random.choice(256)),
         # which breaks visit-count ties — without this the planner number is
         # not reproducible.
-        np_random = np.random.RandomState(12345)
+        np_random = np.random.RandomState(_EVAL_SEARCH_SEED)
 
         prior_per_regime: dict[int, float] = {}
         planner_per_regime: dict[int, float] = {}
         planner_per_regime_sem: dict[int, float] = {}
+        planner_per_regime_per_agent: dict[int, list[float]] = {}
         episodes_per_regime: dict[int, int] = {}
         prior_returns_all: list[float] = []
         planner_returns_all: list[float] = []
@@ -588,6 +688,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
                     float(np.std(s_ret) / max(np.sqrt(len(s_ret)), 1.0))
                     if len(s_ret) > 1 else 0.0
                 )
+                planner_per_regime_per_agent[g] = list(s_stats["per_agent_return"])
                 planner_returns_all.extend(s_ret)
                 planner_actions += s_acts
                 visit_total = s_visits if visit_total is None else visit_total + s_visits
@@ -605,7 +706,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         planner_map_per_regime: dict[int, float] = {}
         planner_map_returns_all: list[float] = []
         if hasattr(model, "set_value_deploy"):
-            np_random_map = np.random.RandomState(12345)
+            np_random_map = np.random.RandomState(_EVAL_SEARCH_SEED)
             try:
                 model.set_value_deploy("argmax")
                 with torch.no_grad():
@@ -638,7 +739,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         planner_oracle_per_regime: dict[int, float] = {}
         planner_oracle_returns_all: list[float] = []
         if hasattr(model, "set_value_deploy"):
-            np_random_oracle = np.random.RandomState(12345)
+            np_random_oracle = np.random.RandomState(_EVAL_SEARCH_SEED)
             try:
                 with torch.no_grad():
                     for g in regime_grid:
@@ -686,6 +787,14 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             ),
             "return_per_regime_prior": dict(prior_per_regime),
             "return_per_regime_planner": dict(planner_per_regime),
+            # Per-agent, UNsummed. return_mean sums over agents, which cannot
+            # respond in g1 (the harvests cancel to -eps*(moves) exactly) and
+            # sees only one agent in g2/g3. Anything comparing arms on those
+            # regimes must read this, not return_per_regime_planner.
+            "return_per_regime_planner_per_agent": {
+                int(g): [float(x) for x in v]
+                for g, v in planner_per_regime_per_agent.items()
+            },
             # deploy-mode ablation points on this checkpoint (evaldiag-v2):
             #   A1 Bayes-avg (ours)   = return_per_regime_planner / planner_mean
             #   A2 argmax (MAP head)  = return_per_regime_planner_map / *_map_mean

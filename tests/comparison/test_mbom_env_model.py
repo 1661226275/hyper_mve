@@ -23,8 +23,9 @@ from hyper_mve.envs.adapters.pettingzoo_wrapper import (  # noqa: E402
 from hyper_mve.comparison.mbom import RelationDuoEnvModel  # noqa: E402
 
 
-def _run_transitions(reward_mode: str, n_target: int = 200) -> int:
-    cfg = V4Config.from_preset("rel_duo")
+def _run_transitions(reward_mode: str, n_target: int = 200,
+                     preset: str = "rel_duo", inject_opponent_row: bool = False) -> int:
+    cfg = V4Config.from_preset(preset)
     env = RelationCommonsPettingZooEnv(cfg.env, oracle_mode=False,
                                        eval_info_mode=False)
     model = RelationDuoEnvModel(cfg.env, torch.device("cpu"), reward_mode)
@@ -35,6 +36,12 @@ def _run_transitions(reward_mode: str, n_target: int = 200) -> int:
         g = int(rng.integers(0, 5))
         obs, _ = env.reset(seed=1000 + ep, options={"g": g})
         ep += 1
+        if inject_opponent_row:
+            # Privileged: the true w_01, which agent 1 never observes. Only
+            # meaningful under a coupling that puts it in agent 1's reward.
+            from hyper_mve.utils.schemas.relation import get_regime_family
+            W = get_regime_family(cfg.env).regimes[g].w_array()
+            model.set_opponent_row(torch.tensor([float(W[0, 1])]))
         done = False
         while not done and checked < n_target:
             a0, a1 = int(rng.integers(0, 6)), int(rng.integers(0, 6))
@@ -75,6 +82,44 @@ def _run_transitions(reward_mode: str, n_target: int = 200) -> int:
 @pytest.mark.parametrize("reward_mode", ["own_harvest", "true_W"])
 def test_env_model_matches_real_env_on_random_transitions(reward_mode):
     assert _run_transitions(reward_mode) == 200
+
+
+@pytest.mark.parametrize("reward_mode", ["own_harvest", "true_W"])
+def test_env_model_tracks_the_v6_physics(reward_mode):
+    """The same gate on rel_recip — logistic regrowth and reciprocal reward.
+
+    This is the test that stops MBOM silently planning against v5 physics after
+    an env change. ``true_W`` needs the true w_01 here, because under reciprocal
+    that is agent 1's reward weight and it is not in the observation.
+    """
+    assert _run_transitions(reward_mode, preset="rel_recip",
+                            inject_opponent_row=(reward_mode == "true_W")) == 200
+
+
+def test_mirror_prior_is_wrong_exactly_on_the_asymmetric_regimes():
+    """Without the injection the model uses the mirror prior, which is right in
+    g0/g1/g4 and wrong in g2/g3 — and it must report itself as non-privileged.
+
+    A silent mismatch here would score a fair baseline as if it knew the regime.
+    """
+    from hyper_mve.utils.schemas.relation import get_regime_family
+
+    cfg = V4Config.from_preset("rel_recip")
+    model = RelationDuoEnvModel(cfg.env, torch.device("cpu"), "true_W")
+    assert not model.uses_privileged_row
+
+    fam = get_regime_family(cfg.env)
+    for g in (0, 1, 4):
+        W = fam.regimes[g].w_array()
+        w_own = torch.tensor([float(W[1, 0])])
+        assert float(model._effective_weight(w_own)) == pytest.approx(float(W[0, 1]))
+    for g in (2, 3):
+        W = fam.regimes[g].w_array()
+        w_own = torch.tensor([float(W[1, 0])])
+        assert float(model._effective_weight(w_own)) != pytest.approx(float(W[0, 1]))
+
+    model.set_opponent_row(torch.tensor([1.0]))
+    assert model.uses_privileged_row
 
 
 def test_env_model_batched_rollout_shapes():

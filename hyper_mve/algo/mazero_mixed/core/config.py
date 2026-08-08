@@ -128,15 +128,24 @@ def parse_args(args):
     groups.add_argument("--adv_clip", type=float, default=3.0,
                         help="clip parameter in advantage (default: %(default)s)")
     groups.add_argument("--PG_type", type=str, default="none", choices=["none", "sharp", "raw"], help="type of PG loss")
-    groups.add_argument("--policy_target_type", type=str, default="visit", choices=["visit", "q_softmax"],
+    groups.add_argument("--policy_target_type", type=str, default="visit",
+                        choices=["visit", "q_softmax", "visit_q_blend"],
                         help="Source of the policy target under PG_type=none. 'visit' = upstream "
                              "normalized root visit counts, which are UCB-allocated and therefore "
                              "carry the prior's bias. 'q_softmax' = per-agent softmax over the "
-                             "search's own advantage estimates, which does not. (default: %(default)s)")
-    groups.add_argument("--policy_target_temperature", type=float, default=1.0,
-                        help="Temperature for --policy_target_type q_softmax. The advantages are "
-                             "already batch-std-normalized, so 1.0 is a sane base. "
+                             "search's own advantage estimates, which does not -- but which also "
+                             "discards the visit allocation, so a 1-visit Q is weighted like a "
+                             "20-visit Q. 'visit_q_blend' = softmax(log visit + adv/temperature), "
+                             "keeping the visit counts as a per-child RELIABILITY prior; it has "
+                             "'visit' and 'q_softmax' as its two exact endpoints. "
                              "(default: %(default)s)")
+    groups.add_argument("--policy_target_temperature", type=float, default=1.0,
+                        help="Temperature for --policy_target_type q_softmax / visit_q_blend. The "
+                             "advantages are already batch-std-normalized, so 1.0 is a sane base. "
+                             "Under visit_q_blend this is the ONLY knob trading the advantage term "
+                             "off against the log-visit term: large => visit-dominated (the visit "
+                             "target in the limit), small => advantage-dominated (q_softmax in the "
+                             "limit). (default: %(default)s)")
     groups.add_argument("--policy_target_min_qstd", type=float, default=0.0,
                         help="Zero-information guard: drop a transition from the policy loss when "
                              "its root advantage spread falls below this FRACTION of the "

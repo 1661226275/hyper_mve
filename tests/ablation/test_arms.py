@@ -26,14 +26,51 @@ def test_arm_set_is_the_locked_five_plus_diagnostics():
         "moe_router", "film",
     }
     assert locked <= set(ARMS)
+    # Everything else is enumerated explicitly so a new arm cannot quietly join
+    # the formal grid — adding one is meant to require touching this list.
+    #
     # ``mcts_fix*`` are DIAGNOSTIC arms (2026-07-20 prior-collapse fix): the fix
-    # is OPT-IN because it is net-negative, so these enable it for continued
-    # investigation and must never appear in the formal grid manifest.
-    assert set(ARMS) - locked == {"oracle_belief", "mcts_fix", "mcts_fix_cover",
-                                  "mcts_fix_qtarget", "mcts_fix_oracle", "ref_bc",
-                                  "ref_bc_mcts_fix", "ref_bc_no_subjective",
-                                  "ref_bc_belief_blind", "ref_bc_rw", "ref_bc_hardval",
-                                  "ref_bc_anneal_scaled"}
+    # is OPT-IN because it was net-negative on v5, so these enable it for
+    # continued investigation and must never appear in the formal grid manifest.
+    diagnostics = {
+        "oracle_belief",
+        "mcts_fix", "mcts_fix_cover", "mcts_fix_qtarget", "mcts_fix_oracle",
+    }
+    # Reference-episode / BC family, and the capacity + lr controls built on the
+    # method of record.
+    ref_bc_family = {
+        "ref_bc", "ref_bc_mcts_fix", "ref_bc_no_subjective",
+        "ref_bc_belief_blind", "ref_bc_rw", "ref_bc_hardval",
+        "ref_bc_anneal_scaled", "ref_bc_anneal_scaled_no_subjective",
+        "ref_bc_anneal_scaled_decoupled",
+        "ref_bc_anneal_scaled_hardval", "ref_bc_anneal_scaled_hardval_decoupled",
+        "ref_bc_anneal_scaled_no_subjective_decoupled",
+        "ref_bc_anneal_scaled_hardval_decoupled_big",
+        "ref_bc_anneal_scaled_hardval_decoupled_big2",
+        "ref_bc_anneal_scaled_hardval_decoupled_lrctl",
+    }
+    # 2026-08-05 v6 policy-target 2x2. Also diagnostic: they re-screen the
+    # rejected prior-collapse fix on the v6 env under a metric that can see
+    # g1/g2/g3 (results/analysis/regime_knowledge_ceiling.md).
+    policy_target_2x2 = {
+        "ref_bc_anneal_scaled_hardval_decoupled_cover",
+        "ref_bc_anneal_scaled_hardval_decoupled_qtarget",
+        "ref_bc_anneal_scaled_hardval_decoupled_mctsfix",
+    }
+    # 2026-08-07 visit_q_blend tau sweep. Supersedes the q_softmax cell: the
+    # blend keeps the visit counts as a per-child reliability prior instead of
+    # discarding them, with 'visit' and 'q_softmax' as its two exact endpoints
+    # (core/train.py:policy_target_weights, tests/algo/test_policy_target_blend.py).
+    # tau is swept because it is the only knob and tau_balanced was MEASURED at
+    # 0.38-0.56, not guessed (scripts/probes/blend_tau_probe.py).
+    blend_tau_sweep = {
+        "ref_bc_anneal_scaled_hardval_decoupled_blend_t025",
+        "ref_bc_anneal_scaled_hardval_decoupled_blend_t05",
+        "ref_bc_anneal_scaled_hardval_decoupled_blend_t1",
+        "ref_bc_anneal_scaled_hardval_decoupled_blend_t2",
+    }
+    assert set(ARMS) - locked == (
+        diagnostics | ref_bc_family | policy_target_2x2 | blend_tau_sweep)
 
 
 def test_unknown_arm_rejected():
@@ -286,3 +323,55 @@ def test_root_cover_validation_is_inert_when_disabled():
     """root_cover_off must not inherit the cover's sizing constraints."""
     validate, _ = _validators()
     validate(0, 5, 25, 2, 6)             # upstream settings, no raise
+
+
+# ---------------------------------------------------------------------------
+# v6 policy-target 2x2 (2026-08-05)
+# ---------------------------------------------------------------------------
+
+_2X2 = {
+    "ref_bc_anneal_scaled_hardval_decoupled":          ("none", "visit"),
+    "ref_bc_anneal_scaled_hardval_decoupled_cover":    ("star", "visit"),
+    "ref_bc_anneal_scaled_hardval_decoupled_qtarget":  ("none", "q_softmax"),
+    "ref_bc_anneal_scaled_hardval_decoupled_mctsfix":  ("star", "q_softmax"),
+}
+
+
+@pytest.mark.parametrize("arm,expected", sorted(_2X2.items()))
+def test_policy_target_2x2_cells_parse_to_the_intended_config(arm, expected):
+    """Asserted on the PARSED config, not on argv tokens — same reason as the
+    stage arms above: an override that got orphaned would still leave its token
+    in the list."""
+    cfg = _parse(apply_arm_argv(list(_BASELINE_ARGV), arm))
+    assert (cfg.root_cover, cfg.policy_target_type) == expected
+
+
+def test_policy_target_2x2_is_a_clean_factorial():
+    """The four cells must differ ONLY in the two factors under test.
+
+    If a cell drags an extra flag along, this stops being a 2x2 and the
+    interaction term is uninterpretable.
+    """
+    parsed = {a: _parse(apply_arm_argv(list(_BASELINE_ARGV), a)) for a in _2X2}
+    base = vars(parsed["ref_bc_anneal_scaled_hardval_decoupled"])
+    # root_cover=star needs a wider root to enumerate into, and leaves must not
+    # inherit that width — both are part of stage A, not stray extras.
+    factors = {"policy_target_type", "root_cover",
+               "sampled_action_times", "leaf_sampled_times"}
+    for arm, cfg in parsed.items():
+        differing = {k for k, v in vars(cfg).items() if base.get(k) != v}
+        assert differing <= factors, (
+            f"{arm} differs from the baseline cell outside the 2x2 factors: "
+            f"{sorted(differing - factors)}"
+        )
+
+
+def test_root_cover_star_cells_satisfy_the_width_contract():
+    """``validate_root_cover``: enumerating every action per agent needs
+    ``sampled_action_times >= 1 + N*A`` (= 13 here) and at least that many
+    simulations, or some root child never gets a simulation."""
+    for arm in ("ref_bc_anneal_scaled_hardval_decoupled_cover",
+                "ref_bc_anneal_scaled_hardval_decoupled_mctsfix"):
+        cfg = _parse(apply_arm_argv(list(_BASELINE_ARGV), arm))
+        assert cfg.sampled_action_times >= 13
+        assert cfg.num_simulations >= 13

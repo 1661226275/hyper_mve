@@ -235,6 +235,10 @@ class MPETagRegimeEnv(ParallelEnv):
             moved_mask=(actions != 0),          # MPE action 0 = no_action
             W=W,
             epsilon_move=float(self._cfg.epsilon_move),
+            # v6 coupling knobs pass through, but mpe_tag presets leave them at
+            # the v5 default so W=I still reproduces raw simple_tag rewards.
+            coupling=str(self._cfg.reward_coupling),
+            reciprocity_lambda=float(self._cfg.reciprocity_lambda),
         )
 
         # regime chain (p=0 in the phase-3 protocol: never draws from rng)

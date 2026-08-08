@@ -1,0 +1,22 @@
+# Prior-collapse fix — VALIDATION: stage B only (Q target, no root cover).
+#
+# `root_cover_off` reverts root children to being SAMPLED from the prior
+# (sampled_action_times back to 5) while keeping the Q-softmax policy target.
+#
+# Prediction to test: the Q target should be largely wasted here. Under a
+# collapsed prior the root holds ~2.9 distinct children (measured), so the
+# softmax runs over a candidate set that excludes most of the action space --
+# a prior-independent target over a prior-selected set. If this row matches
+# fixval_main, the cover is unnecessary and the target change carries the fix
+# alone; if it matches the pre-fix baseline, the two stages are genuinely
+# co-dependent as designed.
+algos:
+  - mazero_mixed
+ablations:
+  - root_cover_off
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 200000
+episodes: 16
+num_pmcts: 1

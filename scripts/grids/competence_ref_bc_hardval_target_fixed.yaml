@@ -1,0 +1,20 @@
+# Validation of the 2026-07-24 reanalyze value-target hard-select fix
+# (hyper_mve/algo/mazero_mixed/core/reanalyze_worker.py::_prepare_reward_value_re).
+# ref_bc_hardval's PRE-FIX numbers (results_competence_600K/mazero_mixed_ref_bc_hardval):
+# return_mean=57.15, regime_accuracy=0.591, head_diversity 0.00197->0.318,
+# g2 belief_acc~0 for both agents, g3 belief_acc 0.618 (agent0) / 0.004 (agent1).
+# Same arm, same budget, only the reanalyze target fix differs -- compare
+# against that archived run rather than overwriting it.
+#
+# Launch:  python scripts/train.py --grid \
+#   scripts/grids/competence_ref_bc_hardval_target_fixed.yaml --gpus 5 --out results_competence_600K_v2
+algos:
+  - mazero_mixed
+ablations:
+  - ref_bc_hardval
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 600000
+episodes: 16
+num_pmcts: 16

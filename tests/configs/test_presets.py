@@ -97,3 +97,68 @@ def test_replace_does_not_mutate_original():
     original_N = cfg.env.N
     _ = replace(cfg, env=replace(cfg.env, N=4, relation_family="g4"))
     assert cfg.env.N == original_N
+
+
+# ---------------------------------------------------------------------------
+# rel_recip (v6) — the environment built so the hidden regime is worth inferring
+# ---------------------------------------------------------------------------
+
+
+def test_rel_recip_preset_table():
+    cfg = V4Config.from_preset("rel_recip")
+
+    # Geometry: K <= N and a small grid, because the binding constraint turned
+    # out to be that two agents on a big grid just forage apart (agent 0's
+    # strategy moved agent 1's harvest by sd 0.28 vs 20.31 on 8x8).
+    assert (cfg.env.N, cfg.env.L, cfg.env.K) == (2, 3, 2)
+    assert cfg.env.K <= cfg.env.N
+
+    # The two physics knobs that carry the design.
+    assert cfg.env.regrowth_law == "logistic"
+    assert cfg.env.reward_coupling == "reciprocal"
+    assert cfg.env.alpha == 0.30
+
+    # Everything else matches rel_duo, so the two are a controlled comparison.
+    duo = V4Config.from_preset("rel_duo")
+    assert cfg.env.T_max == duo.env.T_max
+    assert cfg.env.relation_family == duo.env.relation_family
+    assert cfg.env.relation_intensity == duo.env.relation_intensity
+    assert cfg.env.regime_switch_prob == duo.env.regime_switch_prob
+    assert cfg.env.Q_max == duo.env.Q_max
+    assert cfg.env.epsilon_move == duo.env.epsilon_move
+    assert cfg.model == duo.model and cfg.train == duo.train
+    assert cfg.preset_name == "rel_recip"
+
+
+def test_rel_duo_is_frozen_at_the_v5_physics():
+    """rel_duo is the control in which the hidden regime is provably worthless
+    to infer; every archived result depends on it not moving."""
+    env = V4Config.from_preset("rel_duo").env
+    assert env.regrowth_law == "constant"
+    assert env.reward_coupling == "own_row"
+    assert env.reciprocity_lambda == 0.0
+
+
+def test_rel_recip_holdout_differs_only_in_train_regime_ids():
+    base = V4Config.from_preset("rel_recip")
+    hold = V4Config.from_preset("rel_recip_holdout")
+    assert hold.env == replace(base.env, train_regime_ids=(0, 1, 4))
+    assert hold.preset_name == "rel_recip_holdout"
+
+
+def test_rel_recip_hidden_row_is_what_the_reward_depends_on():
+    """The design in one assertion: two regimes agent 0 cannot tell apart from
+    its observation must give it opposite reward weights."""
+    from hyper_mve.utils.schemas.relation import (
+        effective_coupling_matrix, get_regime_family,
+    )
+
+    env = V4Config.from_preset("rel_recip").env
+    fam = get_regime_family(env)
+    W0 = fam.regimes[0].w_array()       # mutual_coop:     w01=+1, w10=+1
+    W3 = fam.regimes[3].w_array()       # asym_exploited:  w01=+1, w10=-1
+    assert W0[0, 1] == W3[0, 1]         # identical from agent 0's observation
+
+    w = [effective_coupling_matrix(W, env.reward_coupling,
+                                   env.reciprocity_lambda)[0, 1] for W in (W0, W3)]
+    assert w[0] == -w[1] != 0

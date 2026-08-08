@@ -1,0 +1,16 @@
+# Part B baseline (2026-07-22): plain ref_bc at 1000k — the matched control for
+# the ref_bc_rw A/B (the prior ref_bc result was 600k; this rules out "it was the
+# extra budget" so any prior de-collapse is attributable to reward weighting).
+#
+# Launch:  python scripts/train.py --grid scripts/grids/competence_ref_bc_1M.yaml \
+#              --gpus 6 --out results_competence_1M
+algos:
+  - mazero_mixed
+ablations:
+  - ref_bc
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 1000000
+episodes: 16
+num_pmcts: 16

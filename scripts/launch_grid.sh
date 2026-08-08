@@ -18,9 +18,12 @@ REPO=/home/data/zhengwenbo/hyper_mve
 PY=/home/zhengwenbo/.conda/envs/lightzero/bin/python
 LOGDIR="$REPO/results/_logs"
 
+# Kept in sync with ALLOWED_GPUS in scripts/train.py. This used to allow only
+# 3-6 while train.py allowed 0-8, so half the machine was unreachable through
+# the launcher for no reason. GPU 9 stays out — it belongs to another user.
 case "$GPU" in
-    3|4|5|6) ;;
-    *) echo "refusing GPU '$GPU': training is restricted to GPUs 3,4,5,6" >&2
+    0|1|2|3|4|5|6|7|8) ;;
+    *) echo "refusing GPU '$GPU': training is restricted to GPUs 0-8 (9 is another user's)" >&2
        exit 2 ;;
 esac
 [ -f "$REPO/$GRID" ] || [ -f "$GRID" ] || { echo "no such grid: $GRID" >&2; exit 2; }

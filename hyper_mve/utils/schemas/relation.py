@@ -364,14 +364,66 @@ def step_regime(
 # Relational reward (the citable formula — thesis Ch3, Pkg-09)
 # ---------------------------------------------------------------------------
 
+VALID_REWARD_COUPLINGS: tuple[str, ...] = ("own_row", "levine", "reciprocal")
+
+
+def effective_coupling_matrix(
+    W: np.ndarray,
+    coupling: str = "own_row",
+    reciprocity_lambda: float = 0.0,
+) -> np.ndarray:
+    """The matrix the reward actually mixes with — ``W`` under some coupling rule.
+
+    Agent ``i``'s reward weight on ``u_j`` comes from row ``i`` of the result:
+
+    * ``own_row`` (default, v5): ``Ŵ = W``. The weight is ``w_ij`` — the agent's
+      **own** row, which the observation already carries
+      (``observations.py`` block 5). The hidden ``w_ji`` never enters any
+      agent's reward, so the best response cannot depend on it and the value of
+      inferring it is identically zero. Measured, three ways:
+      ``results/analysis/regime_knowledge_ceiling.md``.
+    * ``reciprocal`` (v6): ``Ŵ = Wᵀ``. Agent ``i``'s weight on ``u_j`` is
+      ``w_ji`` — how much ``j`` values ``i``. Reciprocal altruism: I internalise
+      your welfare exactly as much as you internalise mine. The weight is now a
+      *hidden* variable, which is what makes inference pay.
+    * ``levine``: ``Ŵ = (W + λ·Wᵀ)/(1+λ)`` — Levine (1998) adjusted altruism,
+      interpolating the two. ``λ=0`` is ``own_row`` exactly and ``λ→∞`` tends to
+      ``reciprocal``, so λ is a continuous knob for a sweep. Note the weight
+      only changes **sign** with the hidden row once ``λ > 1``, and that sign
+      flip is what carries essentially all of the value of information.
+
+    Every rule preserves the unit diagonal automatically (``Wᵀ`` shares it, and
+    ``(1 + λ·1)/(1 + λ) = 1``), so the caller's diagonal assert still holds.
+    """
+    if coupling not in VALID_REWARD_COUPLINGS:
+        raise ValueError(
+            f"Unknown reward coupling {coupling!r} "
+            f"(valid: {VALID_REWARD_COUPLINGS})"
+        )
+    W = np.asarray(W, dtype=np.float32)
+    if coupling == "own_row":
+        return W
+    if coupling == "reciprocal":
+        return W.T
+    lam = float(reciprocity_lambda)
+    if lam < 0.0:
+        raise ValueError(f"reciprocity_lambda must be ≥ 0, got {lam}")
+    return ((W + lam * W.T) / (1.0 + lam)).astype(np.float32)
+
+
 def compute_relational_rewards(
     *,
     harvests: np.ndarray,
     moved_mask: np.ndarray,
     W: np.ndarray,
     epsilon_move: float,
+    coupling: str = "own_row",
+    reciprocity_lambda: float = 0.0,
 ) -> np.ndarray:
-    """``R_i = (u_i + Σ_{j≠i} w_ij·u_j) / (1 + Σ_{j≠i} |w_ij|) - ε·1[moved_i]``.
+    """``R_i = (u_i + Σ_{j≠i} ŵ_ij·u_j) / (1 + Σ_{j≠i} |ŵ_ij|) - ε·1[moved_i]``.
+
+    ``Ŵ = effective_coupling_matrix(W, coupling, reciprocity_lambda)``; the
+    default ``own_row`` leaves ``Ŵ = W``, i.e. the v5 formula unchanged.
 
     Args:
         harvests:   ``(N,)`` per-agent physical harvest ``u_i`` (≥ 0).
@@ -379,10 +431,14 @@ def compute_relational_rewards(
                     execution success, same contract as v4).
         W:          ``(N, N)`` relationship matrix, diagonal exactly 1.
         epsilon_move: per-move cost ε.
+        coupling:   which row of ``W`` weights agent ``i``'s regard for ``u_j``
+                    — see :func:`effective_coupling_matrix`.
+        reciprocity_lambda: λ, consumed only by ``coupling="levine"``.
 
     Returns:
         ``(N,) float32`` rewards. Bound: ``|R_i + ε·moved_i| ≤ max_j u_j``
-        (convex-combination property of the row normalization).
+        (convex-combination property of the row normalization; the coupling
+        rules preserve it because they preserve the unit diagonal).
     """
     u = np.asarray(harvests, dtype=np.float32)
     N = u.shape[0]
@@ -392,7 +448,8 @@ def compute_relational_rewards(
     if not np.allclose(np.diagonal(W), 1.0):
         raise AssertionError(f"W diagonal must be 1.0, got {np.diagonal(W)}")
 
-    mixed = W @ u                                # u_i + Σ_{j≠i} w_ij·u_j
-    denom = np.abs(W).sum(axis=1)                # 1 + Σ_{j≠i} |w_ij|
+    W_eff = effective_coupling_matrix(W, coupling, reciprocity_lambda)
+    mixed = W_eff @ u                            # u_i + Σ_{j≠i} ŵ_ij·u_j
+    denom = np.abs(W_eff).sum(axis=1)            # 1 + Σ_{j≠i} |ŵ_ij|
     move_cost = epsilon_move * np.asarray(moved_mask, dtype=np.float32)
     return (mixed / denom - move_cost).astype(np.float32)

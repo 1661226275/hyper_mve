@@ -1,0 +1,21 @@
+# Budget-proportional-anneal fix (2026-07-24): ref_bc's hardcoded 28000-step
+# BC/reference-episode anneal is 74.7% of training_steps at 600K (where it was
+# tuned, return_mean=66.6) but only 44.8% at 1M (return_mean=49.8) -- 3.6x more
+# absolute "unsupervised" steps. ref_bc_anneal_scaled preserves the VALIDATED
+# 74.7% fraction instead of the raw count (see hyper_mve/ablation/arms.py and
+# hyper_mve/algo/runner.py::_build_game_config). Compare this run's return_mean
+# against 66.6 (600K) / 49.8 (1M, plain ref_bc) to see whether the schedule was
+# a primary driver of the 600K->1M regression.
+#
+# Launch:  python scripts/train.py --grid \
+#   scripts/grids/competence_ref_bc_anneal_scaled_1M.yaml --gpus 6 --out results_competence_1M_v2
+algos:
+  - mazero_mixed
+ablations:
+  - ref_bc_anneal_scaled
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 1000000
+episodes: 16
+num_pmcts: 16

@@ -133,10 +133,27 @@ class RelationDuoEnvModel:
 
     ``reward_mode``:
       * ``"own_harvest"`` — R_i = u_i − ε·moved_i  (W = I; no regime access)
-      * ``"true_W"``      — R_1 uses the agent's OWN row w (from the obs
-        tail): R_1 = (u_1 + w·u_0)/(1+|w|) − ε·moved_1  (oracle row)
+      * ``"true_W"``      — R_1 = (u_1 + ŵ·u_0)/(1+|ŵ|) − ε·moved_1
     R_0 is returned as the W=I form in both modes — MBOM's rollout only ever
     consumes ``reward[agent_idx=1]``.
+
+    **The weight ŵ depends on the env's** ``reward_coupling``, and so does
+    whether this model can honestly compute it:
+
+    * ``own_row`` (v5) — ŵ = w_10, read straight off the observation tail. Not
+      privileged; every agent observes its own row.
+    * ``reciprocal`` (v6) — ŵ = w_01, the opponent's row, which agent 1 **never
+      observes**. Without :meth:`set_opponent_row` this falls back to the mirror
+      prior (w_01 := w_10), which is what a non-privileged model can do and is
+      right in g0/g1/g4 and wrong in g2/g3. Injecting the truth makes the arm
+      genuinely privileged; :attr:`uses_privileged_row` says which of the two is
+      in force, so an oracle arm cannot silently be scored as a fair baseline.
+
+    NOTE the ``mbom_oracle`` arm is named for using W at all, which under
+    ``own_row`` is not actually privileged (the row is observed). Under
+    ``reciprocal`` it runs on the mirror prior unless something calls
+    :meth:`set_opponent_row` — wiring that injection is deliberately left
+    undone rather than silently granting a baseline hidden information.
     """
 
     def __init__(self, env_cfg, device, reward_mode: str = "own_harvest"):
@@ -151,6 +168,12 @@ class RelationDuoEnvModel:
         self.q_max = float(env_cfg.Q_max)
         self.eps_move = float(env_cfg.epsilon_move)
         self.reward_mode = reward_mode
+        # Physics must track the env or MBOM plans against the wrong world.
+        # tests/comparison/test_mbom_env_model.py pins them in lockstep to 1e-5.
+        self.regrowth_law = str(getattr(env_cfg, "regrowth_law", "constant"))
+        self.coupling = str(getattr(env_cfg, "reward_coupling", "own_row"))
+        self.reciprocity_lambda = float(getattr(env_cfg, "reciprocity_lambda", 0.0))
+        self._opp_row = None            # true w_01; None => mirror prior
         self.device = device
         self._deltas = torch.tensor(_DELTAS, dtype=torch.float32, device=device)
         # five-block layout offsets for N=2 (self 4 | resource 3K | neighbor 9
@@ -163,6 +186,28 @@ class RelationDuoEnvModel:
 
     def reset(self) -> None:  # rollout-batch lifecycle hook (stateless model)
         pass
+
+    def set_opponent_row(self, w_opp) -> None:
+        """Inject the true ``w_01`` — privileged, and only meaningful under a
+        coupling that puts it in agent 1's reward. ``None`` restores the
+        mirror prior."""
+        self._opp_row = w_opp
+
+    @property
+    def uses_privileged_row(self) -> bool:
+        """True when the reward needs a quantity agent 1 cannot observe *and*
+        the truth has been injected."""
+        return self.coupling != "own_row" and self._opp_row is not None
+
+    def _effective_weight(self, w_own):
+        """Agent 1's reward weight on ``u_0`` under the env's coupling rule."""
+        if self.coupling == "own_row":
+            return w_own
+        w_opp = self._opp_row if self._opp_row is not None else w_own
+        if self.coupling == "reciprocal":
+            return w_opp
+        lam = self.reciprocity_lambda
+        return (w_own + lam * w_opp) / (1.0 + lam)
 
     def step(self, state, actions):
         import torch
@@ -203,14 +248,18 @@ class RelationDuoEnvModel:
         u_op = (u_cell * on_op.float()).sum(-1)
         h_per_res = u_cell * cnt
 
-        # ------- 5. constant-rate regen (post-harvest)
-        q_n = (q + self.alpha * (self.q_max - q) - h_per_res).clamp(
-            0.0, self.q_max)
+        # ------- 5. regen (post-harvest), under the env's law
+        if self.regrowth_law == "logistic":
+            growth = self.alpha * q * (1.0 - q / self.q_max)
+        else:
+            growth = self.alpha * (self.q_max - q)
+        q_n = (q + growth - h_per_res).clamp(0.0, self.q_max)
 
         # ------- 6. rewards
         r0 = u_op - self.eps_move * moved_op.float()
         if self.reward_mode == "true_W":
-            r1 = (u_me + w * u_op) / (1.0 + torch.abs(w)) \
+            w_eff = self._effective_weight(w)
+            r1 = (u_me + w_eff * u_op) / (1.0 + torch.abs(w_eff)) \
                 - self.eps_move * moved_me.float()
         else:
             r1 = u_me - self.eps_move * moved_me.float()
@@ -332,10 +381,18 @@ class MBOMRunner(ExternalBaselineRunner):
         # NOTE on the default: these are tiny MLPs (39-dim input, [64,32]
         # hidden) driven at batch 1 in choose_action and batch 36 in the
         # rollout, so CUDA is not automatically faster per-run — it trades
-        # kernel-launch latency for CPU occupancy. Use MBOM_DEVICE=cuda when
-        # CPU contention across concurrent runs is the binding constraint,
-        # MBOM_DEVICE=cpu for the lowest single-run latency.
-        self._device = torch.device(os.environ.get("MBOM_DEVICE", "cpu"))
+        # kernel-launch latency for CPU occupancy.
+        #
+        # The default is CUDA because on this box CPU occupancy, not per-run
+        # latency, is what actually binds: torch's intra-op pool spins ~38 cores
+        # per CPU run on these tiny ops, so three concurrent seeds pinned the
+        # 128-core box at load 164 and drove two of them to *zero* env-steps/min
+        # while also starving every other experiment. Measured footprint of one
+        # run: CPU/unlimited 3777% -> CUDA 156% (and CPU with OMP_NUM_THREADS=4
+        # lands at 361%, if a CPU-only fallback is ever needed).
+        # Set MBOM_DEVICE=cpu for the lowest single-run latency when the box is
+        # otherwise idle.
+        self._device = torch.device(os.environ.get("MBOM_DEVICE", "cuda"))
         if self._device.type == "cuda" and not torch.cuda.is_available():
             self._device = torch.device("cpu")
         args = self._make_args(eps_per_epoch=eps_per_epoch, max_epoch=max_epoch)

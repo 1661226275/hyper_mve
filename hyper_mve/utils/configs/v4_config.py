@@ -13,7 +13,8 @@ from .train_config import TrainConfig
 
 
 _PRESET_NAMES: tuple[str, ...] = (
-    "rel_duo", "rel_duo_holdout", "mpe_tag", "mpe_tag_fixed",
+    "rel_duo", "rel_duo_holdout", "rel_recip", "rel_recip_holdout",
+    "mpe_tag", "mpe_tag_fixed",
 )
 
 
@@ -45,6 +46,12 @@ class V4Config:
         if name == "rel_duo_holdout":
             from .presets.rel_duo import build_rel_duo_holdout_config
             return build_rel_duo_holdout_config()
+        if name == "rel_recip":
+            from .presets.rel_recip import build_rel_recip_config
+            return build_rel_recip_config()
+        if name == "rel_recip_holdout":
+            from .presets.rel_recip import build_rel_recip_holdout_config
+            return build_rel_recip_holdout_config()
         if name == "mpe_tag":
             from .presets.mpe_tag import build_mpe_tag_config
             return build_mpe_tag_config()

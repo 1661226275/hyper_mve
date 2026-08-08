@@ -1,0 +1,36 @@
+# Step 1.5 — lr sweep on the BASELINE cell of the v6 policy-target 2x2.
+#
+# WHY: lr is brutally fragile here — 0.02 -> 0.005 at fixed capacity cost 36
+# points on v5 (lrctl 25.49 vs main 61.94) — and v6 is a different optimisation
+# problem: return scale roughly halves, obs_dim 39 -> 21, logistic dynamics,
+# and a genuine interior optimum in the harvest threshold. If the inherited
+# 0.02 is off for rel_recip, all four 2x2 cells sit in a bad regime and the
+# comparison measures lr sensitivity rather than the policy target.
+#
+# `lr` is deliberately ABSENT from this file: _run_grid's lr key is a scalar,
+# so the sweep is this one grid launched once per lr via `train.py --lr`, each
+# with its own --out. Without distinct --out roots all four rows resolve to the
+# same run_dir (out/{algo}{arm}/{env}/seed{seed} — identical across the sweep)
+# and would clobber each other.
+#
+#   scripts/launch_grid.sh v6lr004 0 scripts/grids/v6_lr_sweep.yaml \
+#       --lr 0.04 --out results_v6_lrsweep/lr0.04
+#
+# SELECTION: on the mean of the run's own periodic eval/return_mean over the
+# FINAL 20% of training, not the last checkpoint — the single-point metric has
+# sd ~8-12 (results/analysis/late_training_instability.md). Score per
+# results/analysis/v6_reporting_protocol.md: team return on g0/g4, per-agent on
+# g2/g3, and treat g1's return as n/a (it reduces to -eps*(moves)).
+#
+# If the winner lands at an ENDPOINT of {0.04, 0.02, 0.01, 0.005}, extend the
+# bracket rather than accepting it — an edge winner means the bracket was wrong.
+algos:
+  - mazero_mixed
+envs:
+  - relation_recip
+ablations:
+  - ref_bc_anneal_scaled_hardval_decoupled
+seeds: [0]
+total_env_steps: 1000000
+episodes: 16
+num_pmcts: 16

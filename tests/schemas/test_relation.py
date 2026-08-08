@@ -256,3 +256,101 @@ def test_reward_rejects_bad_diagonal():
             W=np.array([[0.5, 1.0], [1.0, 1.0]]),
             epsilon_move=0.01,
         )
+
+
+# ---------------------------------------------------------------------------
+# v6 reward coupling — which entry of W weights agent i's regard for u_j.
+#
+# Under "own_row" (v5) that weight is w_ij, which the observation already
+# carries, so the hidden w_ji cannot change any best response and inferring it
+# is worth exactly nothing (results/analysis/regime_knowledge_ceiling.md).
+# "reciprocal" moves the weight onto the hidden half; these pin the algebra.
+# ---------------------------------------------------------------------------
+
+from hyper_mve.utils.schemas.relation import (  # noqa: E402
+    VALID_REWARD_COUPLINGS, effective_coupling_matrix,
+)
+
+
+def test_own_row_coupling_is_the_identity_transform():
+    """The v5 default must not touch W at all — every archived result depends
+    on this staying bit-exact."""
+    W = build_g2(1.0).regimes[2].w_array()
+    np.testing.assert_array_equal(effective_coupling_matrix(W, "own_row"), W)
+
+
+def test_reciprocal_coupling_is_the_transpose():
+    W = build_g2(1.0).regimes[2].w_array()      # asym_exploit, asymmetric
+    np.testing.assert_allclose(
+        effective_coupling_matrix(W, "reciprocal"), W.T, rtol=1e-6)
+    # ...and the asymmetric regimes are precisely where that differs.
+    assert not np.allclose(W, W.T)
+
+
+def test_levine_lambda_zero_is_bit_identical_to_own_row():
+    """λ=0 must recover v5 exactly, so λ is a continuous knob and the archived
+    results are the λ=0 point of one family rather than a different experiment."""
+    for reg in build_g2(1.0).regimes:
+        W = reg.w_array()
+        np.testing.assert_array_equal(
+            effective_coupling_matrix(W, "levine", 0.0), W)
+
+
+def test_levine_tends_to_reciprocal_as_lambda_grows():
+    W = build_g2(1.0).regimes[3].w_array()
+    far = effective_coupling_matrix(W, "levine", 1e6)
+    np.testing.assert_allclose(far, W.T, atol=1e-5)
+
+
+def test_every_coupling_preserves_the_unit_diagonal():
+    """The reward's diagonal assert and its 1+Σ|w| normalizer both rely on it."""
+    for fam in (build_g2(), build_g4(), build_g4_ext()):
+        for reg in fam.regimes:
+            for coupling in VALID_REWARD_COUPLINGS:
+                W_eff = effective_coupling_matrix(reg.w_array(), coupling, 2.0)
+                np.testing.assert_allclose(np.diagonal(W_eff), 1.0, atol=1e-6)
+
+
+def test_levine_sign_flips_only_above_lambda_one():
+    """The sign flip is the whole mechanism: designs that keep the weight's sign
+    across the hidden row measure VoI 0.06-0.17 where flipping ones measure
+    ~4-6 in the same environment. It requires λ > 1."""
+    W = build_g2(1.0).regimes[3].w_array()      # asym_exploited: w01=+1, w10=-1
+    assert effective_coupling_matrix(W, "levine", 0.5)[0, 1] > 0    # no flip
+    assert effective_coupling_matrix(W, "levine", 1.0)[0, 1] == 0   # boundary
+    assert effective_coupling_matrix(W, "levine", 2.0)[0, 1] < 0    # flipped
+
+
+def test_reciprocal_reward_matches_hand_computation():
+    # asym_exploit: w01=-1 (agent 0 hostile), w10=+1 (agent 1 supportive).
+    # Under reciprocal agent i's weight on u_j is w_ji, so agent 0 uses +1 and
+    # agent 1 uses -1 — the exact opposite of the own_row reading.
+    u = np.array([4.0, 2.0], np.float32)
+    W = build_g2(1.0).regimes[2].w_array()
+    r = compute_relational_rewards(
+        harvests=u, moved_mask=np.zeros(2, bool), W=W, epsilon_move=0.01,
+        coupling="reciprocal",
+    )
+    np.testing.assert_allclose(r, [(4 + 2) / 2, (2 - 4) / 2], rtol=1e-6)
+
+
+def test_reciprocal_makes_the_weight_depend_on_the_hidden_row():
+    """The point of v6: two regimes an agent cannot tell apart from its own row
+    must give it OPPOSITE reward weights.
+
+    g0 and g3 both have w_01 = +1, so agent 0 observes the same thing in each.
+    Under own_row its weight on u_1 is +1 in both — nothing to infer. Under
+    reciprocal it is +1 in g0 and -1 in g3.
+    """
+    fam = build_g2(1.0)
+    W0, W3 = fam.regimes[0].w_array(), fam.regimes[3].w_array()
+    assert W0[0, 1] == W3[0, 1]                                  # indistinguishable
+    assert (effective_coupling_matrix(W0, "own_row")[0, 1]
+            == effective_coupling_matrix(W3, "own_row")[0, 1])   # v5: no signal
+    assert (effective_coupling_matrix(W0, "reciprocal")[0, 1]
+            == -effective_coupling_matrix(W3, "reciprocal")[0, 1])  # v6: opposite
+
+
+def test_unknown_coupling_is_rejected():
+    with pytest.raises(ValueError, match="coupling"):
+        effective_coupling_matrix(np.eye(2), "mutual_admiration")

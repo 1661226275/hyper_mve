@@ -261,13 +261,21 @@ def _rollout(
     Returns (mean per-agent subjective returns (N,), mean total physical welfare).
     When ``br_agent``/``br_q`` are given, that agent acts greedily from the BR
     Q-net instead of the frozen prior.
+
+    Episode seeding is ``seed + 97*regime_id + ep``, matching
+    ``MAZeroMixedRunner.evaluate`` and ``evaluate_reference_policy`` (both
+    ``10_000 + 97*g + ep`` at the default seed). Without the ``97*g`` offset
+    every regime replayed the *same* initial conditions, and ``v_pi`` — which is
+    the only per-agent return in the codebase — could not be compared against
+    the per-regime returns in ``eval_report.json``.
     """
     N = cfg.env.N
     rets = np.zeros((episodes, N), dtype=np.float64)
     phys = np.zeros(episodes, dtype=np.float64)
     for ep in range(episodes):
-        env = RelationCommonsEnv(cfg.env, seed=seed + ep)
-        obs, info = env.reset(seed=seed + ep, options={"g": int(regime_id)})
+        ep_seed = int(seed) + 97 * int(regime_id) + ep
+        env = RelationCommonsEnv(cfg.env, seed=ep_seed)
+        obs, info = env.reset(seed=ep_seed, options={"g": int(regime_id)})
         frozen.reset()
         done = False
         while not done:
@@ -288,6 +296,28 @@ def _rollout(
 # ---------------------------------------------------------------------------
 # Report assembly
 # ---------------------------------------------------------------------------
+
+def _frozen_policy_note(variant: str) -> str:
+    """Which policy was frozen, read off the ``variant`` tag.
+
+    This sentence used to be hardcoded to "acts via its distilled prior", which
+    silently began contradicting the ``variant`` field once ``--frozen-mode``
+    landed: a ``:planner`` run still described itself as the prior. The two are
+    NOT the same policy -- on an archived v5 checkpoint the prior's g0 physical
+    welfare is 23.24, exactly the constant-HARVEST collapse constant, against
+    the planner's 90.43 -- so a stale note is enough to make an archived file
+    read as a different experiment than the one that produced it.
+    """
+    mode = variant.rsplit(":", 1)[-1] if ":" in variant else ""
+    if mode == "planner":
+        return ("Frozen policy acts via the MCTS planner "
+                "(runner.make_act_fn('planner')), not the distilled prior.")
+    if mode == "prior":
+        return ("Frozen policy acts via its distilled prior (argmax prediction "
+                "net), not the MCTS planner.")
+    return ("Frozen policy mode is NOT recorded in `variant` -- check the "
+            "invocation before attributing these numbers to a policy.")
+
 
 @dataclass
 class GameMetricsReport:
@@ -326,8 +356,7 @@ class GameMetricsReport:
             "note": (
                 "BR is an approximate best response (independent double-DQN, "
                 "budget br_env_steps) => NashConv values are LOWER BOUNDS on true "
-                "exploitability. Frozen policy acts via its distilled prior "
-                "(argmax prediction net), not the MVE planner."
+                "exploitability. " + _frozen_policy_note(self.variant)
             ),
         }
 

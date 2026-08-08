@@ -1,0 +1,18 @@
+# Matched 600K capacity control for the hardval value-mechanism comparison
+# (2026-07-23). belief_blind was run at 1000K (62.9); this reruns it at 600K so
+# hardval (differentiated heads, hard-train/Bayes-deploy) vs belief_blind
+# (collapsed heads, uniform posterior) is a same-budget comparison. Read
+# head_diversity, regime_acc, per-regime value-swing, and planner return together.
+#
+# Launch:  python scripts/train.py --grid \
+#   scripts/grids/competence_ref_bc_belief_blind_600K.yaml --gpus 6 --out results_competence_600K
+algos:
+  - mazero_mixed
+ablations:
+  - ref_bc_belief_blind
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 600000
+episodes: 16
+num_pmcts: 16

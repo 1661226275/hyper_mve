@@ -1,0 +1,25 @@
+# Part B (2026-07-22): reward-weighted BC (ref_bc_rw), 1000k.
+#
+# Plain ref_bc de-collapsed nothing at the PRIOR level (search-free prior stayed
+# ~15, 90-100% HARVEST) because uniform BC clones the harvest-dominated demos.
+# ref_bc_rw weights each reference step's per-agent BC by the agent's own
+# per-(regime,agent)-normalized full-episode return-to-go, upweighting productive
+# demonstrated actions (walk-toward-resource) over idle steps.
+#
+# Read against plain ref_bc (results_competence_1M/mazero_mixed_ref_bc, matched
+# 1000k): watch direct_inference_return_mean (the prior) climb off ~15,
+# prior_action_fractions de-collapse, and return_per_regime_prior rise. Monitor
+# G_t / bc_weight / per-regime bc_weight in tb.
+#
+# Launch:  python scripts/train.py --grid scripts/grids/competence_ref_bc_rw.yaml \
+#              --gpus 5 --out results_competence_1M
+algos:
+  - mazero_mixed
+ablations:
+  - ref_bc_rw
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 1000000
+episodes: 16
+num_pmcts: 16

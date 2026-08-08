@@ -54,6 +54,15 @@ ARMS: tuple[str, ...] = (
     "ref_bc_anneal_scaled_hardval_decoupled_big",
     "ref_bc_anneal_scaled_hardval_decoupled_big2",
     "ref_bc_anneal_scaled_hardval_decoupled_lrctl",
+    # v6 policy-target 2x2 (the fourth cell is the bare method of record)
+    "ref_bc_anneal_scaled_hardval_decoupled_cover",
+    "ref_bc_anneal_scaled_hardval_decoupled_qtarget",
+    "ref_bc_anneal_scaled_hardval_decoupled_mctsfix",
+    # v6 visit_q_blend tau sweep (replaces q_softmax; see below)
+    "ref_bc_anneal_scaled_hardval_decoupled_blend_t025",
+    "ref_bc_anneal_scaled_hardval_decoupled_blend_t05",
+    "ref_bc_anneal_scaled_hardval_decoupled_blend_t1",
+    "ref_bc_anneal_scaled_hardval_decoupled_blend_t2",
 )
 
 # arm -> (flags to add, flags to remove); value-flags are (name, value) adds.
@@ -257,6 +266,73 @@ _ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_lrctl"] = _ARGV_REMOVE["ref
 _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_big2"] = (
     _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] + ("--model_scale", "2.0"))
 _ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_big2"] = _ARGV_REMOVE["ref_bc"]
+
+# ---------------------------------------------------------------------------
+# 2026-08-05 policy-target 2x2 on the method of record, for the v6 env.
+#
+# The prior-collapse fix was screened once on v5 (seed 0, 200k) and REJECTED:
+# it de-collapses the prior but took return 22.1 -> 13.3, so the canonical argv
+# still passes neither flag and runs the upstream defaults (root_cover=none,
+# policy_target_type=visit). Two reasons that verdict does not transfer to v6:
+# it moved BOTH stages at once, and it was scored on the summed team return,
+# which on this reward cannot respond in g1 (the harvests cancel to
+# -eps*(moves) exactly) and sees only one agent in g2/g3 -- precisely the
+# regimes v6 changes. See results/analysis/regime_knowledge_ceiling.md.
+#
+# The cells reuse the stage tuples rather than retyping them, so the root-cover
+# width stays consistent with validate_root_cover (sampled_action_times must be
+# 1 + N*A = 13, and num_simulations >= that; the canonical argv passes 25).
+#
+#   cell        root_cover  policy_target   arm
+#   baseline    none        visit           ref_bc_anneal_scaled_hardval_decoupled
+#   A only      star        visit           ..._cover
+#   B only      none        q_softmax       ..._qtarget
+#   A+B         star        q_softmax       ..._mctsfix
+#
+# B-alone is a real cell, not a formality: with root_cover=none the root's
+# children are sampled from the prior and can collapse to one child
+# (tests/algo/test_root_action_enumeration.py), and a softmax target over a
+# single child is degenerate. If B-alone underperforms, that cell says whether
+# the target or the collapsed root is responsible.
+#
+# NOTE the names keep the "anneal_scaled" substring, which runner.py keys on to
+# rescale the BC anneal to the run's budget.
+_ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_cover"] = (
+    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] + _ARGV_ADD["mcts_fix_cover"])
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_cover"] = _ARGV_REMOVE["ref_bc"]
+
+_ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_qtarget"] = (
+    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] + _ARGV_ADD["mcts_fix_qtarget"])
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_qtarget"] = _ARGV_REMOVE["ref_bc"]
+
+_ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_mctsfix"] = (
+    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] + _ARGV_ADD["mcts_fix"])
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_mctsfix"] = _ARGV_REMOVE["ref_bc"]
+
+# --- visit_q_blend: q_softmax with the visit allocation restored as a prior ---
+#
+# The 2x2 (wave 1, n=2) put B-alone (none / q_softmax) first on every instrument
+# -- return, the last-20% trace, and g1 NashConv (5.43 vs the baseline's 12.83)
+# -- but at ~5x the baseline's seed spread. The blend targets exactly that
+# variance: q_softmax weights a 1-visit Q like a 20-visit Q, and at
+# root_cover=star the budget is only ~1.9 visits/child. See
+# core/train.py:policy_target_weights.
+#
+# tau is the only knob and is UNKNOWN, so it is swept rather than guessed --
+# this codebase is brutally hyperparameter-sensitive (the lr sweep separated
+# 46.68 from 23.78 between 0.02 and 0.01), and screening one guessed tau is the
+# same mistake that produced the wrong v5 verdict. tau -> inf is the visit
+# target and tau -> 0 is q_softmax, so the bracket must straddle 1.0, where the
+# std-normalized advantage and the log-visit span are comparable.
+for _tau_name, _tau in (("t025", "0.25"), ("t05", "0.5"),
+                        ("t1", "1.0"), ("t2", "2.0")):
+    _blend_arm = f"ref_bc_anneal_scaled_hardval_decoupled_blend_{_tau_name}"
+    _ARGV_ADD[_blend_arm] = (
+        _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"]
+        + ("--policy_target_type", "visit_q_blend",
+           "--policy_target_temperature", _tau))
+    _ARGV_REMOVE[_blend_arm] = _ARGV_REMOVE["ref_bc"]
+del _tau_name, _tau, _blend_arm
 
 
 def _validate(arm: str) -> str:

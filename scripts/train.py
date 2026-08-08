@@ -42,14 +42,19 @@ if REPO_ROOT not in sys.path:
 
 # User-locked allocation. Was {3,4,5} from the 2026-07-17 realignment; GPU 6
 # was secured on 2026-07-18 and authorised for the formal experiment grid;
-# GPUs 7 and 8 were secured on 2026-07-27. GPUs 0-2 and 9 remain
-# policy-forbidden (9 still carries another user's work).
-ALLOWED_GPUS = (3, 4, 5, 6, 7, 8)
+# GPUs 7 and 8 were secured on 2026-07-27; GPUs 0-2 on 2026-07-28.
+# GPU 9 remains policy-forbidden (it still carries another user's work).
+ALLOWED_GPUS = (0, 1, 2, 3, 4, 5, 6, 7, 8)
 
 # env id → V4Config preset name. mpe_tag / mpe_tag_fixed land in phase 3.
 ENV_PRESETS = {
     "relation": "rel_duo",
     "relation_holdout": "rel_duo_holdout",
+    # v6: the environment in which the hidden regime is actually worth
+    # inferring (VoI 3.99 vs 0.00 on rel_duo). `relation` stays the frozen
+    # control — see results/analysis/regime_knowledge_ceiling.md.
+    "relation_recip": "rel_recip",
+    "relation_recip_holdout": "rel_recip_holdout",
     "mpe_tag": "mpe_tag",
     "mpe_tag_fixed": "mpe_tag_fixed",
 }
@@ -215,10 +220,27 @@ def run_one(*, algo: str, env_id: str, seed: int, total_env_steps: int,
     # Identity for the report. Both fields used to be hardcoded inside the
     # runner ("seed": 0, config_hash all-zeros), so every seed's report claimed
     # seed 0 and no report could be traced back to its config.
+    #
+    # The env PHYSICS must be in here. It was not, so a run under the v6 reward
+    # or regrowth law hashed identically to an archived v5 run at the same
+    # (algo, env, ablation, steps, lr) — two incomparable experiments sharing an
+    # identity, with nothing in the report to tell them apart. Only fields that
+    # change the MDP belong; presentation-only settings would churn the hash and
+    # break comparability with archived runs for no reason.
+    physics = {
+        f: getattr(cfg.env, f) for f in (
+            "N", "L", "K", "T_max", "A", "Q_max", "alpha", "epsilon_move",
+            "regrowth_law", "reward_coupling", "reciprocity_lambda",
+            "relation_family", "relation_intensity", "regime_prior",
+            "regime_switch_prob", "regime_kernel", "train_regime_ids",
+            "env_kind", "fixed_regime",
+        )
+    }
     config_hash = hashlib.sha1(
         json.dumps({"algo": algo, "env": env_id, "ablation": ablation,
                     "total_env_steps": int(total_env_steps),
-                    "lr": float(lr)}, sort_keys=True).encode("utf-8")
+                    "lr": float(lr), "env_physics": physics},
+                   sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
     # Baseline runners keep the 3-arg signature; only mazero_mixed accepts the
     # identity kwargs. Dispatch on the signature rather than catching TypeError,

@@ -1,0 +1,24 @@
+# Prior-collapse fix — VALIDATION: stage A only (root cover, visit target).
+#
+# `visit_target` reverts the policy target to UCB-allocated visit counts while
+# keeping the root cover. Isolates what widening the root candidate set buys
+# on its own once training runs.
+#
+# Prediction to test: little or nothing. The eval-time A/B on the collapsed
+# checkpoint showed coverage 0.34 -> 1.00 but a5_frac 0.973 -> 0.976, because
+# argmax over visit counts still lands on the greedy child (11 of 25 sims go to
+# the forced round-robin, the other 14 pile onto greedy via UCB). The one
+# effect that probe could NOT measure is selfplay: it samples visit counts
+# stochastically (selfplay_worker.py:295), so visit_entropy 0.75 -> 2.44 should
+# diversify the replay data even when the target is unchanged. This row
+# measures whether that alone matters.
+algos:
+  - mazero_mixed
+ablations:
+  - visit_target
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 200000
+episodes: 16
+num_pmcts: 1

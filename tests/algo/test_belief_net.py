@@ -143,10 +143,22 @@ def test_get_head_regime_predictions_consistency(cfg_duo):
 
 
 def test_head_regime_gradient_flow(cfg_duo):
+    """Gradient must reach head_regime from a loss shaped like the real one.
+
+    This used to backward ``g_hat_seq.sum()``. ``g_hat`` is a softmax, so that
+    sum is the CONSTANT ``B*T*N`` and its true gradient is exactly zero — the
+    assertion was passing on float noise (‖grad‖ ~ 5e-7) and failed on roughly
+    1 seed in 20, i.e. it depended on ambient RNG state and so on which other
+    test files pytest happened to collect first. Backward a log-likelihood
+    instead, which is what ``l_regime`` actually optimises and which has a
+    genuine gradient.
+    """
+    torch.manual_seed(0)
     bn = BeliefNet(cfg_duo.env, cfg_duo.model)
     obs_seq = torch.randn(1, 3, 2, bn.obs_dim)
     _, g_hat_seq = bn.forward(obs_seq)
-    g_hat_seq.sum().backward()
-    has_grad = any(p.grad is not None and p.grad.norm() > 0
-                   for p in bn.head_regime.parameters())
-    assert has_grad
+    # CE toward regime 0 — non-constant in the head's parameters.
+    g_hat_seq.clamp_min(1e-9).log()[..., 0].sum().backward()
+    grads = [p.grad for p in bn.head_regime.parameters() if p.grad is not None]
+    assert grads, "head_regime received no gradient at all"
+    assert max(float(g.norm()) for g in grads) > 1e-4

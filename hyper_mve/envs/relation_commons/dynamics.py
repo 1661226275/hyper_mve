@@ -22,9 +22,32 @@ def step_dynamics(
     *,
     alpha: float,
     q_max: float,
+    law: str = "constant",
 ) -> None:
-    """In-place: ``q_{k,t+1} = clip(q_{k,t} − h_k + α · (Q_max − q_{k,t}), 0, Q_max)``."""
-    regrowth = alpha * (q_max - resource_stocks)
+    """In-place resource update under one of two regrowth laws.
+
+    ``constant`` (v5 default)
+        ``q ← clip(q − h + α·(Q_max − q), 0, Q_max)``. Regrowth is **fastest
+        when the cell is empty** and zero when it is full, so stripping a cell
+        costs nothing and holding stock wastes regeneration. Restraint has
+        *negative* option value — there is no commons dilemma, and the optimal
+        harvest threshold is 0 in every regime.
+
+    ``logistic`` (v6)
+        ``q ← clip(q + α·q·(1 − q/Q_max) − h, 0, Q_max)``. Stock left in the
+        ground compounds, so restraint pays and "will the other agent leave
+        what I leave?" becomes a real question. Note ``q = 0`` is **absorbing**:
+        a fully stripped cell never recovers. That is the dilemma, not a bug.
+
+    See ``results/analysis/regime_knowledge_ceiling.md`` for why this became a
+    choice rather than a constant.
+    """
+    if law == "constant":
+        regrowth = alpha * (q_max - resource_stocks)
+    elif law == "logistic":
+        regrowth = alpha * resource_stocks * (1.0 - resource_stocks / q_max)
+    else:
+        raise ValueError(f"Unknown regrowth law: {law!r} (valid: constant, logistic)")
     resource_stocks += regrowth - harvests_per_resource
     np.clip(resource_stocks, 0.0, q_max, out=resource_stocks)
 

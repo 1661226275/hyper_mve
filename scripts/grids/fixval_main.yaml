@@ -1,0 +1,21 @@
+# Prior-collapse fix — VALIDATION: both stages on (the fix).
+#
+# Budget matched exactly to the pre-fix grid row it must beat:
+#   results/mazero_mixed/relation/seed0  return_mean=22.074
+#   prior_action_fractions [0,0,0,0,0,1.0]  planner a5=0.971
+#   planner_prior_return_gap +6.965  regime_accuracy 0.556
+#
+# Runs into a SEPARATE results root (--out results_fixval) so the pre-fix rows
+# stay intact as the "before" arm.
+#
+# Read against fixval_stage_a.yaml / fixval_stage_b.yaml, which disable one
+# stage each. Gate on RETURN, not on de-collapse: the `film` arm is the
+# standing counterexample (visit_entropy 1.41 vs 0.75, return 10.83 vs 22.07).
+algos:
+  - mazero_mixed
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 200000
+episodes: 16
+num_pmcts: 1

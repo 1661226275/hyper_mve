@@ -38,18 +38,34 @@ def parse_args(argv=None):
     p.add_argument("--variant", default=None,
                    help="label recorded in the report (default: --external value)")
     p.add_argument("--external", required=True,
-                   choices=("mappo", "mamba"),
-                   help="which runner produced --ckpt (phase-2: the retired "
-                        "internal HyperMuZeroModel path was removed; the "
-                        "mazero_mixed act_fn path lands with the real-budget "
-                        "protocol)")
+                   choices=("mappo", "mamba", "mamba_pm", "mazero_mixed"),
+                   help="which runner produced --ckpt. Must be the REGISTRY key, "
+                        "not just the family: the _pm variants are wider, so "
+                        "loading a mamba_pm checkpoint as 'mamba' fails on a "
+                        "shape mismatch. happo / mbom / m3w_adapted expose their "
+                        "act function as a local closure rather than a method, "
+                        "so they have no frozen-policy adapter yet.")
+    p.add_argument("--frozen-mode", choices=("prior", "planner", "both"),
+                   default="prior",
+                   help="mazero_mixed only: which policy to freeze. 'prior' is "
+                        "the distilled prediction net (what the model-free "
+                        "baselines expose, so the comparable choice); 'planner' "
+                        "is the MCTS policy that actually deploys. They are very "
+                        "different — on v5, A3 prior 14.28 vs A1 planner 61.94 — "
+                        "so this changes what the NashConv means. 'both' writes "
+                        "<out> and <out>.planner.json and prints the gap.")
     p.add_argument("--regimes", type=int, nargs="*", default=None,
                    help="regime ids (default: all in the preset family)")
     p.add_argument("--br-steps", type=int, default=20_000,
                    help="BR DQN env-step budget per (agent, regime)")
     p.add_argument("--episodes", type=int, default=10,
                    help="deterministic eval episodes per rollout")
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--seed", type=int, default=10_000,
+                   help="episode seeds are seed + 97*g + ep, so the default "
+                        "reproduces MAZeroMixedRunner.evaluate's initial "
+                        "conditions and v_pi lines up with eval_report.json's "
+                        "per-regime returns. (Archived game_metrics_*.json "
+                        "predate both this offset and this default.)")
     p.add_argument("--coop-ref", default=None,
                    help="coop reference: a float, or a game-metrics JSON whose "
                         "welfare_physical['0'] (all-coop regime) is used as Ŵ*")
@@ -60,17 +76,29 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def _load_external_frozen(variant: str, ckpt_path: str, cfg, device):
-    """Build an external runner from its checkpoint and wrap it as a
-    FrozenExternalPolicy (M3 extension, 2026-07-10)."""
+def _load_external_frozen(variant: str, ckpt_path: str, cfg, device,
+                          frozen_mode: str = "prior"):
+    """Build a runner from its checkpoint and wrap it as a FrozenExternalPolicy.
+
+    ``FrozenExternalPolicy.joint_actions`` calls ``act_fn(obs, t)`` with two
+    arguments, so every runner's act function is adapted to that arity here.
+    """
     import numpy as np
 
     from hyper_mve.comparison import create_runner
     from hyper_mve.envs.adapters.pettingzoo_wrapper import RelationCommonsPettingZooEnv
     from hyper_mve.utils.eval.game_metrics import FrozenExternalPolicy
 
+    if variant == "mazero_mixed":
+        from hyper_mve.algo.runner import MAZeroMixedRunner
+
+        runner = MAZeroMixedRunner(cfg)
+        runner.load_checkpoint(ckpt_path)
+        act_fn = runner.make_act_fn(frozen_mode, device=device)
+        return FrozenExternalPolicy(act_fn, cfg, device=device)
+
     runner = create_runner(cfg, variant)
-    if variant == "mappo":
+    if variant.startswith("mappo"):
         # MAPPO's load_checkpoint needs the agent built first (env-derived
         # obs_dim); evaluate() with episodes=0 is the sanctioned builder path.
         env_fn = lambda: RelationCommonsPettingZooEnv(
@@ -84,9 +112,16 @@ def _load_external_frozen(variant: str, ckpt_path: str, cfg, device):
             a_n, _ = runner._agent.choose_action(obs, evaluate=True)
             return np.asarray(a_n)
 
-    else:  # mamba — load_checkpoint rebuilds the learner standalone
+    else:  # mamba / mamba_pm — load_checkpoint rebuilds the learner standalone
         runner.load_checkpoint(ckpt_path)
-        act_fn = runner._probe_act
+        # _probe_act is (obs, t, g) for the PeriodicEvalProbe contract; the
+        # frozen-policy contract is (obs, t). Adapt rather than call directly —
+        # passing the 3-arg method straight through raised TypeError, which is
+        # why this path was broken. g is unused (mamba is regime-blind).
+        _probe = runner._probe_act
+
+        def act_fn(obs, t):
+            return _probe(obs, t, -1)
 
     return FrozenExternalPolicy(act_fn, cfg, device=device)
 
@@ -112,21 +147,58 @@ def main(argv=None) -> None:
 
     import torch
     from hyper_mve.utils.configs import V4Config
-    from hyper_mve.utils.eval.game_metrics import BRConfig, compute_game_metrics
+    from hyper_mve.utils.eval.game_metrics import BRConfig
 
     cfg = V4Config.from_preset(args.preset)
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu")
 
-    # Phase-2: the retired internal HyperMuZeroModel path was removed — game
-    # metrics run on frozen external policies (act_fn) only.
-    model = None
-    frozen = _load_external_frozen(args.external, args.ckpt, cfg, device)
     if args.variant is None:
         args.variant = args.external
+    if args.frozen_mode != "prior" and args.external != "mazero_mixed":
+        raise SystemExit(
+            f"--frozen-mode is mazero_mixed-only (got --external {args.external}); "
+            "the model-free baselines expose one policy."
+        )
 
     coop_ref, provenance = _resolve_coop_ref(args.coop_ref)
     br = BRConfig(env_steps=0 if args.welfare_only else args.br_steps)
+
+    modes = ("prior", "planner") if args.frozen_mode == "both" else (args.frozen_mode,)
+    reports = {}
+    for mode in modes:
+        reports[mode] = _one_mode(args, cfg, device, br, coop_ref, provenance, mode)
+
+    for mode, report in reports.items():
+        suffix = "" if mode == modes[0] else f".{mode}"
+        out = pathlib.Path(args.out)
+        out = out if not suffix else out.with_suffix(f"{suffix}{out.suffix}")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+        print(f"[eval_game_metrics] wrote {out}  (frozen={mode})")
+        for g in report.regime_ids:
+            nc = report.nashconv.get(g, float("nan"))
+            eff = report.efficiency.get(g, float("nan"))
+            print(f"  regime {g}: welfare="
+                  f"{report.welfare_physical.get(g, float('nan')):.2f} "
+                  f"nashconv={nc:.3f} efficiency={eff:.3f}")
+
+    if len(reports) == 2:
+        print("\n  planner − prior, per regime "
+              "(how much the search changes exploitability):")
+        for g in reports["prior"].regime_ids:
+            a = reports["prior"].nashconv.get(g, float("nan"))
+            b = reports["planner"].nashconv.get(g, float("nan"))
+            print(f"    g{g}: nashconv {a:7.3f} -> {b:7.3f}   ({b - a:+7.3f})")
+
+
+def _one_mode(args, cfg, device, br, coop_ref, provenance, frozen_mode):
+    from hyper_mve.utils.eval.game_metrics import compute_game_metrics
+
+    model = None            # the retired internal HyperMuZeroModel path is gone;
+                            # every runner now arrives through an act_fn.
+    frozen = _load_external_frozen(
+        args.external, args.ckpt, cfg, device, frozen_mode)
 
     if args.welfare_only:
         # welfare-only fast path: monkey-cheap BR skip (env_steps=0 would still
@@ -139,7 +211,7 @@ def main(argv=None) -> None:
         if frozen is None:
             frozen = FrozenPriorPolicy(model, cfg, device=device)
         report = GameMetricsReport(
-            variant=args.variant, checkpoint=args.ckpt,
+            variant=f"{args.variant}:{frozen_mode}", checkpoint=args.ckpt,
             regime_ids=list(regime_ids), br_env_steps=0,
             eval_episodes=args.episodes,
             coop_reference_welfare=coop_ref,
@@ -154,7 +226,7 @@ def main(argv=None) -> None:
     else:
         report = compute_game_metrics(
             model, cfg,
-            variant=args.variant,
+            variant=f"{args.variant}:{frozen_mode}",
             checkpoint=args.ckpt,
             regime_ids=args.regimes,
             br=br,
@@ -165,16 +237,7 @@ def main(argv=None) -> None:
             device=device,
             frozen=frozen,
         )
-
-    out = pathlib.Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
-    print(f"[eval_game_metrics] wrote {out}")
-    for g in report.regime_ids:
-        nc = report.nashconv.get(g, float("nan"))
-        eff = report.efficiency.get(g, float("nan"))
-        print(f"  regime {g}: welfare={report.welfare_physical.get(g, float('nan')):.2f} "
-              f"nashconv={nc:.3f} efficiency={eff:.3f}")
+    return report
 
 
 if __name__ == "__main__":

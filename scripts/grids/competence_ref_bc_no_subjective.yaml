@@ -1,0 +1,22 @@
+# Competence follow-up (2/2): ref_bc + no_subjective — the regime-BLIND control.
+#
+# ref_bc reached ~60% of the regime-blind scripted ceiling, but the policy
+# imitated a regime-blind teacher and belief accuracy never moved (0.52). So
+# whether the SUBJECTIVE architecture adds value over regime-blind play is still
+# open. This run is the same competence recipe with the subjective/belief head
+# removed. If subjective ref_bc beats this at equal competence -> the architecture
+# earns its keep; if they tie -> the env doesn't reward regime-awareness. This is
+# the actual thesis test.
+#
+# Launch:  python scripts/train.py --grid scripts/grids/competence_ref_bc_no_subjective.yaml \
+#              --gpus 6 --out results_competence
+algos:
+  - mazero_mixed
+ablations:
+  - ref_bc_no_subjective
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 1000000
+episodes: 16
+num_pmcts: 16

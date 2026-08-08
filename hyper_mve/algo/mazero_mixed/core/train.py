@@ -40,8 +40,48 @@ def reward_nonzero_weight(target_reward_step: torch.Tensor, upweight: float, eps
     return 1.0 + upweight * nz
 
 
-def policy_target_weights(target_sampled_adv_step, sampled_action_mask_step, temperature):
+_VISIT_PRIOR_EPS = 1e-8
+
+
+def policy_target_weights(target_sampled_adv_step, sampled_action_mask_step,
+                          temperature, visit_policy_step=None):
     """Per-agent policy-target weights from the search's OWN advantage estimates.
+
+    ``visit_policy_step`` (``(batch, C)``, the normalized root visit counts)
+    switches this from the pure ``q_softmax`` target to ``visit_q_blend``:
+
+        w_i(c)  proportional to  visit(c) * exp(adv_i(c) / temperature)
+
+    i.e. the advantage softmax with the search's own visit allocation restored
+    as a multiplicative prior. Rationale and the two things that make the form
+    non-obvious:
+
+    * **Why not the direct product ``visit(c) * adv_i(c)``.** ``adv`` is
+      ``(q - root_pred_value - adv_mean) / adv_std`` — CENTERED, so roughly half
+      the children carry a negative advantage. In ``-sum_c w log p`` a negative
+      weight flips the sign to ``+|w| log p``, which is maximised by driving
+      ``p -> 0`` with ``log p -> -inf``: an unbounded incentive to zero those
+      actions out, not a soft down-weight. Normalizing cannot rescue it either,
+      since ``sum_c visit(c) adv_i(c)`` is a visit-weighted mean advantage and
+      is therefore ~0 by construction. Putting the visit term in the EXPONENT
+      keeps the weights non-negative and normalizable for any advantage sign.
+    * **Why visits belong here at all.** Visit counts are a reliability weight.
+      At ``num_simulations=25`` the budget per child is ~5.0 at
+      ``root_cover=none`` (5 children) but only ~1.9 at ``root_cover=star``
+      (1 + N*A = 13 children), so a child's ``adv`` can be a nearly raw network
+      output with almost no search behind it. Pure ``q_softmax`` weights a
+      1-visit Q identically to a 20-visit Q; this does not.
+
+    Endpoints, both exact:
+      * ``temperature -> inf``  =>  ``softmax(log visit)`` = the visit target;
+      * uniform visits          =>  ``log visit`` is constant and drops out of
+        the softmax  =>  the pure ``q_softmax`` target.
+
+    The first endpoint is exact at the LOSS level too, not just the weights:
+    ``sampled_actions_log_prob = per_agent_log_prob.sum(dim=1)`` (see
+    ``policy_loss_step`` below), and ``visit(c)`` does not depend on the agent,
+    so the joint-log-prob visit loss and this per-agent form are the same sum
+    reassociated. ``tests/algo/test_policy_target_blend.py`` pins it.
 
     The upstream target is the normalized root visit count. Visits are
     allocated by UCB, whose prior term dominates the [0,1]-clipped value term
@@ -59,6 +99,15 @@ def policy_target_weights(target_sampled_adv_step, sampled_action_mask_step, tem
     # fp32: under autocast the softmax would run in fp16, where the masking
     # sentinel below has to stay well inside the 65504 range.
     logits = target_sampled_adv_step.float() / temperature
+    if visit_policy_step is not None:
+        # clamp_min, not +eps: an unvisited child gets log(1e-8) = -18.4, a
+        # strong but FINITE penalty. -inf would be correct in isolation but can
+        # meet a +inf from the advantage term and produce NaN. Padded children
+        # are visit-0 too, but they are also mask-0 and the fill below removes
+        # them regardless. At the root a 0-visit child should not occur while
+        # num_simulations >= num_children (cnode.cpp forces one visit each).
+        logits = logits + torch.log(
+            visit_policy_step.float().unsqueeze(-1).clamp_min(_VISIT_PRIOR_EPS))
     # -1e4, NOT -inf/-1e9: out-of-trajectory rows have an ALL-False mask
     # (reanalyze_worker.py zeroes them), and softmax over an all -inf row is
     # NaN -- which then survives `0 * NaN` and poisons total_loss even though
@@ -73,15 +122,20 @@ def policy_loss_step(config, per_agent_log_prob, sampled_actions_log_prob,
                      target_sampled_policies_step, target_sampled_adv_step,
                      sampled_action_mask_step):
     """One unroll step of the PG_type='none' policy loss. Returns ``(batch,)``."""
-    if getattr(config, "policy_target_type", "visit") == "visit":
+    target_type = getattr(config, "policy_target_type", "visit")
+    if target_type == "visit":
         return -(
             sampled_actions_log_prob
             * target_sampled_policies_step                      # visit count
             * sampled_action_mask_step                          # mask invalid actions
         ).sum(dim=1)
+    # 'q_softmax' drops the visit allocation entirely; 'visit_q_blend' keeps it
+    # as a multiplicative reliability prior. See policy_target_weights.
+    visit_prior = (target_sampled_policies_step
+                   if target_type == "visit_q_blend" else None)
     w = policy_target_weights(
         target_sampled_adv_step, sampled_action_mask_step,
-        config.policy_target_temperature)                       # (batch, C, N)
+        config.policy_target_temperature, visit_prior)           # (batch, C, N)
     return -(per_agent_log_prob * w.permute(0, 2, 1)).sum(dim=(1, 2))
 
 

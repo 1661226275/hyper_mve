@@ -1,0 +1,24 @@
+# Competence follow-up (1/2): ref_bc + mcts_fix.
+#
+# ref_bc lifted deployed return 22.1->66.6 but only via the SEARCH — the
+# distilled prior is still collapsed (15.7, 90% HARVEST), a 50.9 prior/planner
+# gap, because the reanalyze policy target is the collapsible MCTS visit
+# distribution and the harvest-dominated demos never taught the policy to walk.
+# mcts_fix (root-cover enumeration + Q-softmax target) de-collapses the prior so
+# it can track the search. It was NET-NEGATIVE before (13.3) ONLY because the
+# value head was unreliable in g2/g3; ref_bc has now made the value reliable
+# (66.6 planner), so this should transfer that competence into the prior and
+# close the gap.
+#
+# Launch:  python scripts/train.py --grid scripts/grids/competence_ref_bc_mcts_fix.yaml \
+#              --gpus 5 --out results_competence
+algos:
+  - mazero_mixed
+ablations:
+  - ref_bc_mcts_fix
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 1000000
+episodes: 16
+num_pmcts: 16

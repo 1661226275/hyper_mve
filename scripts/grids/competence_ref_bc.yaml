@@ -1,0 +1,28 @@
+# Competence experiment (2026-07-21) — escape the HARVEST local optimum.
+#
+# Diagnosis: the scripted-reference bootstrap was already on (runner emits
+# 0.4->0.08) and demonstrations reached replay (workers/eps_reward_max ~91), but
+# the policy still collapsed — the reanalyze policy target is the collapsible
+# MCTS visit distribution, so the demonstrated walk-and-harvest actions never
+# became a policy target. The ``ref_bc`` arm adds a behavior-cloning CE toward
+# the executed scripted action on reference steps, and extends the guidance
+# (0.5->0.1 over 28000 train steps ~= 3/4 of this run).
+#
+# Read the planner return against the regime-blind scripted ceiling
+# (results/analysis/belief_ceiling/reference_ceiling.json: g2=89, g3=91,
+# g0/g4~177, mean 107). Success = the learned policy climbs off ~15-22 toward
+# that ceiling. Whether the subjective (regime-aware) policy then BEATS the
+# regime-blind ceiling in g2/g3 is the architectural test.
+#
+# Launch:  python scripts/train.py --grid scripts/grids/competence_ref_bc.yaml \
+#              --gpus 3 --out results_competence
+algos:
+  - mazero_mixed
+ablations:
+  - ref_bc
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 600000
+episodes: 16
+num_pmcts: 16

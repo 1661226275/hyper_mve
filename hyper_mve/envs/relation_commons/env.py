@@ -217,12 +217,13 @@ class RelationCommonsEnv(gym.Env):
             self._state.cumulative_harvests + harvests
         ).astype(np.float32)
 
-        # 5. Constant-rate regen.
+        # 5. Resource regen under the configured law.
         step_dynamics(
             self._state.resource_stocks,
             harvests_per_resource,
             alpha=float(self.cfg.alpha),
             q_max=float(self.cfg.Q_max),
+            law=str(self.cfg.regrowth_law),
         )
 
         # 6. Relational reward with the W in effect DURING this step.
@@ -231,6 +232,8 @@ class RelationCommonsEnv(gym.Env):
             moved_mask=move_intent,
             W=self._state.W,
             epsilon_move=float(self.cfg.epsilon_move),
+            coupling=str(self.cfg.reward_coupling),
+            reciprocity_lambda=float(self.cfg.reciprocity_lambda),
         )
 
         # 7. Advance the regime chain (after reward; p=0 consumes no RNG,

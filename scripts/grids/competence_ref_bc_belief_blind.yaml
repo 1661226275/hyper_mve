@@ -1,0 +1,25 @@
+# Capacity-matched control (2026-07-22): ref_bc + --belief_blind.
+#
+# ref_bc (subjective) beats the regime-blind control ~2x, but regime_acc ~0.49 and
+# the advantage is broad (large even in symmetric g4), so the gain may be capacity,
+# not regime-awareness. This run keeps the ENTIRE subjective architecture (belief
+# net, hypernet, ctx — same params, belief net still trained) but feeds a UNIFORM
+# posterior, isolating the belief posterior's marginal value.
+#
+# Caveat: the row block w_i· still reaches representation+ctx, so this is not truly
+# regime-blind — it removes only the temporally-aggregated posterior. Read the
+# planner return + head_diversity vs ref_bc (66.6). subjective >> blind => posterior
+# earns its keep; tie => run the stronger --blind_row control.
+#
+# Launch:  python scripts/train.py --grid scripts/grids/competence_ref_bc_belief_blind.yaml \
+#              --gpus 3 --out results_competence
+algos:
+  - mazero_mixed
+ablations:
+  - ref_bc_belief_blind
+envs:
+  - relation
+seeds: [0]
+total_env_steps: 1000000
+episodes: 16
+num_pmcts: 16

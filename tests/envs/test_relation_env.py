@@ -200,6 +200,61 @@ def test_harvest_depletes_and_regen_restores():
     assert q2 == pytest.approx(q1 + 0.1 * (10.0 - q1))
 
 
+def test_logistic_regrowth_follows_the_compounding_law():
+    """v6 law: ``q ← q + α·q·(1 − q/Q_max) − h``.
+
+    Growth peaks at half stock and vanishes at both ends, so stock left in the
+    ground compounds — the opposite of the constant law, where an empty cell
+    regrows fastest and restraint is strictly harmful.
+    """
+    env = make_relation_commons(_cfg(alpha=0.3, regrowth_law="logistic"), seed=9)
+    env.reset(options={"g": 4})
+    _place(env, 0, env._state.resource_positions[0])
+    _place(env, 1, [7, 7])
+    # Draw the cell down so growth is in its interior, non-degenerate range.
+    for _ in range(4):
+        env.step(np.array([HARVEST, NOOP]))
+    q1 = float(env._state.resource_stocks[0])
+    assert 0.0 < q1 < 10.0
+    env.step(np.array([NOOP, NOOP]))
+    q2 = float(env._state.resource_stocks[0])
+    assert q2 == pytest.approx(q1 + 0.3 * q1 * (1.0 - q1 / 10.0))
+
+
+def test_logistic_zero_stock_is_absorbing():
+    """A fully stripped cell never recovers — that is the dilemma, not a bug.
+
+    It is also the failure mode to watch for in training: if agents strip
+    everything the environment degenerates, and the fix is an immigration floor
+    rather than abandoning the law.
+    """
+    env = make_relation_commons(_cfg(alpha=0.3, regrowth_law="logistic"), seed=9)
+    env.reset(options={"g": 4})
+    env._state.resource_stocks[:] = 0.0
+    for _ in range(5):
+        env.step(np.array([NOOP, NOOP]))
+    assert float(env._state.resource_stocks.max()) == pytest.approx(0.0)
+
+
+def test_reciprocal_coupling_flips_the_reward_on_asymmetric_regimes():
+    """Under ``reciprocal`` an agent's weight on its neighbour's harvest is the
+    neighbour's row — the half it never observes. g3 (w01=+1, w10=-1) therefore
+    pays agent 0 the *opposite* of what the v5 reward pays it, from an
+    observationally identical position."""
+    u = 1.0                             # η caps a single harvest at 1.0
+    out = {}
+    for coupling in ("own_row", "reciprocal"):
+        env = make_relation_commons(_cfg(reward_coupling=coupling), seed=11)
+        env.reset(options={"g": 3})
+        _place(env, 0, [7, 7])
+        _place(env, 1, env._state.resource_positions[0])
+        _, reward, *_ = env.step(np.array([NOOP, HARVEST]))
+        out[coupling] = float(reward[0])
+    # agent 0 harvests nothing; its reward is purely its weight on u_1.
+    assert out["own_row"] == pytest.approx(+u / 2)       # w_01 = +1
+    assert out["reciprocal"] == pytest.approx(-u / 2)    # w_10 = -1
+
+
 def test_move_cost_and_bounds():
     env = make_relation_commons(_cfg(), seed=10)
     env.reset(options={"g": 4})
