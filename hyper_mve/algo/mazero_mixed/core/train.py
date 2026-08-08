@@ -89,6 +89,18 @@ def agent_marginal_target(actions_step, visit_step, adv_step, mask_step,
     estimated from all ``m``. The two coincide iff every agent's child->action
     map is injective, which it is not in practice.
 
+    One second-order difference to be aware of: because the group mean is
+    visit-weighted, a ZERO-visit child carries no weight and its action is
+    therefore absent from ``present`` unless some other child supplies it,
+    whereas ``q_softmax`` would still give it an exp-term. That is the correct
+    behaviour -- it is what makes the ``temperature -> inf`` endpoint equal the
+    ``visit`` target exactly, since ``visit`` also weights such a child 0 --
+    but it means "coincides iff injective" is a statement about the VISITED
+    children. In practice the distinction is empty at the root: the C++ tree
+    forces one visit per root child while ``num_simulations >= num_children``
+    (``cnode.cpp:627-628``), which holds for both shipped covers (4 or ~11.2
+    children against 25 simulations).
+
     Multiplicity is not a rounding error under ``--root_cover star``. The
     cover (``cnode.cpp:341-365``) enumerates, for each agent ``i``, all of
     agent ``i``'s actions against a CRN anchor drawn from every OTHER agent's

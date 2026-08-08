@@ -299,6 +299,35 @@ def test_masked_row_stays_zero_under_autocast(batch):
     assert float(loss[3]) == 0.0
 
 
+def test_zero_visit_child_is_dropped_which_is_what_makes_the_endpoint_exact():
+    """A 0-visit child carries no weight in a visit-weighted mean, so its
+    action leaves ``present`` unless another child supplies it.
+
+    This is deliberate, not an oversight: it is exactly why the
+    ``temperature -> inf`` endpoint reproduces the ``visit`` target, which also
+    weights such a child 0. ``q_softmax`` by contrast still gives it an
+    exp-term -- so "agent_q_softmax == q_softmax under injectivity" is a claim
+    about the VISITED children. Empty in practice at the root (the tree forces
+    one visit per root child while num_simulations >= num_children), but it
+    would silently change the endpoint if it ever regressed.
+    """
+    acts = torch.tensor([[[0, 0], [1, 1], [2, 2]]])
+    vis = torch.tensor([[10.0, 15.0, 0.0]]) / SIMS      # child 2 unvisited
+    adv = torch.tensor([[[0.5] * N, [-0.2] * N, [3.0] * N]])
+    mask = torch.ones(1, 3)
+
+    T = agent_marginal_target(acts, vis, adv, mask, A, 1.0)
+    assert T[0, 0, 2] == 0.0, "an unvisited child's action must carry no mass"
+    torch.testing.assert_close(T[0, 0].sum(), torch.tensor(1.0), atol=1e-6, rtol=1e-6)
+
+    # q_softmax does include it, and prominently -- its adv is the largest.
+    from core.train import policy_target_weights
+    w = policy_target_weights(adv, mask, 1.0)
+    assert float(w[0, 2, 0]) > 0.5, (
+        "q_softmax should weight the unvisited child heavily here; if not, "
+        "this test no longer demonstrates the difference")
+
+
 def test_absent_actions_get_exactly_zero_mass_and_rows_normalize(batch):
     actions, visit_policy, adv, mask, _ = batch
     for use_prior in (False, True):
