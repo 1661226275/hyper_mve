@@ -443,7 +443,8 @@ def test_root_cover_star_cells_satisfy_the_width_contract():
     ``sampled_action_times >= 1 + N*A`` (= 13 here) and at least that many
     simulations, or some root child never gets a simulation."""
     for arm in ("ref_bc_anneal_scaled_hardval_decoupled_cover",
-                "ref_bc_anneal_scaled_hardval_decoupled_mctsfix"):
+                "ref_bc_anneal_scaled_hardval_decoupled_mctsfix",
+                "ref_bc_anneal_scaled_hardval_decoupled_agentq_cover"):
         cfg = _parse(apply_arm_argv(list(_BASELINE_ARGV), arm))
         assert cfg.sampled_action_times >= 13
         assert cfg.num_simulations >= 13

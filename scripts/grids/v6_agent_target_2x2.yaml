@@ -62,15 +62,37 @@
 # Select on the last-20% of each run's own periodic eval, not the final
 # checkpoint (single-point sd ~ 8-12).
 #
-# LAUNCH. _run_grid is sequential, so run one tmux session per (arm, seed) on
-# its own GPU -- 4 runs, ~12 h each, sharing one --out because each (arm, seed)
-# resolves to a distinct run_dir:
+# LAUNCH -- READ THIS, THE OBVIOUS FORM IS WRONG
 #
-#   scripts/launch_grid.sh v6aq_s0 3 scripts/grids/v6_agent_target_2x2.yaml \
-#       --ablation ref_bc_anneal_scaled_hardval_decoupled_agentq --seed 0 \
-#       --out results_v6_agentq/
+# This file is the experiment RECORD. Do NOT launch it with
+# `launch_grid.sh ... --ablation X --seed N`: `_run_grid` resolves the grid as
+#
+#     ablations = spec.get("ablations") or [args.ablation]
+#     seeds     = spec.get("seeds")     or [args.seed]
+#
+# (scripts/train.py:346-353) -- the yaml's lists WIN, so a CLI --ablation or
+# --seed alongside --grid is silently IGNORED. That command would run all four
+# rows SEQUENTIALLY on one GPU (~48 h), not the one row it looks like.
+#
+# Launch one tmux session per (arm, seed) calling train.py DIRECTLY -- which is
+# what the wave-1 2x2 and the blend sweep actually did (their logs carry no
+# "[train.py grid]" line). 4 runs, ~12 h each, sharing one --out because each
+# (arm, seed) resolves to a distinct run_dir:
+#
+#   PY=/home/zhengwenbo/.conda/envs/lightzero/bin/python
+#   tmux new-session -d -s v6aq_agentq_s0 \
+#     "$PY scripts/train.py --algo mazero_mixed --env relation_recip --seed 0 \
+#        --total-env-steps 1000000 --episodes 128 --lr 0.02 --num-pmcts 16 \
+#        --ablation ref_bc_anneal_scaled_hardval_decoupled_agentq \
+#        --gpus 3 --out results_v6_agentq/ 2>&1 | tee results/_logs/v6aq_agentq_s0.log"
+#
+# ...and the same for (agentq, seed 1), (agentq_cover, seed 0),
+# (agentq_cover, seed 1) on their own GPUs.
 #
 # GPUs 0-8 are allowed (ALLOWED_GPUS in scripts/train.py); 9 is another user's.
+#
+# If you DO want launch_grid.sh, split this into one yaml per (arm, seed) --
+# the launcher always passes --grid, so there is no override path.
 
 algos: [mazero_mixed]
 envs: [relation_recip]
