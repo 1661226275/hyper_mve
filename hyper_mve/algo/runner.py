@@ -42,6 +42,7 @@ from hyper_mve.utils.configs import V4Config
 from hyper_mve.utils.eval.eval_report import EvalReport, regime_names_for
 from hyper_mve.comparison.base import (
     ExternalBaselineRunner,
+    freeze_per_agent,
     split_seen_unseen_regimes,
 )
 
@@ -844,6 +845,9 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             return_zero_shot_gap=zs_seen - zs_unseen,
             return_per_regime=MappingProxyType(planner_per_regime),
             return_per_regime_sem=MappingProxyType(planner_per_regime_sem),
+            return_per_regime_per_agent=freeze_per_agent(
+                planner_per_regime_per_agent
+            ),
             episodes_per_regime=MappingProxyType(episodes_per_regime),
             planner_prior_return_gap=planner_mean - prior_mean,
             direct_inference_return_mean=prior_mean,

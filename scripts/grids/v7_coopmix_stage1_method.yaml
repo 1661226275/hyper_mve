@@ -1,0 +1,38 @@
+# v7 stage 1 — method of record on `relation_coopmix`, seed 0.
+#
+# PURPOSE: first wave of the v7 re-run (results/analysis/v7_rerun_handoff.md).
+# The archived comparative/ablation numbers are not reusable: they were taken on
+# the `g2` family (different regimes, and ids 1-3 changed meaning) and scored on
+# `return_mean`, the summed subjective reward, which cancels wherever the two
+# agents' rewards oppose and so cannot express individual optimality.
+#
+# `relation_coopmix` TRAINS AND TESTS on all five regimes. The train-on-g0/g1/g2,
+# test-on-g3/g4 generalization study is a SEPARATE experiment run last, on
+# `relation_coopmix_holdout` -- do not conflate the two.
+#
+# SCORING (results/analysis/v6_reporting_protocol.md):
+#   g0, g3, g4   global/team return   — eval_report.json return_per_regime
+#   all regimes  per-agent return     — eval_report.json return_per_regime_per_agent
+#                                       (rel-v3, new: every runner emits it)
+#   NashConv     post-hoc only        — scripts/eval_game_metrics.py, at an
+#                                       EQUAL --br-steps across algorithms;
+#                                       an under-trained BR is a lower bound.
+#
+# g3 `asym_exploit_mild` qualifies for the global metric because R_0 + R_1 =
+# (u_0 + u_1)/2 responds to both agents' harvests (utils/schemas/relation.py).
+#
+# HOW STAGE 1 WAS ACTUALLY LAUNCHED: as one tmux session per algorithm, one GPU
+# each, via `scripts/train.py` directly -- NOT via this file and NOT via
+# scripts/launch_grid.sh, whose hardcoded REPO points at the main checkout. This
+# grid is the canonical record and the sequential re-run path; its parameters
+# match the launched commands exactly.
+algos:
+  - mazero_mixed
+envs:
+  - relation_coopmix
+ablations:
+  - ref_bc_anneal_scaled_hardval_decoupled            # method of record
+seeds: [0]
+total_env_steps: 200000
+episodes: 128
+num_pmcts: 16

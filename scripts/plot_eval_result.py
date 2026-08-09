@@ -73,16 +73,31 @@ FAMILY_SPEC = {
         # average as uninformative, NOT because it was held out.
         "seen": (0, 4),
         "held": (2, 3),
+        # Under g2 the two sets coincide, which is exactly how they came to be
+        # conflated. See the g2cm entry below.
+        "global_reward": (0, 4),
         "names_en": ("mutual_coop", "mutual_comp", "asym_exploit",
                      "asym_exploited", "neutral"),
         "names_zh": ("互利合作", "互相竞争", "非对称利用（利用方）",
                      "非对称利用（被利用方）", "中立"),
     },
     "g2cm": {
-        # No regime here is blind to summed return, so nothing is excluded:
-        # "seen" is exactly rel_coopmix_holdout's train_regime_ids.
-        "seen": (0, 1, 4),
-        "held": (2, 3),
+        # TWO DIFFERENT SETS -- do not merge them again.
+        #
+        # "seen"/"held" are the GENERALIZATION partition: which regimes
+        # rel_coopmix_holdout trains on vs holds out. They apply only to the
+        # generalization experiment, which is a separate retraining run.
+        # Training on g0/g1/g2 leaves zero an unseen weight VALUE, and both
+        # held-out regimes contain one.
+        "seen": (0, 1, 2),
+        "held": (3, 4),
+        # "global_reward" is a SCORING choice: which regimes' summed return is
+        # informative at all. It applies to the main runs, where every regime is
+        # both trained and tested. g3 asym_exploit_mild qualifies because
+        # R_0 + R_1 = (u_0 + u_1)/2 responds to both agents' harvests
+        # (utils/schemas/relation.py); it is the regime that replaced
+        # mutual_comp precisely so that nothing cancels.
+        "global_reward": (0, 3, 4),
         "names_en": ("mutual_coop", "asym_exploit", "asym_exploited",
                      "asym_exploit_mild", "neutral"),
         "names_zh": ("互利合作", "非对称利用（利用方）",
@@ -94,6 +109,7 @@ FAMILY_SPEC = {
 # helpers below read them the way they always have.
 SEEN = FAMILY_SPEC["g2"]["seen"]
 HELD = FAMILY_SPEC["g2"]["held"]
+GLOBAL_REWARD = FAMILY_SPEC["g2"]["global_reward"]
 N_REGIMES = len(FAMILY_SPEC["g2"]["names_en"])
 
 REGIME_FOLDER = {g: f"g{g}reward" for g in range(N_REGIMES)}
@@ -130,9 +146,10 @@ def _apply_family(name: str) -> None:
     Called once from main(). The seen/held labels are rebuilt too, so the bar
     chart never claims "(g0, g4)" while averaging a different set.
     """
-    global SEEN, HELD, N_REGIMES, REGIME_FOLDER
+    global SEEN, HELD, GLOBAL_REWARD, N_REGIMES, REGIME_FOLDER
     spec = FAMILY_SPEC[name]
     SEEN, HELD = spec["seen"], spec["held"]
+    GLOBAL_REWARD = spec["global_reward"]
     N_REGIMES = len(spec["names_en"])
     REGIME_FOLDER = {g: f"g{g}reward" for g in range(N_REGIMES)}
     for lang, key in (("en", "names_en"), ("zh", "names_zh")):

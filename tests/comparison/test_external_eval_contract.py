@@ -26,7 +26,7 @@ def test_evaluate_returns_evalreport_shape_conforms(variant):
     """Field-population matrix (rel-v1).
 
     Runs against a randomly-initialised runner (no train()). Asserts:
-      - return type is EvalReport, sentinel is "rel-v2"
+      - return type is EvalReport, sentinel is "rel-v3"
       - variant + eval_mode + eval_planner_mode are correct
       - external delegation: planner_prior_return_gap == 0,
         direct_inference_return_mean == return_mean == planner_full_return_mean
@@ -69,8 +69,18 @@ def test_evaluate_returns_evalreport_shape_conforms(variant):
     assert set(report.episodes_per_regime) == set(regime_grid)
     for g in regime_grid:
         assert report.episodes_per_regime[g] == 2
-    # Schema sentinel (rel-v2).
-    assert report.schema_version == "rel-v2"
+    # rel-v3: per-agent breakdown, one entry per agent per regime, and the
+    # scalar per-regime return must be its sum. This is the invariant that
+    # catches a mis-wired evaluate loop -- a dropped term or a permuted agent
+    # order is invisible in the scalar alone.
+    n_agents = int(cfg.env.N)
+    assert set(report.return_per_regime_per_agent) == set(regime_grid)
+    for g in regime_grid:
+        vec = report.return_per_regime_per_agent[g]
+        assert len(vec) == n_agents, f"regime {g}: {len(vec)} agents, expect {n_agents}"
+        assert report.return_per_regime[g] == pytest.approx(sum(vec), abs=1e-6)
+    # Schema sentinel (rel-v3).
+    assert report.schema_version == "rel-v3"
     # rel-v2: the per-regime dicts above key on family-relative ids, so every
     # producer must say which family. Empty here would mean an id-keyed report
     # that cannot be interpreted once more than one family is in play.

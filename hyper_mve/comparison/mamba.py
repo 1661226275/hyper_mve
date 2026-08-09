@@ -42,6 +42,7 @@ import torch.nn.functional as F
 
 from hyper_mve.comparison import _FORBIDDEN_INFO_KEYS
 from hyper_mve.comparison.base import (
+    freeze_per_agent,
     ExternalBaselineRunner,
     split_seen_unseen_regimes,
 )
@@ -241,6 +242,7 @@ class _RealMAMBA(ExternalBaselineRunner):
         prev_actions = None
         prev_state = None
         episode_return = 0.0
+        episode_agent = np.zeros(n, dtype=np.float64)
         steps = 0
 
         while True:
@@ -266,6 +268,7 @@ class _RealMAMBA(ExternalBaselineRunner):
                 ],
                 dtype=np.float32,
             )
+            episode_agent += r
             episode_return += float(r.sum())
             steps += 1
 
@@ -288,6 +291,7 @@ class _RealMAMBA(ExternalBaselineRunner):
             self._learner.step(rollout)
 
         self._last_episode_return = episode_return
+        self._last_episode_return_per_agent = episode_agent
         return steps
 
     # -------------------------------------------------------------- training
@@ -403,6 +407,7 @@ class _RealMAMBA(ExternalBaselineRunner):
         env = env_fn()
         return_per_regime: dict[int, float] = {}
         return_per_regime_sem: dict[int, float] = {}
+        return_per_regime_per_agent: dict = {}
         episodes_per_regime: dict[int, int] = {}
         all_returns: list[float] = []
         env_steps_total = 0
@@ -412,11 +417,13 @@ class _RealMAMBA(ExternalBaselineRunner):
 
         for g in regime_grid:
             g_returns: list[float] = []
+            g_agent: list = []
             for _ in range(int(episodes)):
                 episode_steps = self._run_one_episode(
                     env, deterministic=True, g_override=int(g), collect=False,
                 )
                 g_returns.append(float(self._last_episode_return))
+                g_agent.append(self._last_episode_return_per_agent)
                 env_steps_total += int(episode_steps)
             self._eval_episode_returns[int(g)] = list(g_returns)
             return_per_regime[int(g)] = float(np.mean(g_returns)) if g_returns else 0.0
@@ -425,6 +432,9 @@ class _RealMAMBA(ExternalBaselineRunner):
                 if len(g_returns) > 1 else 0.0
             )
             return_per_regime_sem[int(g)] = sem
+            return_per_regime_per_agent[int(g)] = (
+                np.mean(g_agent, axis=0) if g_agent else np.zeros(int(self.cfg.env.N))
+            )
             episodes_per_regime[int(g)] = int(len(g_returns))
             all_returns.extend(g_returns)
         env.close()
@@ -450,6 +460,9 @@ class _RealMAMBA(ExternalBaselineRunner):
             return_zero_shot_gap=zs_seen - zs_unseen_v,
             return_per_regime=MappingProxyType(return_per_regime),
             return_per_regime_sem=MappingProxyType(return_per_regime_sem),
+            return_per_regime_per_agent=freeze_per_agent(
+                return_per_regime_per_agent
+            ),
             episodes_per_regime=MappingProxyType(episodes_per_regime),
             planner_prior_return_gap=0.0,
             direct_inference_return_mean=return_mean,

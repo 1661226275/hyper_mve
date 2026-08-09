@@ -34,6 +34,7 @@ from hyper_mve.comparison._lzj_mappo.mappo import MAPPO_MPE
 from hyper_mve.comparison._lzj_mappo.normalization import Normalization
 from hyper_mve.comparison._lzj_mappo.replay_buffer import ReplayBuffer
 from hyper_mve.utils.configs import V4Config
+from hyper_mve.comparison.base import freeze_per_agent
 from hyper_mve.comparison.base import split_seen_unseen_regimes
 from hyper_mve.utils.eval.eval_report import EvalReport, regime_names_for
 
@@ -299,6 +300,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
         _check_forbidden_info(info)
         obs_n = _obs_dict_to_array(obs_dict, n_agents)
         episode_reward = 0.0
+        episode_agent = np.zeros(n_agents, dtype=np.float64)
         episode_step = 0
         done_n = np.zeros(n_agents, dtype=np.float32)
 
@@ -314,6 +316,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
             term_n = _term_dict_to_array(term_dict, n_agents)
             trunc_n = _term_dict_to_array(trunc_dict, n_agents)
             done_n = np.maximum(term_n, trunc_n)
+            episode_agent += r_n
             episode_reward += float(r_n.sum())
 
             if not evaluate:
@@ -336,6 +339,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
         # Stash the per-episode return on the runner so ``evaluate`` can
         # reach it without re-plumbing the function signature.
         self._last_episode_return = episode_reward
+        self._last_episode_return_per_agent = episode_agent
         return episode_step + 1
 
     # -------------------------------------------------------------- evaluate
@@ -383,6 +387,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
         env = env_fn()
         return_per_regime: dict[int, float] = {}
         return_per_regime_sem: dict[int, float] = {}
+        return_per_regime_per_agent: dict = {}
         episodes_per_regime: dict[int, int] = {}
         all_returns: list[float] = []
         env_steps_total = 0
@@ -392,6 +397,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
 
         for g in regime_grid:
             g_returns: list[float] = []
+            g_agent: list = []
             for _ in range(int(episodes)):
                 episode_steps = self._run_one_episode(
                     env=env,
@@ -402,6 +408,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
                     g_override=int(g),
                 )
                 g_returns.append(float(self._last_episode_return))
+                g_agent.append(self._last_episode_return_per_agent)
                 env_steps_total += int(episode_steps)
             self._eval_episode_returns[int(g)] = list(g_returns)
             return_per_regime[int(g)] = float(np.mean(g_returns)) if g_returns else 0.0
@@ -410,6 +417,9 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
                 if len(g_returns) > 1 else 0.0
             )
             return_per_regime_sem[int(g)] = sem
+            return_per_regime_per_agent[int(g)] = (
+                np.mean(g_agent, axis=0) if g_agent else np.zeros(int(self.cfg.env.N))
+            )
             episodes_per_regime[int(g)] = int(len(g_returns))
             all_returns.extend(g_returns)
         env.close()
@@ -437,6 +447,9 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
             return_zero_shot_gap=zs_seen - zs_unseen_v,
             return_per_regime=MappingProxyType(return_per_regime),
             return_per_regime_sem=MappingProxyType(return_per_regime_sem),
+            return_per_regime_per_agent=freeze_per_agent(
+                return_per_regime_per_agent
+            ),
             episodes_per_regime=MappingProxyType(episodes_per_regime),
             # External runners have no MVE planner; pkg-08 spec 01 §6.2 says
             # set planner-prior gap to 0 and the two mode-means to return_mean.

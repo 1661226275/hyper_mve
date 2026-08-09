@@ -2,8 +2,8 @@
 
 rel-v1 [2026-07]: the per-c / c-segment / type-ratio / regret machinery of the
 v4 schema is gone with c_t and the type system; the per-regime breakdown and
-the belief regime-quality fields replace them. 27 payload fields + 1
-``schema_version`` sentinel = 28 total. The dataclass-field-count + sentinel
+the belief regime-quality fields replace them. 29 payload fields + 1
+``schema_version`` sentinel = 30 total. The dataclass-field-count + sentinel
 lock lives in ``tests/integration/test_pkg08_drift_detectors.py``.
 
 NOT in this schema (deliberately): NashConv / Price-of-Anarchy — the two
@@ -13,8 +13,14 @@ to run at every eval.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Literal, Mapping
+
+# Shared empty default for the optional per-agent map. dataclasses rejects any
+# unhashable default (mappingproxy included), so it is handed out by a
+# default_factory rather than used as a bare default.
+_EMPTY_PER_AGENT: Mapping[int, tuple[float, ...]] = MappingProxyType({})
 
 
 def regime_names_for(cfg) -> tuple[str, ...]:
@@ -107,11 +113,26 @@ class EvalReport:
     # Empty tuple means the producer predates rel-v2 or has no regime family.
     regime_names: tuple[str, ...] = ()
 
+    # === Per-agent return (1) ===
+    # return_per_regime_per_agent[g][i] is agent i's mean subjective return in
+    # regime g, so sum(return_per_regime_per_agent[g]) == return_per_regime[g].
+    # The scalar alone cannot express individual optimality: it is a sum over
+    # subjective rewards, and that sum cancels wherever the agents' rewards
+    # oppose -- identically zero in the old g2 `mutual_comp`, and a single
+    # agent's harvest in the asymmetric regimes. Empty mapping means the
+    # producer predates rel-v3.
+    return_per_regime_per_agent: Mapping[int, tuple[float, ...]] = field(
+        default_factory=lambda: _EMPTY_PER_AGENT
+    )
+
     # === Schema version sentinel (1) ===
     # rel-v2 (2026-08-09): added regime_names, and the g2cm family made regime
     # ids family-relative. An old and a new report must not be compared without
     # noticing, which is what this bump is for.
-    schema_version: str = "rel-v2"
+    # rel-v3 (2026-08-09): added return_per_regime_per_agent. The v7 re-run
+    # scores on per-agent return + NashConv because the summed return cannot
+    # express the individual optimality the method claims.
+    schema_version: str = "rel-v3"
 
     def to_dict(self) -> dict:
         """JSON-safe plain-dict view of the report.

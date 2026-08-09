@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import abc
 import time
+
+import numpy as np
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Final, Union
@@ -92,6 +94,9 @@ class ExternalBaselineRunner(abc.ABC):
             return_zero_shot_gap=0.0,
             return_per_regime=MappingProxyType({g: 0.0 for g in grid}),
             return_per_regime_sem=MappingProxyType({g: 0.0 for g in grid}),
+            return_per_regime_per_agent=MappingProxyType(
+                {g: (0.0,) * int(self.cfg.env.N) for g in grid}
+            ),
             episodes_per_regime=MappingProxyType({g: 0 for g in grid}),
             planner_prior_return_gap=0.0,
             direct_inference_return_mean=0.0,
@@ -122,6 +127,31 @@ class ExternalBaselineRunner(abc.ABC):
         override with ``sum(p.numel() for p in self.<modules>.parameters())``.
         """
         return 0
+
+
+def reward_vector(rew, agents) -> np.ndarray:
+    """Per-agent reward for one env step, ordered by ``agents``.
+
+    The external runners each accumulate returns in their own evaluate loop;
+    ordering the reward dict through one helper is what keeps "agent i" the same
+    agent in every report. Accumulate this vector and derive the scalar episode
+    return from ``vec.sum()`` rather than summing the dict separately -- that is
+    what makes ``sum(return_per_regime_per_agent[g]) == return_per_regime[g]``
+    true by construction rather than by coincidence.
+    """
+    return np.asarray([float(rew[a]) for a in agents], dtype=np.float64)
+
+
+def freeze_per_agent(per_regime_per_agent) -> MappingProxyType:
+    """Freeze ``{regime: per-agent means}`` for ``EvalReport`` (rel-v3).
+
+    Accepts numpy vectors or plain sequences; emits plain float tuples so the
+    report stays JSON-safe.
+    """
+    return MappingProxyType({
+        int(g): tuple(float(x) for x in vec)
+        for g, vec in per_regime_per_agent.items()
+    })
 
 
 def split_seen_unseen_regimes(cfg: V4Config, return_per_regime) -> tuple[float, float]:

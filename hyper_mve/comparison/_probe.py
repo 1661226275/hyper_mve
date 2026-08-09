@@ -124,9 +124,20 @@ class PeriodicEvalProbe:
         n = self._cfg.env.N
         per_regime: dict[int, float] = {}
         for g in self._grid:
-            rets = [self._one_episode(g, n) for _ in range(self._episodes)]
-            per_regime[g] = float(np.mean(rets)) if rets else 0.0
+            # (episodes, n) -- per-agent, so the regime mean can be reported
+            # both summed (the historical series) and per agent (rel-v3).
+            vecs = [self._one_episode(g, n) for _ in range(self._episodes)]
+            mean_vec = np.mean(vecs, axis=0) if vecs else np.zeros(n)
+            # NOTE: the scalar series below stays the SUM over agents. Changing
+            # it to a per-agent mean would silently redefine return_mean /
+            # return_seen / return_unseen partway through the project.
+            per_regime[g] = float(mean_vec.sum()) if vecs else 0.0
             self._writer.add_scalar(f"{self._prefix}/return_regime_{g}", per_regime[g], env_steps)
+            for i in range(n):
+                self._writer.add_scalar(
+                    f"{self._prefix}/return_regime_{g}_agent_{i}",
+                    float(mean_vec[i]), env_steps,
+                )
         vals = list(per_regime.values())
         self._writer.add_scalar(f"{self._prefix}/return_mean",
                                 float(np.mean(vals)) if vals else 0.0, env_steps)
@@ -151,9 +162,15 @@ class PeriodicEvalProbe:
                         f"fidelity/reward_mae_regime_{g}", float(v), env_steps)
         self._writer.flush()
 
-    def _one_episode(self, g: int, n: int) -> float:
+    def _one_episode(self, g: int, n: int) -> "np.ndarray":
+        """One episode's return, as a per-agent ``(n,)`` vector.
+
+        Callers that want the episode's scalar return take ``.sum()`` -- the
+        scalar is derived from the vector, never accumulated alongside it, so
+        the two can never disagree.
+        """
         obs_dict, _ = self._env.reset(options={"g": int(g)})
-        total = 0.0
+        total = np.zeros(n, dtype=np.float64)
         t = 0
         while True:
             obs = np.stack(
@@ -162,7 +179,9 @@ class PeriodicEvalProbe:
             actions = self._act_fn(obs, t, g)
             action_dict = {f"agent_{i}": int(actions[i]) for i in range(n)}
             obs_dict, reward, term, trunc, _ = self._env.step(action_dict)
-            total += float(sum(reward.values()))
+            total += np.asarray(
+                [float(reward[f"agent_{i}"]) for i in range(n)], dtype=np.float64
+            )
             done = [
                 bool(term[f"agent_{i}"]) or bool(trunc[f"agent_{i}"]) for i in range(n)
             ]

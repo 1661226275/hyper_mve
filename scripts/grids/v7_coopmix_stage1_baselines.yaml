@@ -1,0 +1,33 @@
+# v7 stage 1 — the five external baselines on `relation_coopmix`, seed 0.
+#
+# Companion to v7_coopmix_stage1_method.yaml; see that file for the scoring
+# protocol and for why the archived numbers are not reusable. Split into two
+# grids because scripts/train.py skips every (algo != mazero_mixed, arm != none)
+# cell, so a single grid cannot carry the method's ablation arm and the
+# baselines' `none` arm at once.
+#
+# WHY ALL FIVE AT SEED 0 RATHER THAN THE HANDOFF'S mazero+mamba PAIR: rel-v3
+# hand-edits each baseline's evaluate loop to accumulate an (N,) vector instead
+# of a scalar. Running one seed of every baseline is the only stage-1 scope that
+# exercises all six changed code paths before the full matrix commits GPU-days
+# to them. The `sum(per-agent) == scalar` invariant is asserted in
+# tests/comparison/test_external_eval_contract.py, but only for mappo/mamba.
+#
+# num_pmcts is ignored by the baselines (mazero-only search batch); it is left
+# at the default rather than being set here.
+#
+# mbom asserts cfg.env.N == 2, satisfied by this duo preset. MBOM runs on CPU by
+# design (faster than CUDA for its small MLPs); override with MBOM_DEVICE=cuda.
+algos:
+  - mappo
+  - mamba
+  - happo
+  - mbom
+  - m3w_adapted
+envs:
+  - relation_coopmix
+ablations:
+  - none
+seeds: [0]
+total_env_steps: 200000
+episodes: 128

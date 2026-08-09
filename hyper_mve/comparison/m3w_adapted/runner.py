@@ -34,6 +34,8 @@ from hyper_mve.utils.eval.eval_report import EvalReport, regime_names_for
 
 from hyper_mve.utils.schemas.relation import get_regime_family
 from hyper_mve.comparison.base import (
+    freeze_per_agent,
+    reward_vector,
     ExternalBaselineRunner,
     _FORBIDDEN_INFO_KEYS,
     split_seen_unseen_regimes,
@@ -284,6 +286,7 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
 
         return_per_regime: dict[int, float] = {}
         return_per_regime_sem: dict[int, float] = {}
+        return_per_regime_per_agent: dict = {}
         episodes_per_regime: dict[int, int] = {}
         all_returns: list[float] = []
         env_steps_total = 0
@@ -291,6 +294,7 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
         gen = torch.Generator(device=self._device)
         for g in regime_grid:
             g_returns: list[float] = []
+            g_agent: list = []
             for ep in range(int(episodes)):
                 gen.manual_seed(50_000 + 977 * int(g) + ep)
                 obs_dict, info = env.reset(
@@ -299,6 +303,7 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
                 obs = np.stack([np.asarray(obs_dict[a], dtype=np.float32)
                                 for a in agents])
                 ep_ret, done = 0.0, False
+                ep_agent = np.zeros(len(agents), dtype=np.float64)
                 while not done:
                     # pinned eval-grid regime ID (given-ID protocol)
                     acts = self._planner.plan(obs, int(g), explore=False,
@@ -309,16 +314,22 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
                     _check_forbidden_info(info)
                     obs = np.stack([np.asarray(obs_dict[a], dtype=np.float32)
                                     for a in agents])
-                    ep_ret += float(sum(rew.values()))
+                    step_vec = reward_vector(rew, agents)
+                    ep_agent += step_vec
+                    ep_ret += float(step_vec.sum())
                     env_steps_total += 1
                     done = bool(any(term.values()) or any(trunc.values()))
                 g_returns.append(ep_ret)
+                g_agent.append(ep_agent)
             return_per_regime[int(g)] = float(np.mean(g_returns)) if g_returns else 0.0
             return_per_regime_sem[int(g)] = (
                 float(np.std(g_returns) / max(np.sqrt(len(g_returns)), 1.0))
                 if len(g_returns) > 1 else 0.0
             )
             episodes_per_regime[int(g)] = len(g_returns)
+            return_per_regime_per_agent[int(g)] = (
+                np.mean(g_agent, axis=0) if g_agent else np.zeros(len(agents))
+            )
             all_returns.extend(g_returns)
         env.close()
         self._wm.train()
@@ -344,6 +355,9 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
             return_zero_shot_gap=zs_seen - zs_unseen,
             return_per_regime=MappingProxyType(return_per_regime),
             return_per_regime_sem=MappingProxyType(return_per_regime_sem),
+            return_per_regime_per_agent=freeze_per_agent(
+                return_per_regime_per_agent
+            ),
             episodes_per_regime=MappingProxyType(episodes_per_regime),
             planner_prior_return_gap=0.0,
             direct_inference_return_mean=return_mean,

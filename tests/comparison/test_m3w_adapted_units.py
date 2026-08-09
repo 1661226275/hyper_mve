@@ -42,15 +42,24 @@ def _tiny_wm(**over) -> RegimeCondWorldModel:
 
 def test_vendor_modules_imported_unmodified():
     dyn_cls, rew_cls, router_cls = load_vendor_modules()
+    # `vendor/` may be a SYMLINK to a shared clone: the vendored baselines are
+    # gitignored, so a git worktree does not carry them and they are linked in
+    # from the main checkout instead. `getsourcefile().resolve()` follows that
+    # link, while M3W_DIR appends "vendor/m3w-marl" to an already-resolved
+    # __file__ and so stays un-followed -- resolve both sides or they can never
+    # match. The property under test is unchanged: the classes still have to
+    # come from the vendored clone, and that clone file still has to be
+    # unmodified in its nested git repo.
+    m3w_root = M3W_DIR.resolve()
     for cls in (dyn_cls, rew_cls, router_cls):
         src = Path(inspect.getsourcefile(cls)).resolve()
-        assert str(src).startswith(str(M3W_DIR)), (
+        assert str(src).startswith(str(m3w_root)), (
             f"{cls.__name__} not sourced from the m3w-marl clone: {src}"
         )
     # the clone file itself is untouched in its nested git repo
-    rel = Path(inspect.getsourcefile(dyn_cls)).resolve().relative_to(M3W_DIR)
+    rel = Path(inspect.getsourcefile(dyn_cls)).resolve().relative_to(m3w_root)
     proc = subprocess.run(
-        ["git", "-C", str(M3W_DIR), "status", "--porcelain", "--", str(rel)],
+        ["git", "-C", str(m3w_root), "status", "--porcelain", "--", str(rel)],
         capture_output=True, text=True, timeout=30,
     )
     if proc.returncode != 0:

@@ -33,7 +33,7 @@ def test_mbom_tiny_train_eval_ckpt_roundtrip(variant, tmp_path):
 
     report = runner.evaluate(env_fn, regime_grid=(0, 1), episodes=1)
     assert isinstance(report, EvalReport)
-    assert report.schema_version == "rel-v2"
+    assert report.schema_version == "rel-v3"
     assert report.variant == variant
     assert set(report.return_per_regime) == {0, 1}
     assert report.env_steps_evaluated > 0

@@ -107,14 +107,14 @@ metric, not a different family.
 | metric | status | logged | notes |
 |---|---|---|---|
 | World-model fidelity | unchanged | during training | `fidelity.py`, schema now `fidelity-v2`, already per-regime |
-| Global (summed) reward | **restricted** | during training, **g0 and g4 only** | see the flag below |
-| Per-agent reward | **new** | during training, **all regimes** | needs rel-v3, see §5 |
-| NashConv / exploitability | **new** | during training, **all regimes** | **cost problem, see §4** |
+| Global (summed) reward | **restricted** | during training, **g0, g3 and g4** | decided 2026-08-09, see below |
+| Per-agent reward | **new** | during training, **all regimes** | rel-v3, LANDED, see §5 |
+| NashConv / exploitability | **new** | **post-hoc** at final checkpoints | decided 2026-08-09, see §4 |
 
 **All five regimes participate in training** for the main comparison — no regime is
 present at test but absent at train.
 
-### Flag: g3 also qualifies for the global metric
+### DECIDED (2026-08-09): global reward covers g0, g3 and g4
 
 "Global reward on g0 and g4 only" is exactly the correct rule for the old `g2`
 family, where those were the only regimes whose team return is `u_0 + u_1`. Under
@@ -123,11 +123,23 @@ family, where those were the only regimes whose team return is `u_0 + u_1`. Unde
 `(u_0+u_1)/2` — it responds to **both** agents' harvests. It is the regime that
 replaced `mutual_comp` precisely so that nothing cancels.
 
-Restricting to g0/g4 is defensible as a conservative choice, but if the rule was
-carried over from the v5 protocol rather than chosen, g3 can be included.
-`results/analysis/v6_reporting_protocol.md` currently documents g0/g3/g4.
-**Decide explicitly** — this is exactly the kind of carry-over the id renumbering
-makes dangerous.
+**Resolved: g3 is included.** The g0/g4 rule was a carry-over from the v5 `g2`
+protocol, not a choice made for `g2cm`; `results/analysis/v6_reporting_protocol.md`
+already documented g0/g3/g4, as does `scripts/grids/v6_coopmix_smoke.yaml`.
+
+No metric-producing code restricts regimes — the probes and `game_metrics` emit
+all of them — so this lives entirely in the reporting layer.
+`scripts/plot_eval_result.py` now carries **two separate keys** per family, because
+under `g2cm` they name different sets and a single `seen` key had been doing both
+jobs:
+
+* `global_reward` — `(0, 3, 4)`, which regimes' summed return is informative.
+  Applies to the **main** runs, where every regime is trained and tested.
+* `seen` / `held` — `(0, 1, 2)` / `(3, 4)`, the **generalization** partition,
+  which applies only to the separate `rel_coopmix_holdout` retraining run.
+
+Under the old `g2` family both were `(0, 4)`, which is exactly how they came to
+be conflated.
 
 ### Generalization split
 
