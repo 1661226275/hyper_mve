@@ -8,6 +8,30 @@ Launched 2026-08-08, landed 2026-08-09.
 record.** It does not improve return by a detectable margin, and it makes the
 zero-sum regime substantially *worse* on the metric that regime is scored on.
 
+> ## ⚠️ SCOPE CHANGE 2026-08-09 — this verdict is conditional on g1
+>
+> A decision was taken after this wave to **remove g1 from the family** and keep
+> only cooperative (g0, g4) and mixed (g2, g3) regimes, so that every regime
+> shares one training objective (individual optimality). See
+> `g1_removal_handoff.md`.
+>
+> **The entire case against `agent_q_softmax` was g1.** It was the only
+> significant effect in the wave. Rescored on the retained family
+> `{g0, g2, g3, g4}` (`agent_target_wave2/rescore_without_g1.py`):
+>
+> | contrast | delta | se | |
+> |---|---|---|---|
+> | none | +6.85 | 10.40 | +0.66 se — not significant |
+> | star | +7.56 | 17.07 | +0.44 se — not significant |
+>
+> So under the new scope `agent_q_softmax` is **not rejected — it is unresolved
+> and underpowered**, nominally ahead by ~7 points in both covers with the sign
+> consistent across all four cells. Do not carry the word "REJECTED" forward
+> into the g1-free scope; the evidence for it does not survive the scope change.
+> Deciding it either way needs roughly n≈30 per cell at the observed seed
+> variance, which is why the belief-settle-time measurement is the better next
+> use of GPU time.
+
 ## What was pre-registered
 
 `scripts/grids/v6_agent_target_2x2.yaml`, before launch:
