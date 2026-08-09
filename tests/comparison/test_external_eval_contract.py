@@ -69,8 +69,14 @@ def test_evaluate_returns_evalreport_shape_conforms(variant):
     assert set(report.episodes_per_regime) == set(regime_grid)
     for g in regime_grid:
         assert report.episodes_per_regime[g] == 2
-    # Schema sentinel (rel-v1).
+    # Schema sentinel (rel-v2).
     assert report.schema_version == "rel-v2"
+    # rel-v2: the per-regime dicts above key on family-relative ids, so every
+    # producer must say which family. Empty here would mean an id-keyed report
+    # that cannot be interpreted once more than one family is in play.
+    assert report.regime_names == (
+        "mutual_coop", "mutual_comp", "asym_exploit", "asym_exploited", "neutral",
+    )
     # zero-shot split: rel_duo has train_regime_ids=None ⇒ everything "seen".
     assert report.return_zero_shot_unseen == 0.0
     # External runners don't surface the thesis welfare metrics → defaults.
