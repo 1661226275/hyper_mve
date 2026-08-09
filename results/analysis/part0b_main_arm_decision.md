@@ -1,5 +1,12 @@
 # Part 0b — main-method arm decision (2026-07-24)
 
+> **Regime ids here are v5 `g2`**: g0 mutual_coop, g1 mutual_comp,
+> g2 asym_exploit, g3 asym_exploited, g4 neutral. Under the current `g2cm`
+> family the same ids name different regimes and `mutual_comp` does not
+> exist — see `results/analysis/g1_removal.md`. Numbers below are
+> unedited.
+
+
 ## Result: budget-proportional anneal RECOVERS the 600K→1M regression
 
 `ref_bc_anneal_scaled` @1M env-steps (`results_competence_1M_v2`, old train-steps logging):

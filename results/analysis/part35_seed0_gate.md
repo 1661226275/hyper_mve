@@ -1,5 +1,12 @@
 # Part 3.5 — seed0 gate: PAUSED (investigation result)
 
+> **Regime ids here are v5 `g2`**: g0 mutual_coop, g1 mutual_comp,
+> g2 asym_exploit, g3 asym_exploited, g4 neutral. Under the current `g2cm`
+> family the same ids name different regimes and `mutual_comp` does not
+> exist — see `results/analysis/g1_removal.md`. Numbers below are
+> unedited.
+
+
 ## Gate outcome
 
 Rule: main mixmazero ≥ best baseline → proceed to seed1/2; below → pause & investigate.

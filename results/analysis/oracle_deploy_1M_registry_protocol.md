@@ -1,5 +1,12 @@
 # Oracle deploy mode at 1M under the registry protocol (2026-07-26)
 
+> **Regime ids here are v5 `g2`**: g0 mutual_coop, g1 mutual_comp,
+> g2 asym_exploit, g3 asym_exploited, g4 neutral. Under the current `g2cm`
+> family the same ids name different regimes and `mutual_comp` does not
+> exist — see `results/analysis/g1_removal.md`. Numbers below are
+> unedited.
+
+
 First measurement of the oracle upper bound **in the canonical protocol** (previously oracle
 existed only in `value_deploy_probe.py`, which scores the same checkpoint ~12 points higher and
 is therefore not comparable to the headline table).

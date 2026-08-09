@@ -167,8 +167,29 @@ VoI = E_g[ max_t R_0(t | g) ] − max_t E_g[ R_0(t | g) ]
 ```
 
 with `g` drawn from agent 0's posterior **given its own row** — the only thing
-it observes (`w_01=+λ ⇒ g∈{g0,g3}`; `−λ ⇒ {g1,g2}`; `0 ⇒ {g4}`). This is exactly
-what the belief channel would have to earn.
+it observes (under `g2`: `w_01=+λ ⇒ g∈{g0,g3}`; `−λ ⇒ {g1,g2}`; `0 ⇒ {g4}`).
+This is exactly what the belief channel would have to earn. The probe now
+*derives* this partition from the family (`own_row_posterior`) instead of
+hardcoding it, and flags any bucket that holds a single regime — such a bucket
+contributes exactly 0, which is the mechanism behind the g1-removal result below.
+
+### The `g1` removal, measured (2026-08-09)
+
+Because the aggregate is an unweighted mean over the three own-row buckets, a
+bucket collapsing to one regime costs a full third of the headline:
+
+| family | `+λ` branch | `−λ` branch | `0` branch | **VoI** |
+|---|---|---|---|---|
+| `g2` (v5/v6) | 5.99 | 5.99 | 0 | **3.99** |
+| `g2` minus `mutual_comp`, nothing added | 5.99 | **0** (singleton) | 0 | **2.00** |
+| `g2cm` (`asym_exploit_mild` added) | 5.99 | 0.79 | 0 | **2.26** |
+
+`mutual_comp` was not a passenger: it was the confusion partner that made
+`w_01 = −λ` ambiguous. `2.26` is a **ceiling** for any 5-regime family with no
+purely adversarial regime — a negative `ŵ` in the `−λ` bucket requires both
+weights negative, which is what the scope decision forbids. Full derivation and
+the remaining headroom (the `0` bucket is still a singleton) in
+`results/analysis/g1_removal.md`.
 
 | configuration | best response varies with `g` | **VoI** |
 |---|---|---|

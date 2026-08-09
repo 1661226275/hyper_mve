@@ -1,44 +1,69 @@
-# How to score a run on `rel_recip` (v6) — 2026-08-05
+# How to score a run on `rel_coopmix` (v6) — 2026-08-05, revised 2026-08-09
 
-`return_mean` is **not** the v6 headline. It sums over agents, and on this
-reward that sum is structurally blind in three of five regimes. This is the
-protocol for anything comparing arms on v6, including the policy-target 2×2.
+> **SCOPE CHANGE 2026-08-09 — the NashConv split is GONE.**
+> The regime family is now `g2cm`, which has no purely adversarial regime
+> (`mutual_comp` removed, `asym_exploit_mild` added — see
+> `results/analysis/g1_removal.md`). The old rule *"g1 is scored on NashConv,
+> everything else on return, never mix the tables"* **no longer applies and has
+> been deleted below.** All five regimes are now scored on return, and NashConv
+> drops from a required instrument to an optional diagnostic.
+>
+> **Everything in this file below "Instruments" was measured on the v5 `g2`
+> family and is retained as evidence, not as current protocol.** Where it says
+> `g1` it means `mutual_comp`, which does not exist under `g2cm`; where it says
+> `g2`/`g3` it means `asym_exploit`/`asym_exploited`, which are ids 1 and 2 now.
 
-## Why the summed metric cannot be the headline
+`return_mean` is still **not** the v6 headline. It sums over agents, and that sum
+loses information wherever the two agents' rewards partly cancel — but under
+`g2cm` it is no longer *blind* anywhere.
 
-Team return collapses per regime. Measured with scripted controllers on
-`rel_recip`, 64 eps/regime (`reference_ceiling_rel_recip.json`):
+## Why the summed metric is still not the headline
 
-| regime | team return reduces to | span, noop → oracle |
+Team return partly collapses per regime. Under `g2cm` with `reciprocal` coupling
+(`R̂ = Wᵀ`, so agent `i` weights `u_j` by the hidden `w_ji`):
+
+| regime | team return reduces to | agent-slots visible |
 |---|---|---|
-| g0 coop | `u_0 + u_1` | 0.00 → 118.21 |
-| g1 comp | **`−ε·(moves)`** | 0.00 → −1.34 |
-| g2 exploit | `u_1` only | 0.00 → 52.83 |
-| g3 exploited | `u_0` only | 0.00 → 52.80 |
-| g4 neutral | `u_0 + u_1` | 0.00 → 43.38 |
+| g0 mutual_coop | `u_0 + u_1` | 2 |
+| g1 asym_exploit | `u_1` only | 1 |
+| g2 asym_exploited | `u_0` only | 1 |
+| g3 asym_exploit_mild | `(u_0 + u_1)/2` | 2 |
+| g4 neutral | `u_0 + u_1` | 2 |
 
-**g1 is anti-informative.** `R_0 + R_1 = (u_0−u_1)/2 + (u_1−u_0)/2 − ε(m_0+m_1)`
-— the harvests cancel exactly and only movement cost survives. The column is
-*maximised by standing still*: `noop` and `harvest_only` score exactly 0.00,
-`random` −1.34, every competent policy −0.02 to −0.04. Including it in a mean
-adds a small penalty for moving and nothing else.
+Agent-slots the summed metric can respond to: 2 + 1 + 1 + 2 + 2 = **8 of 10**,
+up from 6 of 10 under `g2`. The two recovered slots are exactly the ones
+`mutual_comp` destroyed: there `R_0 + R_1 = (u_0−u_1)/2 + (u_1−u_0)/2 − ε(m₀+m₁)`
+cancelled to nothing but movement cost, so the column was *maximised by standing
+still*. `asym_exploit_mild` does not cancel — `R_0 = u_0`, `R_1 = (u_1−u_0)/2`.
 
-**g2/g3 measure one agent each.** An improvement in the other agent is
-invisible, and can read as a regression: when the oracle controller correctly
-optimised agent 0's own objective in g3, the team sum *fell* by 12.87.
-
-Agent-slots the summed metric can respond to: 2 + 0 + 1 + 1 + 2 = **6 of 10**.
+**The asymmetric regimes still measure one agent each.** In g1/g2 an improvement
+in the other agent is invisible and can read as a regression: on `g2` the oracle
+controller correctly optimised agent 0's own objective in `asym_exploited` and
+the team sum *fell* by 12.87. That is why the per-agent split below is kept.
 
 ## The protocol
 
 | regimes | metric | where it comes from |
 |---|---|---|
-| g0, g4 | team return | `eval_report.json` → `return_per_regime` |
-| g2, g3 | **per-agent** return | `eval_diagnostics.json` → `return_per_regime_planner_per_agent`, or game metrics `v_pi[g][i]` |
-| g1 | **NashConv only** — report return as `n/a` | `scripts/eval_game_metrics.py` |
+| g0, g3, g4 | team return | `eval_report.json` → `return_per_regime` |
+| g1, g2 (the asymmetric pair) | **per-agent** return | `eval_diagnostics.json` → `return_per_regime_planner_per_agent`, or game metrics `v_pi[g][i]` |
 
-`return_mean` stays in the schema unchanged, so archived v5 runs remain
-comparable. It is simply not what a v6 comparison is read on.
+No regime is scored on NashConv. Resolve "which ids are asymmetric" with
+`RegimeFamily.asymmetric_ids()` rather than writing them down — they are `(2, 3)`
+under `g2` and `(1, 2, 3)` under `g2cm`, and `asym_exploit_mild` (id 3) is
+asymmetric but not one of the one-agent-visible pair.
+
+Read the `regime_names` field (schema `rel-v2`+) to confirm which family a report
+came from before comparing two of them. `return_mean` stays in the schema
+unchanged, so archived v5 runs remain loadable — it is simply not what a v6
+comparison is read on.
+
+## NashConv — now optional
+
+Still available via `scripts/eval_game_metrics.py`, still deterministic given
+`(ckpt, --seed)` (wave-1's four checkpoints re-measured to ±0.00), and still the
+right instrument if exploitability is the question being asked. It is no longer
+required for any regime, because no regime's return is uninformative.
 
 ## Instruments
 

@@ -1,5 +1,12 @@
 # Comparison at 3 seeds — final (1M env-steps, capacity-controlled)
 
+> **Regime ids here are v5 `g2`**: g0 mutual_coop, g1 mutual_comp,
+> g2 asym_exploit, g3 asym_exploited, g4 neutral. Under the current `g2cm`
+> family the same ids name different regimes and `mutual_comp` does not
+> exist — see `results/analysis/g1_removal.md`. Numbers below are
+> unedited.
+
+
 Generated 2026-07-29 from `results/v5_final/registry.jsonl`. Same protocol
 throughout: `eval_report.json` at the final checkpoint, 16 episodes per regime,
 5 regimes, `return_mean` = mean over regimes. All logging on the shared

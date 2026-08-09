@@ -1,5 +1,12 @@
 # Ablation at 3 seeds — final (1M env-steps)
 
+> **Regime ids here are v5 `g2`**: g0 mutual_coop, g1 mutual_comp,
+> g2 asym_exploit, g3 asym_exploited, g4 neutral. Under the current `g2cm`
+> family the same ids name different regimes and `mutual_comp` does not
+> exist — see `results/analysis/g1_removal.md`. Numbers below are
+> unedited.
+
+
 Generated 2026-07-28 from `results/v5_final/registry.jsonl` via
 `scripts/assemble_ablation.py --main-arm ref_bc_anneal_scaled_hardval_decoupled
 --nosubj-arm ref_bc_anneal_scaled_no_subjective_decoupled`.

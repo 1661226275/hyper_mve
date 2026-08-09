@@ -33,6 +33,7 @@ The two hardval cells differ in a way the locked rule did not anticipate:
 
 - **hardval-CEN** has the highest return (73.41) and the highest head diversity (11.58), but
   `regime_acc = 0.200` — **exactly chance for 5 regimes**, the signature of a collapsed belief net
+  (still 5 regimes under `g2cm`, so this diagnostic is unchanged by the 2026-08-09 scope change)
   emitting a near-constant posterior. Its Bayes average is then a *fixed* mixture of diverse
   heads: an ensemble, not a regime-conditioned selector.
 - **hardval-DEC** returns 71.95 (−1.46, far inside sd 7.7–9.1, i.e. indistinguishable) but has

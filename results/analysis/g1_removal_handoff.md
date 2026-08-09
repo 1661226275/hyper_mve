@@ -1,5 +1,21 @@
 # Removing g1: scope decision + implementation handoff (2026-08-09)
 
+> **SUPERSEDED by `results/analysis/g1_removal.md` — and Trap 4 below is WRONG.**
+>
+> Trap 4 predicted VoI would survive or rise. It measures **2.00** for the bare
+> removal, down from 3.99: the reasoning considered `mutual_comp`'s own
+> contribution but missed its role as the *confusion partner* that kept the
+> `w_01 = −λ` observation ambiguous. A singleton own-row bucket contributes
+> exactly 0 by construction. The implemented family adds a non-adversarial
+> `asym_exploit_mild (−λ, 0)` to restore that ambiguity, reaching 2.26.
+>
+> Trap 1 (id renumbering) and Trap 2 (chance level 0.200 → 0.250) also never
+> materialised: because a regime was added rather than merely removed, |G| stays
+> 5, ids stay contiguous, and the collapsed-belief diagnostic stays valid.
+> Trap 3 was resolved by retargeting the holdout to `(0, 1, 4)`.
+>
+> Retained for the file:line inventory, which is still accurate.
+
 Written at the close of the agent-target wave for a fresh session. The decision
 is the user's; everything below is the surface it touches, measured or read from
 the code, with file:line so nothing has to be re-derived.

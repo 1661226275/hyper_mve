@@ -1,5 +1,12 @@
 # Table 1 — baseline comparison summary (rel_duo, N=2, |G|=5)
 
+> **Regime ids here are v5 `g2`**: g0 mutual_coop, g1 mutual_comp,
+> g2 asym_exploit, g3 asym_exploited, g4 neutral. Under the current `g2cm`
+> family the same ids name different regimes and `mutual_comp` does not
+> exist — see `results/analysis/g1_removal.md`. Numbers below are
+> unedited.
+
+
 | Method | Cell | Seeds | Env-step budget | Return (mean±SEM) | Δ vs model-free | Seen regimes | Held-out regimes | Zero-shot gap | NashConv (mean, LB) | Walltime/seed |
 |---|---|---|---|---|---|---|---|---|---|---|
 | DR-MBHGL (ours) | rel_gate_duo | 1 | 2,000,000 | 13.92 (single seed) | -20.69 | — | — | — | 4.58 | — |

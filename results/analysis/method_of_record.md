@@ -37,7 +37,9 @@ selection basis (`late_training_instability.md`).
 
 Rationale: both hardval cells lead on return and on head diversity, and their returns are
 statistically indistinguishable (Δ 1.46 vs sd ≈ 8–9). The centralized cell's belief net sits at
-**chance** regime accuracy (0.200 = 1/5, a near-constant posterior), which would undercut a
+**chance** regime accuracy (0.200 = 1/5, a near-constant posterior — this test SURVIVES the
+2026-08-09 scope change, because `g2cm` also has |G| = 5, so chance stays 0.200 and a
+collapsed posterior still reads as collapsed), which would undercut a
 role-aware claim regardless of return. The decoupled cell has genuine above-chance inference
 (0.561) with strongly differentiated heads (9.54) and the lowest variance of any cell.
 

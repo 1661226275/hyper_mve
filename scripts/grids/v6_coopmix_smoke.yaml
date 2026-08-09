@@ -1,0 +1,43 @@
+# v6 rel_coopmix smoke — first runs on the `g2cm` family (no adversarial regime).
+#
+# PURPOSE: establish that the method of record trains and evaluates end-to-end on
+# `relation_coopmix`, and produce the first checkpoint the belief probes can be
+# pointed at. This is NOT a comparison against `relation_recip` — the two use
+# different regime families, so per-regime numbers are not commensurable and the
+# report `schema_version` (rel-v2) plus `regime_names` exist to stop them being
+# mixed by accident. Confirm `regime_names` in eval_report.json before reading
+# any per-regime column.
+#
+# SCORING — the g1/NashConv split is GONE (results/analysis/g1_removal.md):
+#   g0, g3, g4   team return                       — eval_report.json
+#   g1, g2       per-agent return                  — eval_diagnostics.json
+#                "return_per_regime_planner_per_agent"
+#   NashConv     optional diagnostic only          — scripts/eval_game_metrics.py
+# Under g2cm no regime is blind to summed return (8 of 10 agent-slots visible vs
+# 6 of 10 under g2), but the asymmetric pair still shows one agent each, so the
+# per-agent split is kept.
+#
+# WHAT TO WATCH, beyond return:
+#   * regime_acc. Chance is still 0.200 (|G| = 5), so the standing collapsed-
+#     belief test is unchanged. Under g2 the belief net resolved each own-row
+#     bucket to a fixed member and NEVER predicted asym_exploit at all
+#     (results/analysis/belief_settle_time.md). g2cm's -lam bucket holds two
+#     ASYMMETRIC regimes, unlike g2's, which separates "collapses to the
+#     symmetric member" from "collapses to the lower id" for the first time.
+#   * The min_qstd advantage guard was tuned on measurements taken in
+#     mutual_comp, which does not exist here. It is scale-free by construction so
+#     it should degrade gracefully, but it is unvalidated on g2cm.
+#
+# lr 0.02 carried over from the v6 sweep on rel_recip; the physics knobs are
+# identical between the two presets (only relation_family differs), so it should
+# transfer, but it has not been re-swept here.
+algos:
+  - mazero_mixed
+envs:
+  - relation_coopmix
+ablations:
+  - ref_bc_anneal_scaled_hardval_decoupled            # method of record
+seeds: [0, 1]
+total_env_steps: 200000
+episodes: 128
+num_pmcts: 16

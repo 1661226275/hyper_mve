@@ -248,11 +248,16 @@ belief net actually trains before concluding it is inadequate.
 regimes. Full protocol and evidence in
 **`results/analysis/v6_reporting_protocol.md`**. Summary:
 
+> **SUPERSEDED 2026-08-09.** This table is the v5 `g2` protocol. The g1/NashConv
+> row is deleted under `g2cm`, which has no `mutual_comp`; all regimes are scored
+> on return. See `results/analysis/v6_reporting_protocol.md` for the current
+> version and `results/analysis/g1_removal.md` for why. Ids below are `g2` ids.
+
 | regimes | metric | source |
 |---|---|---|
 | g0, g4 | team return | `eval_report.json` → `return_per_regime` |
 | g2, g3 | **per-agent** return | `eval_diagnostics.json` → `return_per_regime_planner_per_agent` |
-| g1 | **NashConv only** (return is pinned at `−ε·moves`) | `scripts/eval_game_metrics.py` |
+| g1 | ~~NashConv only~~ — rule retired, see banner above | `scripts/eval_game_metrics.py` |
 
 Also: run evals at **128 episodes** (SEM 3.54 vs 10.27 at 16, for 1.8× the time);
 select on the **last-20%** of the run's own periodic eval, not the final
