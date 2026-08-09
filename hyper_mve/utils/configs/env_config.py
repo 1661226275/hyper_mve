@@ -19,7 +19,7 @@ from hyper_mve.utils.schemas._constants import EPSILON_MOVE, Q_MAX
 from hyper_mve.utils.schemas.relation import VALID_REWARD_COUPLINGS
 
 
-_VALID_RELATION_FAMILIES: tuple[str, ...] = ("g2", "g4", "g4_ext", "tag4")
+_VALID_RELATION_FAMILIES: tuple[str, ...] = ("g2", "g2cm", "g4", "g4_ext", "tag4")
 _VALID_REGIME_KERNELS: tuple[str, ...] = ("uniform",)
 _VALID_ENV_KINDS: tuple[str, ...] = ("relation", "mpe_tag")
 _VALID_REGROWTH_LAWS: tuple[str, ...] = ("constant", "logistic")

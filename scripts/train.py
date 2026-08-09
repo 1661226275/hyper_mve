@@ -55,6 +55,11 @@ ENV_PRESETS = {
     # control — see results/analysis/regime_knowledge_ceiling.md.
     "relation_recip": "rel_recip",
     "relation_recip_holdout": "rel_recip_holdout",
+    # v6 scope change: same physics as `relation_recip`, on the `g2cm` family,
+    # which carries no purely adversarial regime. `relation_recip` stays frozen
+    # because runs are archived against it — see results/analysis/g1_removal.md.
+    "relation_coopmix": "rel_coopmix",
+    "relation_coopmix_holdout": "rel_coopmix_holdout",
     "mpe_tag": "mpe_tag",
     "mpe_tag_fixed": "mpe_tag_fixed",
 }

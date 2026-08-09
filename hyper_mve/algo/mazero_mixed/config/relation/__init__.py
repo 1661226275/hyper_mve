@@ -139,7 +139,8 @@ class GameConfig(BaseConfig):
 
         # v6 presets carry their own physics (logistic regrowth + reciprocal
         # reward), so they must not be derived from the rel_duo table below.
-        if self.env_name in ("rel_recip", "rel_recip_holdout"):
+        if self.env_name in ("rel_recip", "rel_recip_holdout",
+                             "rel_coopmix", "rel_coopmix_holdout"):
             return V4Config.from_preset(self.env_name).env
 
         base = V4Config.from_preset("rel_duo")
@@ -152,7 +153,8 @@ class GameConfig(BaseConfig):
             raise ValueError(
                 f"Unknown relation env_name {self.env_name!r}; expected "
                 "'rel_duo', 'rel_duo_coop', 'rel_recip', 'rel_recip_holdout', "
-                "'mpe_tag' or 'mpe_tag_fixed'."
+                "'rel_coopmix', 'rel_coopmix_holdout', 'mpe_tag' or "
+                "'mpe_tag_fixed'."
             )
         return env_cfg
 

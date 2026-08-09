@@ -30,7 +30,7 @@ from typing import Optional, Sequence
 import numpy as np
 
 
-_VALID_FAMILIES: tuple[str, ...] = ("g2", "g4", "g4_ext")
+_VALID_FAMILIES: tuple[str, ...] = ("g2", "g2cm", "g4", "g4_ext", "tag4")
 _VALID_KERNELS: tuple[str, ...] = ("uniform",)
 
 
@@ -151,6 +151,60 @@ def build_g2(lam: float = 1.0) -> RegimeFamily:
     )
 
 
+def build_g2cm(lam: float = 1.0) -> RegimeFamily:
+    """``G2CM`` — "cooperative + mixed" (N=2), 5 regimes, **no purely adversarial
+    regime**. This is ``g2`` with ``mutual_comp`` removed and ``asym_exploit_mild``
+    added in its place; ``g2`` itself is left untouched as the frozen v5/v6 control.
+
+    Rationale for the removal: ``mutual_comp`` is the only regime with *both*
+    weights negative, so it is the only one where a change of role relationship
+    changes the **nature of the game**. With it gone every regime is compatible with
+    individual optimality, one training objective is correct everywhere, and every
+    regime is scored on return — which deletes the "g1 on NashConv, everything else
+    on return" split from the reporting protocol.
+
+    Rationale for the addition — this is the part that is easy to get wrong.
+    ``mutual_comp`` was not a passenger. Under ``reciprocal`` coupling agent ``i``'s
+    weight on ``u_j`` is the *hidden* ``w_ji``, while what it observes is its own row
+    ``w_ij``. Value of information therefore comes entirely from regimes that share
+    an observed row but differ in the hidden one::
+
+        w_01 = +λ  ->  {mutual_coop (w_10=+λ), asym_exploited (w_10=-λ)}   ambiguous
+        w_01 = -λ  ->  {asym_exploit (w_10=+λ), asym_exploit_mild (w_10=0)} ambiguous
+        w_01 =  0  ->  {neutral}                                            singleton
+
+    Deleting ``mutual_comp`` without a replacement would leave the ``-λ`` branch a
+    singleton, and a singleton branch has VoI exactly 0 by construction — measured
+    VoI would halve, 3.99 -> 1.996. ``asym_exploit_mild`` (agent 0 hostile, agent 1
+    indifferent) restores that ambiguity with only *one* negative weight, so it is
+    mixed rather than adversarial, exactly like ``asym_exploit``/``asym_exploited``.
+
+    Ordering is load-bearing: ``mutual_coop`` keeps id 0 and ``neutral`` keeps id 4,
+    matching ``g2``. Several consumers depend on those two positions — the empirical
+    price-of-anarchy denominator reads ``welfare_physical["0"]`` as the all-coop
+    regime, and probes that need ``W = 0`` to read back physical harvests pin
+    ``options={"g": 4}``. Only ids 1-3 differ from ``g2``.
+
+    Second consequence worth knowing: no regime here is blind to *summed* return.
+    That blindness was specific to ``mutual_comp``, where
+    ``R_0 + R_1 = (u_0-u_1)/2 + (u_1-u_0)/2`` cancels to zero. For
+    ``asym_exploit_mild`` it does not: ``R_0 = u_0`` and ``R_1 = (u_1-u_0)/2`` sum to
+    ``(u_0+u_1)/2``.
+    """
+    _validate_intensity(lam)
+    return RegimeFamily(
+        name="g2cm",
+        N=2,
+        regimes=(
+            Regime(0, "mutual_coop", _w2(+lam, +lam)),
+            Regime(1, "asym_exploit", _w2(-lam, +lam)),
+            Regime(2, "asym_exploited", _w2(+lam, -lam)),
+            Regime(3, "asym_exploit_mild", _w2(-lam, 0.0)),
+            Regime(4, "neutral", _w2(0.0, 0.0)),
+        ),
+    )
+
+
 def _block_w(n: int, groups: Sequence[Sequence[int]], lam: float) -> tuple[tuple[float, ...], ...]:
     """W from a partition: +λ within a group, -λ across groups, 1 on the
     diagonal. ``groups`` must partition ``range(n)``."""
@@ -248,8 +302,8 @@ def _validate_intensity(lam: float) -> None:
         raise ValueError(f"relation_intensity λ={lam} ∉ (0, 1]")
 
 
-_BUILDERS = {"g2": build_g2, "g4": build_g4, "g4_ext": build_g4_ext,
-             "tag4": build_tag4}
+_BUILDERS = {"g2": build_g2, "g2cm": build_g2cm, "g4": build_g4,
+             "g4_ext": build_g4_ext, "tag4": build_tag4}
 
 
 @functools.lru_cache(maxsize=None)

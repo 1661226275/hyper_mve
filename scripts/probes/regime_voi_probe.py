@@ -12,10 +12,13 @@ It measures the value of information for agent 0's strategy choice:
     VoI = E_g[ max_t R_0(t | g) ]  -  max_t E_g[ R_0(t | g) ]
 
 with ``g`` drawn from agent 0's posterior GIVEN ITS OWN ROW, the only thing it
-observes (``w_01=+lam => g in {g0,g3}``; ``-lam => {g1,g2}``; ``0 => {g4}``).
-VoI > 0 means knowing the rest of the regime would change what agent 0 should
-do; VoI == 0 means the observed own row already determines the best response
-and the belief channel has nothing to earn.
+observes. That partition is **derived from the family** by ``own_row_posterior``,
+never hardcoded — on ``g2`` it comes out as ``+lam => {g0,g3}``, ``-lam => {g1,g2}``,
+``0 => {g4}``. VoI > 0 means knowing the rest of the regime would change what agent
+0 should do; VoI == 0 means the observed own row already determines the best
+response and the belief channel has nothing to earn. A bucket holding a single
+regime therefore contributes exactly 0, which is how a family edit that collapses
+one shows up here rather than silently.
 
 Three things make this measure what it claims:
 
@@ -33,7 +36,7 @@ Three things make this measure what it claims:
 **Offline recompute.** ``W(g)`` enters only the reward, never the dynamics, and
 the threshold policy below never reads the observation's row block — so for a
 fixed ``(t0, t1)`` the trajectory, and hence ``(U_0, U_1, M_0)``, is IDENTICAL
-across all five regimes. The grid is therefore rolled out ONCE and every
+across every regime in the family. The grid is therefore rolled out ONCE and every
 candidate reward coupling is evaluated in closed form from
 ``effective_coupling_matrix``. That is what makes sweeping the design surface
 affordable. ``tests/envs/test_voi_probe.py`` pins the row-block independence;
@@ -75,12 +78,47 @@ from hyper_mve.utils.schemas.relation import (                                  
     effective_coupling_matrix, get_regime_family,
 )
 
-GRID = (0, 1, 2, 3, 4)
 THRESHOLDS = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6)
 SEED_BASE = 10_000
 
-# Agent 0's posterior over g given its own row, under the uniform regime prior.
-POSTERIOR = {"+lam": (0, 3), "-lam": (1, 2), "0": (4,)}
+
+def own_row_posterior(family, grid, agent=0):
+    """Agent ``agent``'s candidate set for each value of its OWN row, under the
+    uniform regime prior — derived from the family, never hardcoded.
+
+    This is where VoI comes from and the only place it can come from: the agent
+    sees ``w_ij`` and must infer the hidden ``w_ji``, so a bucket holding a single
+    regime leaves nothing to infer and contributes **exactly zero**. Deriving the
+    partition rather than writing it down means a family edit that collapses a
+    bucket shows up here instead of silently halving the headline number.
+    """
+    buckets = {}
+    for g in grid:
+        v = float(family.regimes[int(g)].row(agent)[0])
+        buckets.setdefault(v, []).append(int(g))
+    vals = sorted(buckets)
+    signs = [(v > 0) - (v < 0) for v in vals]
+    by_sign = len(set(signs)) == len(signs)      # at most one bucket per sign
+    out = {}
+    for v in vals:
+        if by_sign:
+            key = "+lam" if v > 0 else ("-lam" if v < 0 else "0")
+        else:
+            key = f"w01={v:+.2f}"
+        out[key] = tuple(buckets[v])
+    return out
+
+
+def zero_coupling_regime(family):
+    """The regime with no off-diagonal weight, where ``R_i = u_i - eps*moved_i``
+    so the physical harvests read back exactly. ``rollout_grid`` pins it."""
+    for r in family.regimes:
+        W = r.w_array()
+        if np.allclose(W[~np.eye(len(W), dtype=bool)], 0.0):
+            return int(r.id)
+    raise SystemExit(
+        f"family {family.name!r} has no zero-coupling regime; rollout_grid needs "
+        "one to read back physical harvests")
 
 # The comparison set reported alongside the preset's configured coupling.
 DESIGNS: tuple[tuple[str, str, float], ...] = (
@@ -124,9 +162,12 @@ def threshold_action(obs_i, agent_idx, N, K, thresh):
 def rollout_grid(env_cfg, episodes):
     """``(U0, U1, M0)`` over the threshold grid. One pass covers every regime.
 
-    Runs under regime g4 (``W = 0``), where the reward reduces to
-    ``R_i = u_i - eps*moved_i``, so the physical harvests are read back exactly.
+    Runs under the family's zero-coupling regime (``W = 0``), where the reward
+    reduces to ``R_i = u_i - eps*moved_i``, so the physical harvests are read back
+    exactly and every candidate coupling can be scored offline from one rollout.
     """
+    from hyper_mve.utils.schemas.relation import get_regime_family
+    g_zero = zero_coupling_regime(get_regime_family(env_cfg))
     n = len(THRESHOLDS)
     eps = float(env_cfg.epsilon_move)
     U0, U1, M0 = (np.zeros((n, n)) for _ in range(3))
@@ -137,7 +178,7 @@ def rollout_grid(env_cfg, episodes):
             agents = list(env.possible_agents)
             u, moves = np.zeros(2), 0.0
             for ep in range(episodes):
-                obs, _ = env.reset(seed=SEED_BASE + ep, options={"g": 4})
+                obs, _ = env.reset(seed=SEED_BASE + ep, options={"g": g_zero})
                 done = False
                 while not done:
                     acts = {
@@ -158,10 +199,16 @@ def rollout_grid(env_cfg, episodes):
     return U0, U1, M0
 
 
-def voi(weights, U0, U1, M0, eps):
-    """VoI for agent 0, averaged over own-row cases. ``weights[g]`` = ŵ_01."""
+def voi(weights, U0, U1, M0, eps, posterior):
+    """VoI for agent 0, averaged over own-row cases. ``weights[g]`` = ŵ_01.
+
+    The aggregate is an unweighted mean over the own-row cases in ``posterior``,
+    NOT a prior-weighted expectation — so a case whose bucket holds one regime
+    contributes a hard 0 and drags the headline down by its full share. That is
+    the intended behaviour: it is what makes a collapsed bucket visible.
+    """
     per_case = {}
-    for name, gs in POSTERIOR.items():
+    for name, gs in posterior.items():
         # R_0 = (U0 + w*U1)/(1+|w|) - eps*M0, linear in the harvests because the
         # coefficients are constant within an episode.
         R = {g: (U0 + weights[g] * U1) / (1.0 + abs(weights[g])) - eps * M0
@@ -175,11 +222,11 @@ def voi(weights, U0, U1, M0, eps):
     return float(np.mean(list(per_case.values()))), per_case
 
 
-def coupling_weights(env_cfg, coupling, lam):
+def coupling_weights(env_cfg, coupling, lam, grid):
     """``ŵ_01`` per regime under a candidate coupling rule."""
     family = get_regime_family(env_cfg)
-    return {g: float(effective_coupling_matrix(
-        family.regimes[g].w_array(), coupling, lam)[0, 1]) for g in GRID}
+    return {int(g): float(effective_coupling_matrix(
+        family.regimes[int(g)].w_array(), coupling, lam)[0, 1]) for g in grid}
 
 
 def main(argv=None) -> int:
@@ -191,6 +238,11 @@ def main(argv=None) -> int:
     ap.add_argument("--L", type=int, default=None, help="override grid size")
     ap.add_argument("--alpha", type=float, default=None)
     ap.add_argument("--regrowth-law", choices=("constant", "logistic"), default=None)
+    ap.add_argument("--regimes", type=int, nargs="*", default=None, metavar="G",
+                    help="regime ids to score (default: the whole preset family). "
+                         "Scoring a subset changes the own-row partition, so it can "
+                         "change VoI on its own — use it to ask what a restricted "
+                         "family would measure, not to filter noise.")
     args = ap.parse_args(argv)
 
     env_cfg = V4Config.from_preset(args.preset).env
@@ -206,6 +258,23 @@ def main(argv=None) -> int:
              if env_cfg.reward_coupling == "levine" else ""))
     if over:
         print(f"    overrides: {over}")
+    family = get_regime_family(env_cfg)
+    grid = tuple(int(g) for g in (args.regimes if args.regimes is not None
+                                  else range(family.size)))
+    bad = [g for g in grid if not 0 <= g < family.size]
+    if bad:
+        raise SystemExit(f"--regimes {bad} out of range for family "
+                         f"{family.name!r} (|G|={family.size})")
+    posterior = own_row_posterior(family, grid)
+
+    print(f"    family={family.name} |G|={family.size} scoring {len(grid)} regimes: "
+          + ", ".join(f"g{g}={family.names()[g]}" for g in grid))
+    print("    agent 0's own-row partition (a 1-regime bucket has VoI 0 by "
+          "construction):")
+    for k, gs in posterior.items():
+        mark = "  <-- SINGLETON, contributes 0" if len(gs) < 2 else ""
+        print(f"      w_01 {k:>6s} -> " + ", ".join(family.names()[g] for g in gs)
+              + mark)
     print(f"    rolling out {len(THRESHOLDS)}x{len(THRESHOLDS)} thresholds "
           f"x {args.episodes} episodes (once; all regimes share it)", flush=True)
 
@@ -226,16 +295,19 @@ def main(argv=None) -> int:
 
     configured = (f"CONFIGURED ({env_cfg.reward_coupling})",
                   env_cfg.reward_coupling, float(env_cfg.reciprocity_lambda))
-    print(f"\n  {'design':<22} {'w_01 per regime (g0..g4)':<32} {'VoI':>7}"
-          f" {'+row':>7} {'-row':>7}")
+    cases = list(posterior)
+    gstr = f"g{grid[0]}..g{grid[-1]}" if grid else "-"
+    print(f"\n  {'design':<22} {'w_01 per regime (' + gstr + ')':<32} {'VoI':>7}"
+          + "".join(f" {c:>7}" for c in cases))
     results = {}
     for label, coupling, lam in (configured,) + DESIGNS:
-        w = coupling_weights(env_cfg, coupling, lam)
-        v, per = voi(w, U0, U1, M0, eps)
+        w = coupling_weights(env_cfg, coupling, lam, grid)
+        v, per = voi(w, U0, U1, M0, eps, posterior)
         results[label] = {"coupling": coupling, "lambda": lam, "weights": w,
                           "voi": v, "per_own_row": per}
-        wstr = " ".join(f"{w[g]:+.2f}" for g in GRID)
-        print(f"  {label:<22} {wstr:<32} {v:7.2f} {per['+lam']:7.2f} {per['-lam']:7.2f}")
+        wstr = " ".join(f"{w[g]:+.2f}" for g in grid)
+        print(f"  {label:<22} {wstr:<32} {v:7.2f}"
+              + "".join(f" {per[c]:7.2f}" for c in cases))
 
     print("\n  gate: VoI must clear the method's seed sd to be detectable at 3 "
           "seeds.\n  NOTE this is a lower bound — a 1-D scripted threshold "
@@ -246,7 +318,10 @@ def main(argv=None) -> int:
     out_path = out_dir / f"regime_voi_{args.preset}.json"
     out_path.write_text(json.dumps({
         "preset": args.preset, "overrides": over, "episodes": args.episodes,
-        "thresholds": THRESHOLDS, "regimes": GRID,
+        "thresholds": THRESHOLDS, "regimes": list(grid),
+        "family": family.name,
+        "regime_names": [family.names()[g] for g in grid],
+        "own_row_partition": {k: list(v) for k, v in posterior.items()},
         "env": {"N": env_cfg.N, "L": env_cfg.L, "K": env_cfg.K,
                 "alpha": env_cfg.alpha, "regrowth_law": env_cfg.regrowth_law,
                 "reward_coupling": env_cfg.reward_coupling},
