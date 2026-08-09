@@ -2,6 +2,13 @@
 """export_exp_result_0729.py — re-cut v5_final TensorBoard scalars into a CSV tree
 for plotting, plus the three ablation tables.
 
+FROZEN to the v5 ``g2`` family (2026-08-09). Every ``range(5)`` and every
+``eval/return_regime_{g}`` tag below assumes g0=mutual_coop, g1=mutual_comp,
+g2=asym_exploit, g3=asym_exploited, g4=neutral. Under ``g2cm`` those ids name
+different regimes, so pointing this at a ``rel_coopmix`` run would relabel every
+column silently. This is a dated one-shot exporter over archived runs — write a
+new one rather than migrating it.
+
 Supersedes ``export_exp_result_0728.py`` with the 0729 brief:
 
   * **Comparison 1 — value-equivalent modeling error.** Arms

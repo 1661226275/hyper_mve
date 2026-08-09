@@ -48,11 +48,14 @@ def render_fig_6_1(suite_root, cells, out_dir) -> RenderOutcome:
         return RenderOutcome("Fig 6.1", "no_data", None, "no completed rows yet")
     # variant -> regime(str) -> [value]
     seg: dict[str, dict[str, list[float]]] = {}
+    regime_names: list[str] = []
     for r in rows:
         rep = registry_io.report_dict(r)
         if rep is None:
             continue
         rpr = rep.get("return_per_regime") or {}
+        # rel-v2+ reports name their regimes; ids alone are family-relative.
+        regime_names = regime_names or list(rep.get("regime_names") or ())
         for g, val in rpr.items():
             seg.setdefault(str(r.get("variant")), {}).setdefault(str(g), []).append(float(val))
     if not seg:
@@ -75,7 +78,13 @@ def render_fig_6_1(suite_root, cells, out_dir) -> RenderOutcome:
         ax.bar(x + (i - (n - 1) / 2) * w, ys, w, yerr=es, capsize=3, label=v)
     ax.set_xticks(x)
     ax.set_xticklabels([f"g={g}" for g in regimes])
-    ax.set_xlabel("regime id (g2: 0 coop / 1 comp / 2-3 asym / 4 neutral)")
+    # Never write the id->name mapping down: it is family-relative. rel-v2+
+    # reports carry regime_names; older ones get a bare id axis.
+    if regime_names:
+        ax.set_xlabel("regime id — "
+                      + " / ".join(f"{g} {nm}" for g, nm in enumerate(regime_names)))
+    else:
+        ax.set_xlabel("regime id")
     ax.set_ylabel("W_total (return_per_regime)")
     ax.set_title("Fig 6.1 — 逐 regime 社会总福利")
     ax.legend(fontsize=8)
@@ -106,8 +115,8 @@ def render_fig_6_2(suite_root, cells, out_dir) -> RenderOutcome:
     seen_m = [mean_sem(seen.get(v, []))[0] for v in variants]
     unseen_m = [mean_sem(unseen.get(v, []))[0] for v in variants]
     fig, ax = plt.subplots(figsize=(max(4.0, 1.4 * len(variants)), 4.5))
-    ax.bar(x - w / 2, seen_m, w, label="seen regimes (0,1,4)", color="tab:green")
-    ax.bar(x + w / 2, unseen_m, w, label="unseen regimes (2,3)", color="tab:orange")
+    ax.bar(x - w / 2, seen_m, w, label="seen regimes (train_regime_ids)", color="tab:green")
+    ax.bar(x + w / 2, unseen_m, w, label="unseen regimes (held out)", color="tab:orange")
     ax.set_xticks(x)
     ax.set_xticklabels(variants, rotation=20, ha="right")
     ax.set_ylabel("W_total")

@@ -316,7 +316,14 @@ _ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_mctsfix"] = _ARGV_REMOVE["r
 #
 # The 2x2 (wave 1, n=2) put B-alone (none / q_softmax) first on every instrument
 # -- return, the last-20% trace, and g1 NashConv (5.43 vs the baseline's 12.83)
-# -- but at ~5x the baseline's seed spread. The blend targets exactly that
+# -- but at ~5x the baseline's seed spread.
+#
+# SCOPE NOTE (2026-08-09): the g1 NashConv leg of that evidence is out of scope
+# under `g2cm`, which has no `mutual_comp`. The arm is kept and NOT re-selected
+# on a guess; what remains behind it is the return and last-20% evidence, which
+# was inside noise at n=2. See results/analysis/g1_removal.md.
+#
+# The blend targets exactly that
 # variance: q_softmax weights a 1-visit Q like a 20-visit Q, and at
 # root_cover=star the budget is only ~1.9 visits/child. See
 # core/train.py:policy_target_weights.

@@ -98,7 +98,7 @@ def main(argv=None) -> int:
         N, K, level="self_info", **_cpl)
     suite["relational_oracle"] = make_relational_greedy_policy(
         N, K, level="oracle", family=family, **_cpl)
-    names = ["g0 coop", "g1 comp", "g2 exploit", "g3 exploited", "g4 neutral"]
+    names = list(family.names())
 
     rows: dict[str, dict] = {}
     for name, policy in suite.items():
@@ -153,9 +153,11 @@ def main(argv=None) -> int:
     gaps = {g: (uni_or["return_per_agent_per_regime"][g][0]
                 - uni_si["return_per_agent_per_regime"][g][0]) for g in grid}
     gap_mean = sum(gaps.values()) / len(gaps)
-    # The mirror prior is *correct* in g0/g1/g4, so the whole effect must live
-    # in the asymmetric regimes; a nonzero gap elsewhere is controller noise.
-    asym = [g for g in grid if g in (2, 3)]
+    # The mirror prior is *correct* in every symmetric regime, so the whole
+    # effect must live in the asymmetric ones; a nonzero gap elsewhere is
+    # controller noise. Derived from the family, not written down: the ids are
+    # (2, 3) under g2 but (1, 2, 3) under g2cm.
+    asym = [g for g in grid if g in set(family.asymmetric_ids())]
     gap_asym = sum(gaps[g] for g in asym) / max(len(asym), 1)
 
     effect = sum(abs(gaps[g]) for g in asym) / max(len(asym), 1)
@@ -165,9 +167,10 @@ def main(argv=None) -> int:
     print("     scored on agent 0's OWN return, not the team sum)")
     print("  " + " ".join(f"{names[g][:9]:>9s}" for g in grid))
     print("  " + " ".join(f"{gaps[g]:9.2f}" for g in grid))
+    asym_label = "/".join(f"g{g}" for g in asym) or "(none)"
     print(f"  signed mean, all regimes : {gap_mean:+.2f}")
-    print(f"  signed mean, g2/g3       : {gap_asym:+.2f}")
-    print(f"  EFFECT SIZE |gap| g2/g3  : {effect:.2f}")
+    print(f"  signed mean, {asym_label:<12s}: {gap_asym:+.2f}")
+    print(f"  EFFECT SIZE |gap| {asym_label:<7s}: {effect:.2f}")
     print("  read: this is the difference between two FIXED HEURISTICS, so it")
     print("  can be negative where the oracle heuristic mis-responds — it is")
     print("  not a VoI and is not bounded below by 0. Use the effect size to")
@@ -177,6 +180,9 @@ def main(argv=None) -> int:
     ceiling = {
         "per_regime": {str(g): gaps[g] for g in grid},
         "mean": gap_mean,
+        "family": family.name,
+        "regime_names": list(family.names()),
+        "asymmetric_ids": list(asym),
         "asymmetric_mean": gap_asym,
         "asymmetric_effect_size": effect,
         "protocol": "unilateral deviation, agent 0's own return",
@@ -190,11 +196,17 @@ def main(argv=None) -> int:
 
     # the falsifiable read on g3
     sg = rows.get("scripted_greedy_distinct", rows.get("scripted_greedy"))
-    g3_ref = sg["return_per_regime"].get("3", sg["return_per_regime"].get(3, 0.0))
-    g2_ref = sg["return_per_regime"].get("2", sg["return_per_regime"].get(2, 0.0))
-    print(f"\nregime-blind scripted ceiling: g2={g2_ref:.1f}  g3={g3_ref:.1f}")
-    print("  read: if g3 ceiling >> oracle's 11.1, g3 is winnable regime-blind "
-          "(competence gap, not game-theoretic); if g3 ceiling ~ 11, g3 is bounded.")
+    blind_ceiling = {}
+    for g in asym:
+        blind_ceiling[int(g)] = float(
+            sg["return_per_regime"].get(str(g), sg["return_per_regime"].get(g, 0.0)))
+    print("\nregime-blind scripted ceiling: "
+          + "  ".join(f"g{g}({names[g][:9]})={v:.1f}"
+                      for g, v in blind_ceiling.items()))
+    print("  read: an asymmetric regime whose regime-BLIND ceiling far exceeds "
+          "what the\n  oracle controller reaches is winnable without knowing the "
+          "regime — a competence\n  gap, not a game-theoretic bound. One that "
+          "sits at the oracle's level is bounded.")
 
     out_dir = pathlib.Path(REPO_ROOT) / "results" / "analysis" / "belief_ceiling"
     out_dir.mkdir(parents=True, exist_ok=True)

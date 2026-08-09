@@ -89,10 +89,25 @@ NO_FIDELITY = ("mappo", "happo", "mbom", "mbom_oracle")
 
 ENVS: tuple[str, ...] = ("relation", "relation_holdout", "mpe_tag")
 
-REGIME_LABELS = {
+# Fallback only. Regime ids are family-relative -- g1 is mutual_comp under `g2`
+# and asym_exploit under `g2cm` -- so prefer the names the report carries in its
+# `regime_names` field (rel-v2+) and fall back to these v5 `g2` labels for
+# archived reports that predate it. ENVS above is all `g2`, hence the default.
+_G2_REGIME_LABELS = {
     0: "g0\nmutual_coop", 1: "g1\nmutual_comp", 2: "g2\nasym_exploit",
     3: "g3\nasym_exploited", 4: "g4\nneutral",
 }
+
+
+def regime_labels(report: dict | None = None) -> dict[int, str]:
+    """``{id: "g<id>\\n<name>"}`` from a report's ``regime_names`` when present."""
+    names = (report or {}).get("regime_names") or ()
+    if names:
+        return {g: f"g{g}\n{nm}" for g, nm in enumerate(names)}
+    return dict(_G2_REGIME_LABELS)
+
+
+REGIME_LABELS = regime_labels()
 
 SURF, INK, SEC, MUT, GRID, BASE = (
     "#fcfcfb", "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7",

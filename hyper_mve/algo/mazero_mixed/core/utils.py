@@ -466,6 +466,13 @@ def policy_target_informative(adv_norm, masks, visit_policies,
     spread is ~0.29 of the batch-pooled spread on the main method, so ~20% of
     training transitions would contribute near-uniform targets.
 
+    SCOPE NOTE (2026-08-09): that measurement was taken on the v5 ``g2`` family,
+    and ``mutual_comp`` is not in ``g2cm`` — the zero-sum regime that motivated
+    this threshold no longer exists there. The guard is left as-is rather than
+    retuned on a guess: it is scale-free by construction, so it should degrade
+    gracefully, but the "~20% of transitions" figure does not carry over and
+    the threshold is unvalidated on ``g2cm`` until re-measured.
+
     ``adv_norm`` is ``(rows, C, N)`` ALREADY divided by the batch-pooled
     per-agent ``adv_std``. That is what makes ``min_qstd`` scale-free: a value
     of 0.4 means "this root's advantage spread is under 40% of the batch-typical

@@ -143,7 +143,7 @@ def render_table_6_2(suite_root, cells, out_dir) -> RenderOutcome:
                       key=lambda k: -(mean_sem(unseen.get(k, []))[0] if unseen.get(k) else 0))
     if not variants:
         return RenderOutcome("Table 6.2", "no_data", None, "zero-shot fields absent")
-    lines = ["## Table 6.2 — 零样本 regime 泛化 (train {coop,comp,neutral} → eval 非对称)", "",
+    lines = ["## Table 6.2 — 零样本 regime 泛化 (train = train_regime_ids → eval held-out)", "",
              "| variant | seen regimes | unseen regimes | gap (seen−unseen) |", "|---|---|---|---|"]
     for v in variants:
         s = _fmt(*mean_sem(seen.get(v, [])))
@@ -151,8 +151,8 @@ def render_table_6_2(suite_root, cells, out_dir) -> RenderOutcome:
         g = _fmt(*mean_sem(gap.get(v, [])))
         lines.append(f"| {v} | {s} | {u} | {g} |")
     lines.append("")
-    lines.append("_seen = regimes in `train_regime_ids` (0,1,4); unseen = held-out asymmetric "
-                 "pair (2,3). Small gap ⇒ the relationship-linear value decomposition "
+    lines.append("_seen = regimes in `train_regime_ids`; unseen = the held-out complement. "
+                 "Both sets are family- and preset-relative. Small gap ⇒ the relationship-linear value decomposition "
                  "recombines across W(g)._")
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "Table_6_2.md"

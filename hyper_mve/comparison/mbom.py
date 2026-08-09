@@ -145,7 +145,9 @@ class RelationDuoEnvModel:
     * ``reciprocal`` (v6) — ŵ = w_01, the opponent's row, which agent 1 **never
       observes**. Without :meth:`set_opponent_row` this falls back to the mirror
       prior (w_01 := w_10), which is what a non-privileged model can do and is
-      right in g0/g1/g4 and wrong in g2/g3. Injecting the truth makes the arm
+      right in every SYMMETRIC regime and wrong in every asymmetric one — see
+      ``RegimeFamily.asymmetric_ids()``, which is (2, 3) under ``g2`` but
+      (1, 2, 3) under ``g2cm``. Injecting the truth makes the arm
       genuinely privileged; :attr:`uses_privileged_row` says which of the two is
       in force, so an oracle arm cannot silently be scored as a fair baseline.
 

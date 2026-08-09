@@ -2,6 +2,10 @@
 """export_exp_result_0728.py — re-cut v5_final TensorBoard scalars into a flat CSV
 tree for plotting, plus the three ablation tables.
 
+FROZEN to the v5 ``g2`` family (2026-08-09) — see the same note on
+``export_exp_result_0729.py``, which supersedes this file. The ``range(5)`` regime
+loops below assume g2 ids; under ``g2cm`` the same ids name different regimes.
+
 Read-only against ``results/v5_final`` and CPU-only: event files, the
 ``eval_diagnostics*.json`` artifacts and ``registry.jsonl`` are opened for
 reading only. Nothing is written into ``v5_final``, no checkpoint is

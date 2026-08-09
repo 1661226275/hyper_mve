@@ -523,10 +523,13 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         legal = np.ones((B, N, A), dtype=np.float32)
 
         returns = np.zeros(B, dtype=np.float64)
-        # Per-agent, UNsummed. The headline return sums over agents, which on
-        # this reward is structurally blind in three of five regimes: g1 cancels
-        # to -eps*(moves) exactly, and g2/g3 reduce to a single agent's harvest,
-        # so an improvement in the other agent is invisible. See
+        # Per-agent, UNsummed. The headline return sums over agents, and that sum
+        # loses information wherever the two agents' rewards partly cancel: the
+        # asymmetric regimes reduce to a single agent's harvest, so an improvement
+        # in the other agent is invisible. Under the v5 `g2` family it was worse
+        # still — mutual_comp cancelled to exactly -eps*(moves) regardless of
+        # policy. `g2cm` carries no such regime (asym_exploit_mild sums to
+        # (u_0+u_1)/2), so nothing there is fully blind. See
         # results/analysis/regime_knowledge_ceiling.md.
         agent_returns = np.zeros((B, N), dtype=np.float64)
         action_counts = np.zeros(A, dtype=np.int64)

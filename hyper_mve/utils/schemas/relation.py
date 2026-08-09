@@ -123,6 +123,25 @@ class RegimeFamily:
     def names(self) -> tuple[str, ...]:
         return tuple(r.name for r in self.regimes)
 
+    def asymmetric_ids(self) -> tuple[int, ...]:
+        """Ids of regimes with ``W != Wᵀ``.
+
+        These are exactly the regimes an agent cannot resolve from its own row,
+        so under ``reciprocal`` coupling they are the only ones that can carry
+        value of information — and the only ones where the "my neighbour weights
+        me as I weight them" mirror assumption is wrong. Prefer this over writing
+        the ids down: they differ between families (``(2, 3)`` under ``g2``,
+        ``(1, 2, 3)`` under ``g2cm``).
+        """
+        return tuple(r.id for r in self.regimes
+                     if not np.allclose(r.w_array(), r.w_array().T))
+
+    def symmetric_ids(self) -> tuple[int, ...]:
+        """Ids of regimes with ``W == Wᵀ`` — the complement of
+        :meth:`asymmetric_ids`."""
+        asym = set(self.asymmetric_ids())
+        return tuple(r.id for r in self.regimes if r.id not in asym)
+
 
 # ---------------------------------------------------------------------------
 # Family builders

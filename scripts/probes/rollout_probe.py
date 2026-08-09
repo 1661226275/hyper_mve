@@ -80,8 +80,15 @@ def main() -> int:
     print(f"checkpoint: {run_dir}  grad={meta.get('train_steps_logged')}  horizon={args.horizon}\n")
     print(f"{'regime':10s} {'d':>2s} {'model WALK':>11s} {'model CAMP':>11s} {'prefers':>9s}"
           f"   {'true WALK':>10s} {'true CAMP':>10s}")
-    fam = ["coop", "comp", "exploit", "exploited", "neutral"]
-    for g in (4, 0):
+    from hyper_mve.utils.schemas.relation import get_regime_family
+    _family = get_regime_family(cfg.env)
+    fam = [n[:9] for n in _family.names()]
+    # The zero-coupling regime (reward == own harvest) and the all-cooperative
+    # one, looked up rather than written down as (4, 0).
+    _sym = _family.symmetric_ids()
+    _zero = next((r.id for r in _family.regimes
+                  if not r.w_array()[~np.eye(_family.N, dtype=bool)].any()), _sym[-1])
+    for g in (_zero, 0):
         for d in (2, 4):
             env = RelationCommonsEnv(cfg.env, seed=1234)
             env.reset(seed=1234, options={"g": g})

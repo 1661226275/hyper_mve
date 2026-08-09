@@ -22,7 +22,8 @@ confidence, and the VALUE SWING between belief-conditioned and oracle-conditione
     swing — a fast settle beside a near-zero swing means the belief resolves quickly
     and then changes nothing. Well-defined only because regime_switch_prob = 0 makes
     the regime static within an episode; if switching is enabled it needs rethinking.
-  * per-role split in g2/g3 (accuracy AND return by agent) — the exploited agent.
+  * per-role split across the family's ASYMMETRIC regimes (accuracy AND return
+    by agent) — the exploited agent.
   * value-belief coupling: |V(belief) - V(oracle)| bucketed by correct/wrong x
     regime. Near-zero swing => belief is NOT the binding constraint.
   * distribution shift (--planner-dist): same belief net's accuracy under the
@@ -46,7 +47,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 
-_REGIME_NAMES = ["g0 coop", "g1 comp", "g2 exploit", "g3 exploited", "g4 neutral"]
+# Fallback labels only; summarize() uses the family names carried on `res`.
 _T_BUCKETS = [(0, 1), (1, 5), (5, 10), (10, 20), (20, 100_000)]   # [lo, hi)
 
 
@@ -137,8 +138,10 @@ def prior_probe(runner, cfg, env_fn, grid, episodes):
                 returns_by_role.setdefault((int(g), i), []).append(float(ep_ret_agent[i]))
         env.close()
 
+    fam = get_regime_family(cfg.env)
     return {"confusion": confusion, "records": records,
-            "returns_by_role": returns_by_role, "N": N, "G": G}
+            "returns_by_role": returns_by_role, "N": N, "G": G,
+            "names": list(fam.names()), "asym": list(fam.asymmetric_ids())}
 
 
 def planner_dist_accuracy(runner, env_fn, grid, episodes):
@@ -237,6 +240,9 @@ def summarize(res, label, settle_thresholds=(0.35, 0.5, 0.7)):
     import numpy as np
     conf = res["confusion"]
     G = res["G"]
+    # Family-supplied labels, truncated to the column width. Never a written-down
+    # list: the same id names a different regime under a different family.
+    _nm = [str(n)[:9] for n in res.get("names") or [f"g{g}" for g in range(G)]]
     recs = np.array([r[:5] for r in res["records"]], dtype=np.float64)  # g,agent,t,pred,correct
     conf_f = res["records"]
     g_arr = recs[:, 0].astype(int)
@@ -259,7 +265,7 @@ def summarize(res, label, settle_thresholds=(0.35, 0.5, 0.7)):
     print("        " + " ".join(f"{'p'+str(c):>6s}" for c in range(G)))
     for g in range(G):
         acc = per_regime_acc[g]
-        print(f"  g{g} {_REGIME_NAMES[g][3:11]:9s} " +
+        print(f"  g{g} {_nm[g]:9s} " +
               " ".join(f"{conf[g, c]:6d}" for c in range(G)) +
               f"   acc={acc:.3f}" if acc is not None else "")
 
@@ -278,7 +284,7 @@ def summarize(res, label, settle_thresholds=(0.35, 0.5, 0.7)):
         mc = (g_arr == g) & correct
         sw = vswing[m].mean() if m.sum() else float("nan")
         swc = vswing[mc].mean() if mc.sum() else float("nan")
-        print(f"  g{g} {_REGIME_NAMES[g][3:11]:9s} wrong={sw:7.3f} (n={int(m.sum()):4d})  "
+        print(f"  g{g} {_nm[g]:9s} wrong={sw:7.3f} (n={int(m.sum()):4d})  "
               f"correct={swc:7.3f} (n={int(mc.sum()):4d})")
 
     # timestep curve
@@ -306,7 +312,7 @@ def summarize(res, label, settle_thresholds=(0.35, 0.5, 0.7)):
               f"{'swing>=t*':>10s}")
         for g in sorted(st):
             d = st[g]
-            nm = _REGIME_NAMES[g][3:11] if g < len(_REGIME_NAMES) else ""
+            nm = _nm[g]
             print(f"  g{g} {nm:10s} {d['n_traj']:4d} {100*d['never_settled_frac']:6.1f}% "
                   f"{_f(d['t_star_min'], 4, 0)} {_f(d['t_star_p25'], 5)} "
                   f"{_f(d['t_star_median'], 5)} {_f(d['t_star_p75'], 5)} "
@@ -314,10 +320,15 @@ def summarize(res, label, settle_thresholds=(0.35, 0.5, 0.7)):
                   f"{_f(d['value_swing_mean'], 7, 3)} "
                   f"{_f(d['value_swing_post_settle'], 10, 3)}")
 
-    # per-role g2/g3
-    print("\nper-role split (g2 exploit / g3 exploited) — belief acc & mean return:")
+    # per-role split over the family's asymmetric regimes — the ones where the
+    # two agents occupy genuinely different roles, so "the exploited agent" is
+    # a thing that exists. Ids differ by family: (2,3) on g2, (1,2,3) on g2cm.
+    asym = res.get("asym") or []
+    print("\nper-role split, asymmetric regimes ("
+          + ", ".join(f"g{g} {_nm[g]}" for g in asym)
+          + ") — belief acc & mean return:")
     rbr = res["returns_by_role"]
-    for g in (2, 3):
+    for g in asym:
         for i in range(res["N"]):
             m = (g_arr == g) & (agent_arr == i)
             acc = correct[m].mean() if m.sum() else float("nan")

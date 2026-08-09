@@ -63,20 +63,47 @@ X_CAP = 200_000                    # display axis width ("training steps")
 # (still training). Task 2 reads each method at the same per-method budget.
 DISPLAY_BUDGET = {"hyper": 200_000, "external_mappo": 1_000_000,
                   "external_mamba": 1_000_000}
-SEEN = (0, 4)                      # trained regimes averaged (g1 zero-sum -> excl)
-HELD = (2, 3)                      # held-out asymmetric regimes
+# Per-family figure spec, selected by --family. The CSVs under
+# results/eval_result/ are archived v5 `g2` runs, so `g2` stays the default and
+# its figures are unchanged; regime ids mean different regimes under `g2cm`.
+FAMILY_SPEC = {
+    "g2": {
+        # g1 mutual_comp is zero-sum, so summed return there is pinned at
+        # -eps*(moves) regardless of policy. It is dropped from the "seen"
+        # average as uninformative, NOT because it was held out.
+        "seen": (0, 4),
+        "held": (2, 3),
+        "names_en": ("mutual_coop", "mutual_comp", "asym_exploit",
+                     "asym_exploited", "neutral"),
+        "names_zh": ("互利合作", "互相竞争", "非对称利用（利用方）",
+                     "非对称利用（被利用方）", "中立"),
+    },
+    "g2cm": {
+        # No regime here is blind to summed return, so nothing is excluded:
+        # "seen" is exactly rel_coopmix_holdout's train_regime_ids.
+        "seen": (0, 1, 4),
+        "held": (2, 3),
+        "names_en": ("mutual_coop", "asym_exploit", "asym_exploited",
+                     "asym_exploit_mild", "neutral"),
+        "names_zh": ("互利合作", "非对称利用（利用方）",
+                     "非对称利用（被利用方）", "非对称利用（弱）", "中立"),
+    },
+}
 
-REGIME_FOLDER = {g: f"g{g}reward" for g in range(5)}
+# Mutated by main() once --family is parsed; module-level so the plotting
+# helpers below read them the way they always have.
+SEEN = FAMILY_SPEC["g2"]["seen"]
+HELD = FAMILY_SPEC["g2"]["held"]
+N_REGIMES = len(FAMILY_SPEC["g2"]["names_en"])
+
+REGIME_FOLDER = {g: f"g{g}reward" for g in range(N_REGIMES)}
 
 I18N = {
     "en": {
         "suffix": "",
         "labels": {v: lbl for v, (lbl, _c) in METHODS.items()},
-        "panels": {
-            0: "g0 mutual_coop", 1: "g1 mutual_comp", 2: "g2 asym_exploit",
-            3: "g3 asym_exploited", 4: "g4 neutral",
-        },
-        "avg_title": "Average (all 5 regimes)",
+        "panels": {},          # filled by _apply_family() from FAMILY_SPEC
+        "avg_title": "Average (all regimes)",
         "ylabel": "Eval return",
         "xlabel": "Training steps",
         "reward_ylabel": "Mean eval return",
@@ -87,12 +114,7 @@ I18N = {
         "suffix": "_zh",
         "labels": {"hyper": "DR-MBHGL（本文方法）",
                    "external_mamba": "MAMBA", "external_mappo": "MAPPO"},
-        "panels": {
-            0: "g0 互利合作", 1: "g1 互相竞争",
-            2: "g2 非对称利用（利用方）",
-            3: "g3 非对称利用（被利用方）",
-            4: "g4 中立",
-        },
+        "panels": {},          # filled by _apply_family() from FAMILY_SPEC
         "avg_title": "全部情景平均",
         "ylabel": "评估回报",
         "xlabel": "训练步数",
@@ -101,6 +123,28 @@ I18N = {
         "unseen_label": "训练未见构型\n（g2, g3）",
     },
 }
+
+def _apply_family(name: str) -> None:
+    """Point the module-level regime constants and panel titles at one family.
+
+    Called once from main(). The seen/held labels are rebuilt too, so the bar
+    chart never claims "(g0, g4)" while averaging a different set.
+    """
+    global SEEN, HELD, N_REGIMES, REGIME_FOLDER
+    spec = FAMILY_SPEC[name]
+    SEEN, HELD = spec["seen"], spec["held"]
+    N_REGIMES = len(spec["names_en"])
+    REGIME_FOLDER = {g: f"g{g}reward" for g in range(N_REGIMES)}
+    for lang, key in (("en", "names_en"), ("zh", "names_zh")):
+        I18N[lang]["panels"] = {g: f"g{g} {nm}" for g, nm in enumerate(spec[key])}
+    I18N["en"]["avg_title"] = f"Average (all {N_REGIMES} regimes)"
+    seen_ids = ", ".join(f"g{g}" for g in SEEN)
+    held_ids = ", ".join(f"g{g}" for g in HELD)
+    I18N["en"]["seen_label"] = f"Seen regimes\n({seen_ids})"
+    I18N["en"]["unseen_label"] = f"Held-out regimes\n({held_ids})"
+    I18N["zh"]["seen_label"] = f"训练所见构型\n（{seen_ids}）"
+    I18N["zh"]["unseen_label"] = f"训练未见构型\n（{held_ids}）"
+
 
 ROOT_DEFAULT = pathlib.Path("results/eval_result")
 OUT_DEFAULT = pathlib.Path("results/analysis/rel_defense")
@@ -154,8 +198,8 @@ def _load_curve(root: pathlib.Path, folder: str, key: str,
 
 def gate_curves(root: pathlib.Path) -> dict:
     """{'per_regime': {g: {key: (xs,ys)}}, 'avg': {key: (xs,ys)}}."""
-    out: dict = {"per_regime": {g: {} for g in range(5)}, "avg": {}}
-    for g in range(5):
+    out: dict = {"per_regime": {g: {} for g in range(N_REGIMES)}, "avg": {}}
+    for g in range(N_REGIMES):
         for key in CURVE_ORDER:
             d = _load_curve(root, REGIME_FOLDER[g], key)
             if d is not None:
@@ -199,7 +243,7 @@ def reward_stats(root: pathlib.Path) -> dict[str, dict]:
     @1M env)."""
     out: dict[str, dict] = {}
     for key in BAR_ORDER:
-        vals = {g: _final_reward(root, REGIME_FOLDER[g], key) for g in range(5)}
+        vals = {g: _final_reward(root, REGIME_FOLDER[g], key) for g in range(N_REGIMES)}
         if any(vals[g] is None for g in SEEN + HELD):
             continue
         out[key] = {
@@ -368,7 +412,14 @@ def main(argv=None) -> int:
     ap.add_argument("--root", type=pathlib.Path, default=ROOT_DEFAULT)
     ap.add_argument("--out", type=pathlib.Path, default=OUT_DEFAULT)
     ap.add_argument("--lang", choices=["en", "zh", "both"], default="both")
+    ap.add_argument("--family", choices=sorted(FAMILY_SPEC), default="g2",
+                    help="regime family the CSVs under --root were produced by. "
+                         "Defaults to g2 because everything archived so far is a "
+                         "v5 run; the same id names a different regime under g2cm, "
+                         "so a wrong value here mislabels every panel silently "
+                         "(default: %(default)s)")
     args = ap.parse_args(argv)
+    _apply_family(args.family)
 
     curves = gate_curves(args.root)
     stats = reward_stats(args.root)
@@ -377,9 +428,12 @@ def main(argv=None) -> int:
           f"(final-quarter window, low {int(LOW_TRIM * 100)}% trimmed):")
     for key, s in stats.items():
         pr = s["per_regime"]
+        seen_ids = ",".join(f"g{g}" for g in SEEN)
+        held_ids = ",".join(f"g{g}" for g in HELD)
+        per_g = " ".join(f"g{g}={pr[g]:.1f}" for g in sorted(set(SEEN + HELD)))
         print(f"  {METHODS[key][0]:16s} @{DISPLAY_BUDGET[key]:>9,} "
-              f"seen(g0,g4)={s['seen']:.1f} held-out(g2,g3)={s['unseen']:.1f}  "
-              f"[g0={pr[0]:.1f} g2={pr[2]:.1f} g3={pr[3]:.1f} g4={pr[4]:.1f}]")
+              f"seen({seen_ids})={s['seen']:.1f} "
+              f"held-out({held_ids})={s['unseen']:.1f}  [{per_g}]")
 
     langs = ["en", "zh"] if args.lang == "both" else [args.lang]
     for lang in langs:

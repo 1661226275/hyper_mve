@@ -210,8 +210,10 @@ class RelationalGreedyPolicy:
 
     * ``level="self_info"`` sees only ``w_i·`` and assumes the neighbour mirrors
       it, i.e. it reasons from the symmetric matrix built from its own row.
-      That assumption holds in g0/g1/g4 and fails in g2/g3 — exactly the
-      60%-accurate prior reachable without learning anything about the opponent.
+      That assumption holds in every SYMMETRIC regime and fails in every
+      asymmetric one (``RegimeFamily.asymmetric_ids()`` — (2, 3) under ``g2``,
+      (1, 2, 3) under ``g2cm``): exactly the prior reachable without learning
+      anything about the opponent.
     * ``level="oracle"`` is told the regime through :meth:`set_regime` and
       reasons from the true ``W``.
 
