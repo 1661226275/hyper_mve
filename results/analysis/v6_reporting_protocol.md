@@ -60,6 +60,16 @@ NashConv is a **lower bound**: the best response is an independent double-DQN at
 a fixed budget, so a stronger BR would only raise it. Report `br_env_steps`
 alongside any NashConv value.
 
+**NashConv is deterministic given `(checkpoint, --seed)`, so it has no session
+noise floor.** Re-running the four wave-1 checkpoints on 2026-08-09 reproduced
+their 2026-08-07 values to ±0.00 (4.90, 5.96, 3.72, 22.71). The cross-session
+reproducibility floor that applies to *training* (archived g4 100.905 re-running
+at 96.969) therefore does **not** apply here: NashConv values measured in
+different sessions are directly comparable, and a difference on this metric is
+real. Seed count is still a power limit — it just is not a comparability one.
+Cost is >15 min per checkpoint even for a single regime, since the BR budget
+dominates; do not wrap a run in a short `timeout`.
+
 ### The BR budget is not a detail — do not cut it
 
 Measured on the same v6 checkpoint, g1, planner frozen:
@@ -363,11 +373,23 @@ visits).
 
 This predicts the measured g1 NashConv seed-spread rank order across all four
 wave-1 cells: none/visit 0.21 < none/q_softmax 1.06 < star/visit 8.03 <
-star/q_softmax 18.98. **It is a prediction awaiting its wave, not a result** —
-`agent_q_softmax` (`core/train.py:agent_marginal_target`) removes the
-multiplicity term exactly, so if the star seed spread does *not* collapse under
-`..._agentq_cover`, this account is falsified and the visits-per-child account
-survives. Pre-registered in `scripts/grids/v6_agent_target_2x2.yaml`.
+star/q_softmax 18.98. Pre-registered in
+`scripts/grids/v6_agent_target_2x2.yaml`: `agent_q_softmax`
+(`core/train.py:agent_marginal_target`) removes the multiplicity term exactly,
+so if the star seed spread does *not* collapse under `..._agentq_cover`, this
+account is falsified and the visits-per-child account survives.
+
+**Wave 2 result (2026-08-09, n=4): the interaction is confirmed, the fix is
+not.** Adding `star` multiplies the g1 NashConv seed spread ~18× under
+`q_softmax` (1.06 → 18.98) but changes it by ~1 point under `agent_q` (sd 7.01 →
+8.10). That interaction is the multiplicity signature and removing the
+multiplicity term removed it, so **this is now the standing explanation for the
+`star` × `q_softmax` interaction.** But the registered wording was "collapses
+toward the none cells", and it does not: star fell (18.98 → 11.69) while none
+*rose* (1.06 → 5.67). `agent_q_softmax` is therefore not a repair — it is 4.2×
+more exploitable than `q_softmax` in g1 overall (23.04 vs 5.43, +17.61 ± 4.08,
+the only significant effect in the wave) and its return advantage is inside
+noise. Full write-up: `agent_target_wave2_results.md`.
 
 **Two figures elsewhere are corrected by this table.** The star root holds
 **~11.2** children, not the `1 + N·A = 13` upper bound quoted in

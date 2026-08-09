@@ -15,22 +15,30 @@
 #   ..._agentq                 (new)            none        agent_q_softmax
 #   ..._agentq_cover           (new)            star        agent_q_softmax
 #
-# STATUS 2026-08-08: the 8 agentq runs (2 arms x seeds 0-3) are LAUNCHED on
-# GPUs 0-7. The q_softmax row is NOT yet matched -- it exists only at seeds 0-1
-# in results_v6_2x2/, from a different session.
+# STATUS 2026-08-09: COMPLETE. All 8 runs finished, no crashes.
+# RESULT: agent_q_softmax is NOT adopted -- see agent_target_wave2_results.md.
+#   * return: +5.43 (none) / +6.03 (star) vs q_softmax, both INSIDE noise
+#     (0.65 se, 0.44 se). Not a win.
+#   * g1 NashConv: agent_q is 23.04 vs q_softmax 5.43 in the none cell,
+#     +17.61 +/- 4.08 -- the ONLY significant effect in the wave, and it is a
+#     LOSS. This is the plan's pre-registered Risk 1 (a visit-weighted mean is
+#     an expectation against a fixed opponent; a zero-sum game wants a min).
+#   * the pre-registered mechanism read: star's EXCESS spread does vanish
+#     (star-none gap +17.93 -> +1.09), so the multiplicity account stands as
+#     the explanation of the star x q_softmax interaction -- but the cells meet
+#     in the middle (star 18.98->11.69, none 1.06->5.67) rather than at the low
+#     baseline, so agent_q is not a repair.
 #
-# REMAINING FOLLOW-UP, in priority order:
-#   1. Re-run qtarget + mctsfix at seeds 0-3 IN ONE SESSION (8 runs) once GPUs
-#      free. That gives a fully matched n=4 2x2 and removes the cross-session
-#      reproducibility floor (v6_reporting_protocol.md: archived g4 100.905
-#      re-runs at 96.969 through the identical code path).
-#   2. Until then, any agentq-vs-q_softmax difference is BOTH cross-session and
-#      unbalanced (n=4 vs n=2). Treat ~4-point gaps as potentially artefactual
-#      and do not headline them.
+# The follow-up below is now MOOT for its original purpose: NashConv turned out
+# to be deterministic given (ckpt, --seed) -- re-measuring the wave-1
+# checkpoints reproduced them to +/-0.00 -- so there is no cross-session floor
+# on that instrument and no need to re-run qtarget/mctsfix to compare against
+# it. Re-running them at seeds 2-3 would buy POWER on the return side only,
+# which the wave shows is not where the signal is.
 #
-# Ordering rationale: seed noise dominates session drift here (star/q_softmax
-# spread ~13-19 vs a few points of drift), so buying seeds on the NEW arms
-# first is worth more than matched pairs at n=2.
+# Next variant the evidence actually motivates: min-aggregation,
+# Q_i(a) = min_{c: a_i^c=a} adv_i(c), a one-line change now that
+# agent_marginal_target exists.
 #
 # Why the star cell is the discriminating one
 # -------------------------------------------

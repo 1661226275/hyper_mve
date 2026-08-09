@@ -1,0 +1,38 @@
+{
+  "schema_version": "game-metrics-v1",
+  "variant": "mazero_mixed:planner",
+  "checkpoint": "results_v6_agentq/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_agentq/relation_recip/seed0/ckpt.pt",
+  "regime_ids": [
+    1
+  ],
+  "br_env_steps": 20000,
+  "eval_episodes": 16,
+  "v_pi": {
+    "1": [
+      -4.087310497765429,
+      3.4379357608268037
+    ]
+  },
+  "v_br": {
+    "1": [
+      6.458439976922481,
+      12.083945483165959
+    ]
+  },
+  "exploitability": {
+    "1": [
+      10.54575047468791,
+      8.646009722339155
+    ]
+  },
+  "nashconv": {
+    "1": 19.191760197027065
+  },
+  "welfare_physical": {
+    "1": 86.55864548054524
+  },
+  "efficiency": {},
+  "coop_reference_welfare": null,
+  "coop_reference_provenance": "",
+  "note": "BR is an approximate best response (independent double-DQN, budget br_env_steps) => NashConv values are LOWER BOUNDS on true exploitability. Frozen policy acts via the MCTS planner (runner.make_act_fn('planner')), not the distilled prior."
+}

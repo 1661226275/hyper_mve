@@ -65,9 +65,21 @@ sources are named so nothing has to be re-derived.
 > protocol asks for.
 >
 > Status: `agent_q_softmax` / `agent_q_blend` implemented
-> (`core/train.py:agent_marginal_target`), tested, probed, and registered as
-> arms `..._agentq` / `..._agentq_cover` with `scripts/grids/v6_agent_target_2x2.yaml`.
-> **The wave is not launched.** The "intent-count" variant (recording each
+> (`core/train.py:agent_marginal_target`), tested, probed, registered as arms
+> `..._agentq` / `..._agentq_cover`, and **run at n=4 (8 runs, 2026-08-09) —
+> then REJECTED.** `q_softmax` remains the target of record. Return gains were
+> inside noise (+5.43 / +6.03, 0.65 / 0.44 se); g1 NashConv got significantly
+> *worse* (23.04 vs 5.43 in the none cell, +17.61 ± 4.08 — the only significant
+> effect in the wave). The multiplicity prediction above was **confirmed** — the
+> star × q_softmax interaction vanishes once the multiplicity term is removed
+> (star−none spread gap +17.93 → +1.09) — but the cells converge in the middle
+> rather than at the low baseline, so this is an explanation, not a fix. Full
+> write-up: `agent_target_wave2_results.md`. The variant the evidence motivates
+> next is **`min`-aggregation** (`Q_i(a) = min_{c: a_i^c=a} adv_i(c)`), which is
+> the operator a zero-sum regime actually calls for and is one line now that
+> `agent_marginal_target` exists.
+>
+> The "intent-count" variant (recording each
 > agent's pre-projection choice in `select_child_decoupled`) was considered and
 > rejected: the exploration bonus is driven by *realized* child visits, so
 > intent never self-corrects and drifts toward the actions the search could not
