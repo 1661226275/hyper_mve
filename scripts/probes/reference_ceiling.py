@@ -111,7 +111,7 @@ def main(argv=None) -> int:
         }
 
     # ---- print ----
-    hdr = f"{'policy':28s} {'mean':>7s} " + " ".join(f"{names[g][:9]:>9s}" for g in grid)
+    hdr = f"{'policy':28s} {'mean':>7s} " + " ".join(f"g{g}:{names[g][:6]:<6s}" for g in grid)
     print("\n" + hdr)
     print("-" * len(hdr))
     for name, r in rows.items():
@@ -165,7 +165,7 @@ def main(argv=None) -> int:
     print("\n--- effect of knowing the hidden half of W ---")
     print("    (agent 0 deviates to oracle; agent 1 held at self_info;")
     print("     scored on agent 0's OWN return, not the team sum)")
-    print("  " + " ".join(f"{names[g][:9]:>9s}" for g in grid))
+    print("  " + " ".join(f"g{g}:{names[g][:6]:<6s}" for g in grid))
     print("  " + " ".join(f"{gaps[g]:9.2f}" for g in grid))
     asym_label = "/".join(f"g{g}" for g in asym) or "(none)"
     print(f"  signed mean, all regimes : {gap_mean:+.2f}")

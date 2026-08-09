@@ -1,0 +1,168 @@
+{
+  "env": "relation",
+  "episodes": 4,
+  "N": 2,
+  "K": 2,
+  "regime_names": [
+    "mutual_coop",
+    "asym_exploit",
+    "asym_exploited",
+    "asym_exploit_mild",
+    "neutral"
+  ],
+  "reference": {
+    "noop": {
+      "return_mean": 0.0,
+      "return_per_regime": {
+        "0": 0.0,
+        "1": 0.0,
+        "2": 0.0,
+        "3": 0.0,
+        "4": 0.0
+      },
+      "action_fractions": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "random": {
+      "return_mean": 3.7530000654049216,
+      "return_per_regime": {
+        "0": 5.932500085327774,
+        "1": 3.3675000984221697,
+        "2": 2.4350000666454434,
+        "3": 2.607500046957284,
+        "4": 4.422500029671937
+      },
+      "action_fractions": [
+        0.164,
+        0.16525,
+        0.1635,
+        0.16925,
+        0.163,
+        0.175
+      ]
+    },
+    "harvest_only": {
+      "return_mean": 9.06647624696841,
+      "return_per_regime": {
+        "0": 6.04431749797894,
+        "1": 0.0,
+        "2": 12.08863499595788,
+        "3": 3.02215874898947,
+        "4": 24.17726999191576
+      },
+      "action_fractions": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "scripted_greedy": {
+      "return_mean": 24.10122980217214,
+      "return_per_regime": {
+        "0": 30.161559711863937,
+        "1": 13.021644811424778,
+        "2": 21.75252400970087,
+        "3": 18.204457405579113,
+        "4": 37.36596307229202
+      },
+      "action_fractions": [
+        0.0,
+        0.00575,
+        0.007,
+        0.005,
+        0.007,
+        0.97525
+      ]
+    },
+    "scripted_greedy_distinct": {
+      "return_mean": 25.883073581412805,
+      "return_per_regime": {
+        "0": 30.161559711863937,
+        "1": 15.990551108984775,
+        "2": 21.75252400970087,
+        "3": 24.144770004222426,
+        "4": 37.36596307229202
+      },
+      "action_fractions": [
+        0.0,
+        0.00475,
+        0.0065,
+        0.0045,
+        0.00575,
+        0.9785
+      ]
+    },
+    "relational_self_info": {
+      "return_mean": 47.01029419340193,
+      "return_per_regime": {
+        "0": 65.73000001627952,
+        "1": 37.71000009961426,
+        "2": 53.977500066161156,
+        "3": 25.74386260798201,
+        "4": 51.89010817697272
+      },
+      "action_fractions": [
+        0.584,
+        0.00375,
+        0.00325,
+        0.0275,
+        0.02925,
+        0.35225
+      ]
+    },
+    "relational_oracle": {
+      "return_mean": 40.69436947051436,
+      "return_per_regime": {
+        "0": 65.73000001627952,
+        "1": 27.27760942466557,
+        "2": 27.94424892961979,
+        "3": 30.62988080503419,
+        "4": 51.89010817697272
+      },
+      "action_fractions": [
+        0.55725,
+        0.00375,
+        0.00325,
+        0.02775,
+        0.03,
+        0.378
+      ]
+    }
+  },
+  "regime_knowledge_ceiling": {
+    "per_regime": {
+      "0": 0.0,
+      "1": 29.200145701877773,
+      "2": -13.016625553369522,
+      "3": 4.878518201876432,
+      "4": 0.0
+    },
+    "mean": 4.212407670076937,
+    "family": "g2cm",
+    "regime_names": [
+      "mutual_coop",
+      "asym_exploit",
+      "asym_exploited",
+      "asym_exploit_mild",
+      "neutral"
+    ],
+    "asymmetric_ids": [
+      1,
+      2,
+      3
+    ],
+    "asymmetric_mean": 7.0206794501282275,
+    "asymmetric_effect_size": 15.698429819041243,
+    "protocol": "unilateral deviation, agent 0's own return",
+    "note": "agent 0 oracle vs self_info with agent 1 held at self_info; the two controllers differ only in the hidden half of W. This is a difference of fixed heuristics, NOT a value of information: it can be negative when the oracle heuristic responds badly to the truth. regime_voi_probe.py optimises over a strategy family and reports the non-negative VoI."
+  }
+}
