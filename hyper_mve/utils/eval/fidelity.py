@@ -156,6 +156,9 @@ def compute_fidelity_report(
             "seed": int(seed),
             "episodes_per_regime": int(episodes),
             "regime_grid": [int(g) for g in regime_grid],
-            "regime_names": list(regime_names_for(runner.cfg)),
+            # `runner` here is duck-typed on predict_rewards alone (see the
+            # guard above), so it may carry no cfg -- getattr, not attribute
+            # access. regime_names_for(None) yields () rather than raising.
+            "regime_names": list(regime_names_for(getattr(runner, "cfg", None))),
         }
     return report
