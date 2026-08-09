@@ -38,13 +38,20 @@ def parse_args(argv=None):
     p.add_argument("--variant", default=None,
                    help="label recorded in the report (default: --external value)")
     p.add_argument("--external", required=True,
-                   choices=("mappo", "mamba", "mamba_pm", "mazero_mixed"),
+                   choices=("mappo", "mamba", "mamba_pm", "mazero_mixed",
+                            "happo", "mbom", "mbom_oracle"),
                    help="which runner produced --ckpt. Must be the REGISTRY key, "
                         "not just the family: the _pm variants are wider, so "
                         "loading a mamba_pm checkpoint as 'mamba' fails on a "
                         "shape mismatch. happo / mbom / m3w_adapted expose their "
                         "act function as a local closure rather than a method, "
-                        "so they have no frozen-policy adapter yet.")
+                        "so their frozen policy is rebuilt here from public "
+                        "runner state. m3w_adapted is still unsupported: its "
+                        "planner is regime-CONDITIONED (given-ID protocol) "
+                        "while FrozenExternalPolicy's contract is (obs, t) "
+                        "with no regime, so it would silently plan as g0 in "
+                        "every regime. Supporting it means threading the "
+                        "regime through FrozenExternalPolicy.")
     p.add_argument("--frozen-mode", choices=("prior", "planner", "both"),
                    default="prior",
                    help="mazero_mixed only: which policy to freeze. 'prior' is "
@@ -54,6 +61,13 @@ def parse_args(argv=None):
                         "different — on v5, A3 prior 14.28 vs A1 planner 61.94 — "
                         "so this changes what the NashConv means. 'both' writes "
                         "<out> and <out>.planner.json and prints the gap.")
+    p.add_argument("--arm", default=None,
+                   help="ablation arm the checkpoint was TRAINED with "
+                        "(mazero_mixed only). The arm changes the model's "
+                        "shape, so loading an ablated checkpoint without it "
+                        "is silently wrong. Defaults to reading `ablation` "
+                        "from the run's meta.json next to --ckpt; pass "
+                        "explicitly to override, or 'none' for a plain run.")
     p.add_argument("--regimes", type=int, nargs="*", default=None,
                    help="regime ids (default: all in the preset family)")
     p.add_argument("--br-steps", type=int, default=20_000,
@@ -77,7 +91,7 @@ def parse_args(argv=None):
 
 
 def _load_external_frozen(variant: str, ckpt_path: str, cfg, device,
-                          frozen_mode: str = "prior"):
+                          frozen_mode: str = "prior", ablation: str = "none"):
     """Build a runner from its checkpoint and wrap it as a FrozenExternalPolicy.
 
     ``FrozenExternalPolicy.joint_actions`` calls ``act_fn(obs, t)`` with two
@@ -93,6 +107,12 @@ def _load_external_frozen(variant: str, ckpt_path: str, cfg, device,
         from hyper_mve.algo.runner import MAZeroMixedRunner
 
         runner = MAZeroMixedRunner(cfg)
+        # runner.load_checkpoint requires _ablation to be set FIRST (see its
+        # docstring): the arm edits the model's shape, so an ablated
+        # checkpoint loaded into an unablated model is silently wrong. Every
+        # run records its arm in meta.json, which is what --arm reads;
+        # scripts/reeval_checkpoint.py does the same.
+        runner._ablation = ablation or "none"
         runner.load_checkpoint(ckpt_path)
         act_fn = runner.make_act_fn(frozen_mode, device=device)
         return FrozenExternalPolicy(act_fn, cfg, device=device)
@@ -112,6 +132,57 @@ def _load_external_frozen(variant: str, ckpt_path: str, cfg, device,
             a_n, _ = runner._agent.choose_action(obs, evaluate=True)
             return np.asarray(a_n)
 
+    elif variant.startswith("happo"):
+        # HAPPO's act function is a local closure inside train(), so it cannot
+        # be reached from a checkpoint -- rebuild it from public runner state.
+        # load_checkpoint builds an untrained runner shell of identical shape
+        # first when needed, so runner._runner.actor is populated either way.
+        # Regime-blind: the actors see only their own observation.
+        runner.load_checkpoint(ckpt_path)
+        harl = runner._runner
+        n_agents = int(cfg.env.N)
+        recurrent_n = int(harl.recurrent_n)
+        rnn_hidden = int(harl.rnn_hidden_size)
+        rnn_state: dict = {"h": None}
+
+        def act_fn(obs, t):
+            # Recurrent: the hidden state MUST reset at t == 0 or one episode
+            # leaks into the next. Mirrors HAPPORunner.evaluate().
+            if t == 0 or rnn_state["h"] is None:
+                rnn_state["h"] = [
+                    np.zeros((1, recurrent_n, rnn_hidden), dtype=np.float32)
+                    for _ in range(n_agents)
+                ]
+            masks = np.ones((1, 1), dtype=np.float32)
+            acts = np.zeros(n_agents, dtype=np.int64)
+            for i in range(n_agents):
+                obs_i = np.asarray(obs[i], dtype=np.float32)[None]
+                action, rnn_i = harl.actor[i].act(
+                    obs_i, rnn_state["h"][i], masks, None, deterministic=True,
+                )
+                rnn_state["h"][i] = rnn_i.detach().cpu().numpy()
+                acts[i] = int(action.detach().cpu().numpy().reshape(-1)[0])
+            return acts
+
+    elif variant.startswith("mbom"):
+        # MBOM is duo-only, regime-blind, and deliberately runs WITHOUT
+        # no_grad: the imagined opponent-model fine-tuning inside
+        # choose_action is part of its acting path at eval time, so the frozen
+        # policy must not suppress it either. Mirrors MBOMRunner.evaluate().
+        runner.load_checkpoint(ckpt_path)
+        agents = runner._agents
+
+        def act_fn(obs, t):
+            del t  # stateless per step
+            acts = np.zeros(2, dtype=np.int64)
+            for i in range(2):
+                info = agents[i].choose_action(
+                    obs[i], greedy=True, hidden_state=None,
+                    oppo_hidden_prob=None,
+                )
+                acts[i] = int(np.asarray(info[0]).reshape(-1)[0])
+            return acts
+
     else:  # mamba / mamba_pm — load_checkpoint rebuilds the learner standalone
         runner.load_checkpoint(ckpt_path)
         # _probe_act is (obs, t, g) for the PeriodicEvalProbe contract; the
@@ -124,6 +195,24 @@ def _load_external_frozen(variant: str, ckpt_path: str, cfg, device,
             return _probe(obs, t, -1)
 
     return FrozenExternalPolicy(act_fn, cfg, device=device)
+
+
+def _resolve_arm(args) -> str:
+    """Ablation arm for the checkpoint: --arm, else the run's meta.json.
+
+    scripts/train.py writes meta.json beside ckpt.pt for every run, and
+    scripts/reeval_checkpoint.py already recovers the arm from it. Reading it
+    here means the common case needs no flag and cannot be forgotten.
+    """
+    if args.arm is not None:
+        return str(args.arm)
+    meta = pathlib.Path(args.ckpt).parent / "meta.json"
+    if meta.is_file():
+        try:
+            return str(json.loads(meta.read_text()).get("ablation") or "none")
+        except (ValueError, OSError):
+            pass
+    return "none"
 
 
 def _resolve_coop_ref(raw: str | None) -> tuple[float | None, str]:
@@ -198,7 +287,8 @@ def _one_mode(args, cfg, device, br, coop_ref, provenance, frozen_mode):
     model = None            # the retired internal HyperMuZeroModel path is gone;
                             # every runner now arrives through an act_fn.
     frozen = _load_external_frozen(
-        args.external, args.ckpt, cfg, device, frozen_mode)
+        args.external, args.ckpt, cfg, device, frozen_mode,
+        ablation=_resolve_arm(args))
 
     if args.welfare_only:
         # welfare-only fast path: monkey-cheap BR skip (env_steps=0 would still
@@ -216,6 +306,11 @@ def _one_mode(args, cfg, device, br, coop_ref, provenance, frozen_mode):
             eval_episodes=args.episodes,
             coop_reference_welfare=coop_ref,
             coop_reference_provenance=provenance,
+            # game-metrics-v2 exists BECAUSE regime ids are family-relative
+            # (g1 is mutual_comp under g2, asym_exploit under g2cm). This fast
+            # path used to ship an empty tuple here, i.e. a v2 report that
+            # cannot be interpreted -- the one thing the bump was for.
+            regime_names=tuple(family.names()),
         )
         for g in regime_ids:
             base_returns, welfare = _rollout(cfg, frozen, g, args.episodes, args.seed)

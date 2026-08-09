@@ -27,6 +27,12 @@ hyper_mve/algo/mazero_mixed/core/mcts/ctree/build/
 hyper_mve/algo/mazero_mixed/core/mcts/ctree/ctree_sampled/cytree.cpp
 *.so
 
+# Sibling run-output roots (`--out results_v7_coopmix`, results_v6_2x2, ...).
+# These were merely UNTRACKED, not ignored, so a `git add -A` mid-run swept 36
+# live TB event files into a commit. `results/` itself stays tracked -- only
+# the results_<wave> siblings are ignored.
+/results_*/
+
 # Run outputs under results/ (analysis CSVs stay tracked-optional)
 results/**/tb/
 results/**/harl_raw/
