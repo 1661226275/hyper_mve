@@ -35,7 +35,7 @@ def test_happo_tiny_train_eval_ckpt_roundtrip(tmp_path):
     regime_grid = (0, 1)
     report = runner.evaluate(env_fn, regime_grid=regime_grid, episodes=2)
     assert isinstance(report, EvalReport)
-    assert report.schema_version == "rel-v1"
+    assert report.schema_version == "rel-v2"
     assert report.variant == "happo"
     assert set(report.return_per_regime) == set(regime_grid)
     assert set(report.episodes_per_regime) == set(regime_grid)

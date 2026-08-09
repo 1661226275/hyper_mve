@@ -26,7 +26,7 @@ def test_evaluate_returns_evalreport_shape_conforms(variant):
     """Field-population matrix (rel-v1).
 
     Runs against a randomly-initialised runner (no train()). Asserts:
-      - return type is EvalReport, sentinel is "rel-v1"
+      - return type is EvalReport, sentinel is "rel-v2"
       - variant + eval_mode + eval_planner_mode are correct
       - external delegation: planner_prior_return_gap == 0,
         direct_inference_return_mean == return_mean == planner_full_return_mean
@@ -70,7 +70,7 @@ def test_evaluate_returns_evalreport_shape_conforms(variant):
     for g in regime_grid:
         assert report.episodes_per_regime[g] == 2
     # Schema sentinel (rel-v1).
-    assert report.schema_version == "rel-v1"
+    assert report.schema_version == "rel-v2"
     # zero-shot split: rel_duo has train_regime_ids=None ⇒ everything "seen".
     assert report.return_zero_shot_unseen == 0.0
     # External runners don't surface the thesis welfare metrics → defaults.

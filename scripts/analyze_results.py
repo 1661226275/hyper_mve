@@ -203,9 +203,9 @@ def _run_game_metrics(args: argparse.Namespace) -> int:
         except (OSError, json.JSONDecodeError) as e:
             print(f"[game-metrics] skipping {p}: {e}", file=sys.stderr)
             continue
-        if body.get("schema_version") != "game-metrics-v1":
+        if body.get("schema_version") != "game-metrics-v2":
             print(f"[game-metrics] {p}: unexpected schema "
-                  f"{body.get('schema_version')!r} (want game-metrics-v1)", file=sys.stderr)
+                  f"{body.get('schema_version')!r} (want game-metrics-v2)", file=sys.stderr)
         reports.append((pathlib.Path(p), body))
     if not reports:
         raise SystemExit("[game-metrics] no readable game-metrics JSON")

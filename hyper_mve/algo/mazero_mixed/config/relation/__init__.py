@@ -23,6 +23,8 @@ from dataclasses import replace
 
 from core.config import BaseConfig, DiscreteSupport
 
+from hyper_mve.utils.schemas.relation import get_regime_family
+
 from .model import MAMuZeroNet
 from .env_wrapper import RelationCommonsGame
 
@@ -94,7 +96,7 @@ class GameConfig(BaseConfig):
                 self.inverse_reward_transform,
                 env_cfg=env_cfg,
                 model_cfg=self._scaled_model_cfg(),
-                n_regimes=5,
+                n_regimes=get_regime_family(env_cfg).size,
                 belief_point_estimate=getattr(self, "belief_point_estimate", False),
                 belief_blind=getattr(self, "belief_blind", False),
                 value_hard_select=getattr(self, "value_hard_select", False),

@@ -98,7 +98,7 @@ def test_exact_mae_on_synthetic_offset():
     probe = collect_probe_set(_env_fn, (0, 1, 2), episodes=2, seed=7)
     for offset in (0.0, 0.25, 1.5):
         rep = compute_reward_fidelity(_SyntheticRunner(offset), probe)
-        assert rep["schema_version"] == "fidelity-v1"
+        assert rep["schema_version"] == "fidelity-v2"
         assert rep["reward_mae"] == pytest.approx(abs(offset), abs=1e-9)
         assert rep["transitions_scored"] == rep["transitions_total"]
         # per-agent MAE also exact

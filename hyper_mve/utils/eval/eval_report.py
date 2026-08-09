@@ -17,6 +17,22 @@ from dataclasses import dataclass
 from typing import Literal, Mapping
 
 
+def regime_names_for(cfg) -> tuple[str, ...]:
+    """Regime names in id order for a ``V4Config``-like object.
+
+    Every :class:`EvalReport` producer passes this to ``regime_names`` so the
+    integer keys of the per-regime dicts are self-describing. Returns ``()`` for
+    configs with no resolvable relation family rather than raising: this field is
+    provenance, and a whole evaluation should not be lost because the lookup
+    failed.
+    """
+    try:
+        from hyper_mve.utils.schemas.relation import get_regime_family
+        return tuple(get_regime_family(cfg.env).names())
+    except (AttributeError, ValueError, KeyError):
+        return ()
+
+
 @dataclass(frozen=True)
 class EvalReport:
     """Single-run evaluation report, produced by:
@@ -83,8 +99,19 @@ class EvalReport:
     fairness_mean: float = 0.0
     tragedy_index_mean: float = 0.0
 
+    # === Regime identity (1) ===
+    # Regime names in id order, i.e. regime_names[g] names the regime that the
+    # per-regime dicts above key on g. Present because the integer ids are only
+    # meaningful relative to a family: `g1` is `mutual_comp` under `g2` and
+    # `asym_exploit` under `g2cm`, so an id-keyed report is not self-describing.
+    # Empty tuple means the producer predates rel-v2 or has no regime family.
+    regime_names: tuple[str, ...] = ()
+
     # === Schema version sentinel (1) ===
-    schema_version: str = "rel-v1"
+    # rel-v2 (2026-08-09): added regime_names, and the g2cm family made regime
+    # ids family-relative. An old and a new report must not be compared without
+    # noticing, which is what this bump is for.
+    schema_version: str = "rel-v2"
 
     def to_dict(self) -> dict:
         """JSON-safe plain-dict view of the report.

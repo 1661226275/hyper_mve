@@ -24,7 +24,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Final, Union
 
 from hyper_mve.utils.configs import V4Config
-from hyper_mve.utils.eval.eval_report import EvalReport
+from hyper_mve.utils.eval.eval_report import EvalReport, regime_names_for
 
 # CTDE legitimacy boundary (pkg-07 spec 06 Lock 3 + §6.1) — single source of
 # truth for every runner module: oracle / eval-only env-info fields that must
@@ -80,6 +80,7 @@ class ExternalBaselineRunner(abc.ABC):
         grid = tuple(int(g) for g in regime_grid)
         return EvalReport(
             variant=type(self).__name__,
+            regime_names=regime_names_for(self.cfg),
             seed=0,
             config_hash="0" * 40,
             eval_mode="planner",

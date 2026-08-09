@@ -32,7 +32,8 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-SCHEMA_VERSION = "fidelity-v1"
+# v2 (2026-08-09): added regime_names; per-regime keys are family-relative ids.
+SCHEMA_VERSION = "fidelity-v2"
 
 
 def collect_probe_set(
@@ -150,9 +151,11 @@ def compute_fidelity_report(
                               episodes=episodes, seed=seed)
     report = compute_reward_fidelity(runner, probe)
     if report is not None:
+        from hyper_mve.utils.eval.eval_report import regime_names_for
         report["probe"] = {
             "seed": int(seed),
             "episodes_per_regime": int(episodes),
             "regime_grid": [int(g) for g in regime_grid],
+            "regime_names": list(regime_names_for(runner.cfg)),
         }
     return report

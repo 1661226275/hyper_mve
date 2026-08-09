@@ -35,7 +35,7 @@ from hyper_mve.comparison._lzj_mappo.normalization import Normalization
 from hyper_mve.comparison._lzj_mappo.replay_buffer import ReplayBuffer
 from hyper_mve.utils.configs import V4Config
 from hyper_mve.comparison.base import split_seen_unseen_regimes
-from hyper_mve.utils.eval.eval_report import EvalReport
+from hyper_mve.utils.eval.eval_report import EvalReport, regime_names_for
 
 def _check_forbidden_info(info_dict: dict[str, dict]) -> None:
     """pkg-07 spec 05 §5.2 / spec 06 §6.2 runtime guard — every per-agent
@@ -425,6 +425,7 @@ class MAPPOAlgorithm(ExternalBaselineRunner):
 
         return EvalReport(
             variant="mappo",
+            regime_names=regime_names_for(self.cfg),
             seed=0,
             config_hash="0" * 40,
             eval_mode="planner",

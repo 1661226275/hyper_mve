@@ -3,7 +3,7 @@
 Runs without heavyweight imports where possible. Validates the spine
 invariants of the realigned layout:
 
-* `EvalReport` exposes 28 dataclass fields with `schema_version="rel-v1"`.
+* `EvalReport` exposes 28 dataclass fields with `schema_version="rel-v2"`.
 * `RegistryRow` exposes 23 dataclass fields with `schema_version="pkg08-spec05-v1"`.
 * `hyper_mve.comparison.REGISTRY` is the lazy string registry with exactly the
   phase-registered keys (extended by realignment phases 4–6; end state 7 keys).
@@ -17,19 +17,22 @@ from dataclasses import fields
 import pytest
 
 
-def test_eval_report_28_field_dataclass_lock():
-    """rel-v1 (v5 Pkg-09) — 27 payload fields + 1 `schema_version` sentinel.
+def test_eval_report_29_field_dataclass_lock():
+    """rel-v2 (2026-08-09) — 28 payload fields + 1 `schema_version` sentinel.
 
-    Phase-2 note: world-model fidelity is a SEPARATE artifact (fidelity-v1
-    JSON, phase 7) precisely so this lock never moves for it.
+    Moved from 28 by `regime_names`, which makes the family-relative regime ids
+    in the per-regime dicts self-describing. Phase-2 note: world-model fidelity
+    is a SEPARATE artifact (fidelity-v2 JSON, phase 7) precisely so this lock
+    never moves for it.
     """
     pytest.importorskip("torch")  # EvalReport pulls torch transitively
     from hyper_mve.utils.eval import EvalReport
     fld = tuple(f.name for f in fields(EvalReport))
-    assert len(fld) == 28, f"EvalReport drift: {len(fld)} fields (expect 28)"
+    assert len(fld) == 29, f"EvalReport drift: {len(fld)} fields (expect 29)"
     assert fld[-1] == "schema_version"
     for name in (
         "return_per_regime", "return_per_regime_sem", "episodes_per_regime",
+        "regime_names",
         "regime_accuracy", "regime_nll",
         "welfare_physical_mean", "sustainability_mean",
         "fairness_mean", "tragedy_index_mean",
@@ -39,7 +42,7 @@ def test_eval_report_28_field_dataclass_lock():
                  "return_per_type_ratio", "belief_c_mae"):
         assert gone not in fld, f"EvalReport regrew v4 field {gone!r}"
     sentinel_field = fields(EvalReport)[-1]
-    assert sentinel_field.default == "rel-v1"
+    assert sentinel_field.default == "rel-v2"
 
 
 def test_registry_row_23_field_dataclass_lock():

@@ -168,7 +168,10 @@ class HyperMAMuZeroNet(BaseNet):
         inverse_reward_transform,
         env_cfg=None,                    # v5 EnvConfig (regime family, N, K)
         model_cfg=None,                  # v5 ModelConfig (ctx dims, gru hidden)
-        n_regimes: int = 5,
+        # None => derive from the regime family. A hardcoded default silently
+        # disagrees with the family the moment one is added or resized, and the
+        # disagreement surfaces as a shape error deep in the belief encoder.
+        n_regimes: int = None,
         belief_point_estimate: bool = False,
         belief_blind: bool = False,
         value_hard_select: bool = False,
@@ -185,6 +188,9 @@ class HyperMAMuZeroNet(BaseNet):
         self.obs_size = int(np.prod(observation_shape))
         self.action_space_size = action_space_size
         self.hidden_state_size = hidden_state_size
+        if n_regimes is None:
+            from hyper_mve.utils.schemas.relation import get_regime_family
+            n_regimes = get_regime_family(env_cfg).size
         self.n_regimes = n_regimes
         self.belief_point_estimate = belief_point_estimate
         self.belief_blind = belief_blind

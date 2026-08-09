@@ -46,7 +46,7 @@ from hyper_mve.comparison.base import (
     split_seen_unseen_regimes,
 )
 from hyper_mve.utils.configs import V4Config
-from hyper_mve.utils.eval.eval_report import EvalReport
+from hyper_mve.utils.eval.eval_report import EvalReport, regime_names_for
 
 #: 2026-07-28 eval cadence in ENV steps (user-locked). Gating on gradient steps
 #: gave this algorithm far too few points: mamba/happo logged every ~20000 env
@@ -438,6 +438,7 @@ class _RealMAMBA(ExternalBaselineRunner):
 
         return EvalReport(
             variant="mamba",
+            regime_names=regime_names_for(self.cfg),
             seed=0,
             config_hash="0" * 40,
             eval_mode="planner",

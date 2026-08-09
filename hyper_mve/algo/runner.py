@@ -39,7 +39,7 @@ from typing import Any, Callable, Union
 import numpy as np
 
 from hyper_mve.utils.configs import V4Config
-from hyper_mve.utils.eval.eval_report import EvalReport
+from hyper_mve.utils.eval.eval_report import EvalReport, regime_names_for
 from hyper_mve.comparison.base import (
     ExternalBaselineRunner,
     split_seen_unseen_regimes,
@@ -772,7 +772,10 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         # writes them next to eval_report.json. An all-in-one-action histogram
         # here is the signature of a collapsed policy.
         self._eval_diagnostics = {
-            "schema_version": "evaldiag-v2",
+            # v3 (2026-08-09): added regime_names; the per-regime keys below are
+            # ids, which are only meaningful relative to a family.
+            "schema_version": "evaldiag-v3",
+            "regime_names": list(regime_names_for(self.cfg)),
             "episodes_prior": n_prior,
             "episodes_planner": n_planner,
             "prior_action_histogram": prior_actions.tolist(),
@@ -826,6 +829,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
 
         return EvalReport(
             variant="mazero_mixed",
+            regime_names=regime_names_for(self.cfg),
             seed=int(seed),
             config_hash=str(config_hash) if config_hash else "0" * 40,
             eval_mode="dual",

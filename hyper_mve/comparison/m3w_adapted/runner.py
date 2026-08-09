@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional, Union
 import numpy as np
 
 from hyper_mve.utils.configs import V4Config
-from hyper_mve.utils.eval.eval_report import EvalReport
+from hyper_mve.utils.eval.eval_report import EvalReport, regime_names_for
 
 from hyper_mve.utils.schemas.relation import get_regime_family
 from hyper_mve.comparison.base import (
@@ -332,6 +332,7 @@ class M3WAdaptedRunner(ExternalBaselineRunner):
         )
         return EvalReport(
             variant=self.name,
+            regime_names=regime_names_for(self.cfg),
             seed=0,
             config_hash="0" * 40,
             eval_mode="planner",

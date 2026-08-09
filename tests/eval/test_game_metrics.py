@@ -39,7 +39,7 @@ def test_report_to_dict_json_serialisable():
     report.efficiency[0] = 0.75
 
     body = json.loads(json.dumps(report.to_dict()))
-    assert body["schema_version"] == "game-metrics-v1"
+    assert body["schema_version"] == "game-metrics-v2"
     assert body["nashconv"] == {"0": 0.5}
     assert body["v_pi"] == {"0": [1.0, 2.0]}
     assert "LOWER BOUNDS" in body["note"]

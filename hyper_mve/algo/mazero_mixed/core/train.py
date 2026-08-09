@@ -667,7 +667,11 @@ def update_weights(config: BaseConfig, step_count: int, model: BaseNet, batch: t
         train_logs['G_t_mean'] = returns_to_go_t[_pop].mean().item()
         train_logs['G_t_std'] = returns_to_go_t[_pop].std().item()
         train_logs['bc_weight_mean'] = bc_weight[_pop].mean().item()
-        for g in range(5):
+        # |G| from the model when it carries a belief head, else from the batch.
+        # A hardcoded 5 silently drops the tail regimes of a larger family.
+        n_g = (int(getattr(model, "n_regimes", 0))
+               or int(regime_id_t.max().item()) + 1)
+        for g in range(n_g):
             gp = _pop & (regime_id_t == g).view(-1, 1, 1)
             if bool(gp.any()):
                 train_logs[f'bc_weight_regime_{g}'] = bc_weight[gp].mean().item()

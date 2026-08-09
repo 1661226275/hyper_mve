@@ -336,10 +336,16 @@ class GameMetricsReport:
     efficiency: dict[int, float] = field(default_factory=dict)         # empty w/o coop ref
     coop_reference_welfare: Optional[float] = None
     coop_reference_provenance: str = ""
+    # Names in id order, so the integer keys above are self-describing: `g1` is
+    # `mutual_comp` under family `g2` and `asym_exploit` under `g2cm`.
+    regime_names: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
-            "schema_version": "game-metrics-v1",
+            # v2 (2026-08-09): added regime_names; regime ids became
+            # family-relative when g2cm was introduced.
+            "schema_version": "game-metrics-v2",
+            "regime_names": list(self.regime_names),
             "variant": self.variant,
             "checkpoint": self.checkpoint,
             "regime_ids": list(self.regime_ids),
@@ -391,6 +397,7 @@ def compute_game_metrics(
     N = cfg.env.N
 
     report = GameMetricsReport(
+        regime_names=list(family.names()),
         variant=variant,
         checkpoint=checkpoint,
         regime_ids=list(regime_ids),
