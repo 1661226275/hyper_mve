@@ -1,8 +1,8 @@
 {
   "ref_bc_anneal_scaled_hardval_decoupled/relation_recip/seed0": {
-    "overall_acc": 0.5565,
+    "overall_acc": 0.565625,
     "per_regime_acc": {
-      "0": 0.7125,
+      "0": 0.758125,
       "1": 1.0,
       "2": 0.0,
       "3": 0.07,
@@ -10,31 +10,31 @@
     },
     "confusion": [
       [
-        570,
+        2426,
         0,
         0,
-        230,
+        774,
         0
       ],
       [
         0,
-        800,
+        3200,
         0,
         0,
         0
       ],
       [
-        384,
-        400,
+        1376,
+        1600,
         0,
-        16,
+        224,
         0
       ],
       [
-        344,
-        400,
+        1376,
+        1600,
         0,
-        56,
+        224,
         0
       ],
       [
@@ -42,27 +42,27 @@
         0,
         0,
         0,
-        800
+        3200
       ]
     ],
     "settle_time": {
       "0.35": {
         "0": {
-          "n_traj": 8,
-          "n_settled": 6,
+          "n_traj": 32,
+          "n_settled": 24,
           "never_settled_frac": 0.25,
-          "t_star_min": 11,
-          "t_star_p25": 40.0,
-          "t_star_median": 67.0,
-          "t_star_p75": 73.75,
-          "t_star_max": 77,
+          "t_star_min": 0,
+          "t_star_p25": 13.0,
+          "t_star_median": 32.5,
+          "t_star_p75": 67.0,
+          "t_star_max": 99,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 5.841792583912611,
-          "value_swing_post_settle": 3.9847668882633465
+          "value_swing_mean": 5.66102227916941,
+          "value_swing_post_settle": 3.918762169569952
         },
         "1": {
-          "n_traj": 8,
-          "n_settled": 8,
+          "n_traj": 32,
+          "n_settled": 32,
           "never_settled_frac": 0.0,
           "t_star_min": 0,
           "t_star_p25": 0.0,
@@ -70,11 +70,11 @@
           "t_star_p75": 0.0,
           "t_star_max": 0,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.629019732326269,
-          "value_swing_post_settle": 6.629019732326269
+          "value_swing_mean": 6.922953713084571,
+          "value_swing_post_settle": 6.922953713084571
         },
         "2": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -83,25 +83,25 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.588283164799213,
+          "value_swing_mean": 6.408896298520267,
           "value_swing_post_settle": null
         },
         "3": {
-          "n_traj": 8,
-          "n_settled": 1,
-          "never_settled_frac": 0.875,
+          "n_traj": 32,
+          "n_settled": 2,
+          "never_settled_frac": 0.9375,
           "t_star_min": 98,
-          "t_star_p25": 98.0,
-          "t_star_median": 98.0,
-          "t_star_p75": 98.0,
-          "t_star_max": 98,
+          "t_star_p25": 98.25,
+          "t_star_median": 98.5,
+          "t_star_p75": 98.75,
+          "t_star_max": 99,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.16662509508431,
-          "value_swing_post_settle": 1.705163836479187
+          "value_swing_mean": 6.114981724250829,
+          "value_swing_post_settle": 1.9524908661842346
         },
         "4": {
-          "n_traj": 8,
-          "n_settled": 8,
+          "n_traj": 32,
+          "n_settled": 32,
           "never_settled_frac": 0.0,
           "t_star_min": 0,
           "t_star_p25": 0.0,
@@ -115,20 +115,20 @@
       },
       "0.50": {
         "0": {
-          "n_traj": 8,
-          "n_settled": 6,
-          "never_settled_frac": 0.25,
-          "t_star_min": 76,
-          "t_star_p25": 79.25,
-          "t_star_median": 83.0,
+          "n_traj": 32,
+          "n_settled": 19,
+          "never_settled_frac": 0.40625,
+          "t_star_min": 13,
+          "t_star_p25": 58.0,
+          "t_star_median": 76.0,
           "t_star_p75": 92.0,
-          "t_star_max": 98,
+          "t_star_max": 99,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 5.841792583912611,
-          "value_swing_post_settle": 3.151004827334211
+          "value_swing_mean": 5.66102227916941,
+          "value_swing_post_settle": 3.052781651575829
         },
         "1": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -137,11 +137,11 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.629019732326269,
+          "value_swing_mean": 6.922953713084571,
           "value_swing_post_settle": null
         },
         "2": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -150,11 +150,11 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.588283164799213,
+          "value_swing_mean": 6.408896298520267,
           "value_swing_post_settle": null
         },
         "3": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -163,12 +163,12 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.16662509508431,
+          "value_swing_mean": 6.114981724250829,
           "value_swing_post_settle": null
         },
         "4": {
-          "n_traj": 8,
-          "n_settled": 8,
+          "n_traj": 32,
+          "n_settled": 32,
           "never_settled_frac": 0.0,
           "t_star_min": 0,
           "t_star_p25": 0.0,
@@ -182,20 +182,20 @@
       },
       "0.70": {
         "0": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
+          "n_traj": 32,
+          "n_settled": 2,
+          "never_settled_frac": 0.9375,
+          "t_star_min": 87,
+          "t_star_p25": 88.25,
+          "t_star_median": 89.5,
+          "t_star_p75": 90.75,
+          "t_star_max": 92,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 5.841792583912611,
-          "value_swing_post_settle": null
+          "value_swing_mean": 5.66102227916941,
+          "value_swing_post_settle": 2.101636611498319
         },
         "1": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -204,11 +204,11 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.629019732326269,
+          "value_swing_mean": 6.922953713084571,
           "value_swing_post_settle": null
         },
         "2": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -217,11 +217,11 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.588283164799213,
+          "value_swing_mean": 6.408896298520267,
           "value_swing_post_settle": null
         },
         "3": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -230,12 +230,12 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.16662509508431,
+          "value_swing_mean": 6.114981724250829,
           "value_swing_post_settle": null
         },
         "4": {
-          "n_traj": 8,
-          "n_settled": 8,
+          "n_traj": 32,
+          "n_settled": 32,
           "never_settled_frac": 0.0,
           "t_star_min": 0,
           "t_star_p25": 0.0,
@@ -248,30 +248,22 @@
         }
       }
     },
-    "vswing_wrong_mean": 6.658983104023347,
-    "vswing_correct_mean": 3.759002890548295,
-    "maxprob_wrong_mean": 0.4818471266794635,
-    "planner_dist_overall": 0.59125,
-    "planner_dist_per_regime": {
-      "0": 0.795,
-      "1": 1.0,
-      "2": 0.0,
-      "3": 0.16125,
-      "4": 1.0
-    }
+    "vswing_wrong_mean": 6.5413743776913815,
+    "vswing_correct_mean": 3.854428831284547,
+    "maxprob_wrong_mean": 0.48138223831173327
   },
   "ref_bc_anneal_scaled_hardval_decoupled/relation_recip/seed1": {
-    "overall_acc": 0.6165,
+    "overall_acc": 0.6046875,
     "per_regime_acc": {
       "0": 1.0,
-      "1": 0.89875,
+      "1": 0.845,
       "2": 0.0,
-      "3": 0.18375,
+      "3": 0.1784375,
       "4": 1.0
     },
     "confusion": [
       [
-        800,
+        3200,
         0,
         0,
         0,
@@ -279,23 +271,23 @@
       ],
       [
         0,
-        719,
+        2704,
         0,
-        81,
+        496,
         0
       ],
       [
-        400,
-        277,
+        1600,
+        1201,
         0,
-        123,
+        399,
         0
       ],
       [
-        400,
-        253,
+        1600,
+        1029,
         0,
-        147,
+        571,
         0
       ],
       [
@@ -303,14 +295,14 @@
         0,
         0,
         0,
-        800
+        3200
       ]
     ],
     "settle_time": {
       "0.35": {
         "0": {
-          "n_traj": 8,
-          "n_settled": 8,
+          "n_traj": 32,
+          "n_settled": 32,
           "never_settled_frac": 0.0,
           "t_star_min": 0,
           "t_star_p25": 0.0,
@@ -318,24 +310,24 @@
           "t_star_p75": 0.0,
           "t_star_max": 0,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 3.413898432180286,
-          "value_swing_post_settle": 3.413898432180286
+          "value_swing_mean": 3.559259905032813,
+          "value_swing_post_settle": 3.559259905032813
         },
         "1": {
-          "n_traj": 8,
-          "n_settled": 7,
-          "never_settled_frac": 0.125,
-          "t_star_min": 2,
-          "t_star_p25": 28.0,
-          "t_star_median": 74.0,
-          "t_star_p75": 91.5,
+          "n_traj": 32,
+          "n_settled": 24,
+          "never_settled_frac": 0.25,
+          "t_star_min": 0,
+          "t_star_p25": 7.0,
+          "t_star_median": 34.5,
+          "t_star_p75": 90.5,
           "t_star_max": 99,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8817420746572315,
-          "value_swing_post_settle": 2.3208878318002486
+          "value_swing_mean": 4.126869308440947,
+          "value_swing_post_settle": 2.40251875891064
         },
         "2": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -344,25 +336,25 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8464067933801562,
+          "value_swing_mean": 4.0261584798758845,
           "value_swing_post_settle": null
         },
         "3": {
-          "n_traj": 8,
-          "n_settled": 3,
-          "never_settled_frac": 0.625,
-          "t_star_min": 87,
-          "t_star_p25": 88.0,
-          "t_star_median": 89.0,
-          "t_star_p75": 90.5,
-          "t_star_max": 92,
+          "n_traj": 32,
+          "n_settled": 11,
+          "never_settled_frac": 0.65625,
+          "t_star_min": 41,
+          "t_star_p25": 67.0,
+          "t_star_median": 75.0,
+          "t_star_p75": 88.0,
+          "t_star_max": 94,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 4.308216930180788,
-          "value_swing_post_settle": 1.9547299102712898
+          "value_swing_mean": 4.401523186396807,
+          "value_swing_post_settle": 2.075984152096967
         },
         "4": {
-          "n_traj": 8,
-          "n_settled": 8,
+          "n_traj": 32,
+          "n_settled": 32,
           "never_settled_frac": 0.0,
           "t_star_min": 0,
           "t_star_p25": 0.0,
@@ -376,7 +368,7 @@
       },
       "0.50": {
         "0": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -385,24 +377,24 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 3.413898432180286,
+          "value_swing_mean": 3.559259905032813,
           "value_swing_post_settle": null
         },
         "1": {
-          "n_traj": 8,
-          "n_settled": 2,
-          "never_settled_frac": 0.75,
-          "t_star_min": 88,
-          "t_star_p25": 90.75,
-          "t_star_median": 93.5,
-          "t_star_p75": 96.25,
+          "n_traj": 32,
+          "n_settled": 13,
+          "never_settled_frac": 0.59375,
+          "t_star_min": 17,
+          "t_star_p25": 43.0,
+          "t_star_median": 76.0,
+          "t_star_p75": 91.0,
           "t_star_max": 99,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8817420746572315,
-          "value_swing_post_settle": 0.9720075769970814
+          "value_swing_mean": 4.126869308440947,
+          "value_swing_post_settle": 1.4028939441239625
         },
         "2": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -411,11 +403,11 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8464067933801562,
+          "value_swing_mean": 4.0261584798758845,
           "value_swing_post_settle": null
         },
         "3": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -424,12 +416,12 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 4.308216930180788,
+          "value_swing_mean": 4.401523186396807,
           "value_swing_post_settle": null
         },
         "4": {
-          "n_traj": 8,
-          "n_settled": 8,
+          "n_traj": 32,
+          "n_settled": 32,
           "never_settled_frac": 0.0,
           "t_star_min": 0,
           "t_star_p25": 0.0,
@@ -443,7 +435,7 @@
       },
       "0.70": {
         "0": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -452,24 +444,24 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 3.413898432180286,
+          "value_swing_mean": 3.559259905032813,
           "value_swing_post_settle": null
         },
         "1": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
+          "n_traj": 32,
+          "n_settled": 4,
+          "never_settled_frac": 0.875,
+          "t_star_min": 73,
+          "t_star_p25": 88.0,
+          "t_star_median": 96.0,
+          "t_star_p75": 99.0,
+          "t_star_max": 99,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8817420746572315,
-          "value_swing_post_settle": null
+          "value_swing_mean": 4.126869308440947,
+          "value_swing_post_settle": 0.4485392833434085
         },
         "2": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -478,11 +470,11 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8464067933801562,
+          "value_swing_mean": 4.0261584798758845,
           "value_swing_post_settle": null
         },
         "3": {
-          "n_traj": 8,
+          "n_traj": 32,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -491,12 +483,12 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 4.308216930180788,
+          "value_swing_mean": 4.401523186396807,
           "value_swing_post_settle": null
         },
         "4": {
-          "n_traj": 8,
-          "n_settled": 8,
+          "n_traj": 32,
+          "n_settled": 32,
           "never_settled_frac": 0.0,
           "t_star_min": 0,
           "t_star_p25": 0.0,
@@ -509,16 +501,8 @@
         }
       }
     },
-    "vswing_wrong_mean": 4.245103135185299,
-    "vswing_correct_mean": 2.3715422445030496,
-    "maxprob_wrong_mean": 0.47701102508792975,
-    "planner_dist_overall": 0.617,
-    "planner_dist_per_regime": {
-      "0": 1.0,
-      "1": 0.78125,
-      "2": 0.0,
-      "3": 0.30375,
-      "4": 1.0
-    }
+    "vswing_wrong_mean": 4.479865429596939,
+    "vswing_correct_mean": 2.4009349842881664,
+    "maxprob_wrong_mean": 0.4785539531283699
   }
 }
