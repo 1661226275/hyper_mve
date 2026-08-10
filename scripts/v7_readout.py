@@ -96,6 +96,29 @@ def main() -> int:
     for m, algo, vals in sorted(rows, reverse=True):
         print(f"| {algo} | " + " | ".join(f"{v:.2f}" for v in vals) + f" | **{m:.2f}** |")
 
+    print("\n## Role-swap consistency (g1 vs g2)\n")
+    print(
+        "g2 `asym_exploited` is g1 `asym_exploit` with the agent indices swapped\n"
+        "(relation.py: W=((1,-l),(+l,1)) vs ((1,+l),(-l,1)); the docstring calls it\n"
+        "'the mirror'). So a policy that treats the two SLOTS equivalently must give\n"
+        "r[g1][0] ~ r[g2][1] and r[g1][1] ~ r[g2][0]. Deviation means the policy has\n"
+        "learned slot-specific behaviour rather than role-specific behaviour -- which\n"
+        "a summed metric cannot see at all. This is a DIAGNOSTIC, not a ranking: a\n"
+        "uniformly weak policy is trivially symmetric.\n"
+    )
+    print("| algo | \\|r1[0]-r2[1]\\| | \\|r1[1]-r2[0]\\| | mean | % of scale |")
+    print("|---|---|---|---|---|")
+    for algo, (r, _) in reports.items():
+        pa = r["return_per_regime_per_agent"]
+        if "1" not in pa or "2" not in pa:
+            continue
+        r1, r2 = pa["1"], pa["2"]
+        d0, d1 = abs(r1[0] - r2[1]), abs(r1[1] - r2[0])
+        mean_d = (d0 + d1) / 2
+        scale = (sum(r1) + sum(r2)) / 4  # mean per-agent return over the two regimes
+        pct = 100.0 * mean_d / scale if scale else float("nan")
+        print(f"| {algo} | {d0:.2f} | {d1:.2f} | {mean_d:.2f} | {pct:.1f}% |")
+
     print("\n## Schema / invariant check\n")
     bad = 0
     for algo, (r, _) in reports.items():
