@@ -242,48 +242,47 @@ the model reproduces mamba's observed 100k runtime exactly):
      on g1 NashConv, and g1 no longer exists — so they need re-selection
      against the new headline regardless.
 
-5. **将所有算法的 `train_steps` 统一到 ~20 次 / 1K env steps，`eval` 接近每 1K env
-   一次。** At 200k env steps that is **4 000 train_steps** and **~200 eval
-   points** per run.
+5. **将所有算法的 `train_steps` 统一到 ~20 次 / 1K env steps；`eval` 改为每 **2K**
+   env 一次 + `episodes_per_regime = 2`**（2026-08-10 决定）。At 200k env steps
+   that is **4 000 train_steps** and **~100 eval points** per run.
 
    Current values and the factor each must move (from §2.1):
 
-   | algo | now (upd/1k) | → 20/1k | now (evals) | → ~200 |
+   | algo | now (upd/1k) | → 20/1k | now (evals) | → ~100 |
    |---|---|---|---|---|
-   | m3w_adapted | 250.0 | ÷12.5 | 251 | already there |
-   | mazero_mixed | 62.0 | ÷3.1 | 64 | ×3.1 |
-   | happo | 10.0 | ×2 | 52 | ×3.8 |
-   | mamba | 10.0 | ×2 | 52 | ×3.8 |
-   | mbom | 2.5 | ×8 | 52 | ×3.8 |
+   | m3w_adapted | 250.0 | ÷12.5 | 251 | ÷2.5 |
+   | mazero_mixed | 62.0 | ÷3.1 | 64 | ×1.6 |
+   | happo | 10.0 | ×2 | 52 | ×1.9 |
+   | mamba | 10.0 | ×2 | 52 | ×1.9 |
+   | mbom | 2.5 | ×8 | 52 | ×1.9 |
 
    **Where the knobs are:**
    * eval cadence: `_PROBE_EVERY_ENV_STEPS = 4000` in `happo.py:45`,
-     `mamba.py:57`, `mbom.py:62` → set to `1000`. m3w_adapted instead uses
+     `mamba.py:57`, `mbom.py:62` → set to `2000`. m3w_adapted instead uses
      `every_train_steps=200` (`m3w_adapted/runner.py:201`) and so is already at
      ~1.25 evals/1k; re-derive it after its update cadence changes, since its
      probe is keyed to train steps, not env steps. mazero_mixed has its own
      probe in `mazero_mixed/core/train.py`.
    * eval episodes: `episodes_per_regime=8` at every `PeriodicEvalProbe`
-     construction site.
+     construction site → set to `2`.
 
-   **Cost warning — this is the part that can silently blow up the wave.**
-   An episode is 100 steps (`env_steps_evaluated 64000 / episodes_total 640`),
-   so one eval point costs `episodes_per_regime × 5 regimes × 100` env steps:
+   **Why the episode count moves with the cadence.** An episode is 100 steps
+   (`env_steps_evaluated 64000 / episodes_total 640`), so one eval point costs
+   `episodes_per_regime × 5 regimes × 100` env steps:
 
-   | setting | eval rollout cost per 200k-step run | vs training budget |
-   |---|---|---|
-   | now: every 4k, 8 eps | 200 000 steps | 1.0× |
-   | every 1k, 8 eps | 800 000 steps | **4.0×** |
-   | every 1k, 2 eps | 200 000 steps | 1.0× |
+   | setting | eval points | eval rollout cost / 200k run | vs training budget |
+   |---|---|---|---|
+   | now: every 4k, 8 eps | 52 | 200 000 steps | 1.0× |
+   | every 1k, 8 eps | 200 | 800 000 steps | **4.0×** |
+   | every 1k, 2 eps | 200 | 200 000 steps | 1.0× |
+   | **chosen: every 2k, 2 eps** | **100** | **100 000 steps** | **0.5×** |
 
-   Evaluation *already* costs as much as training. Moving to a 1k cadence while
-   keeping 8 episodes makes it 4×, and for the two search-based algorithms
-   (mazero_mixed, m3w_adapted) every eval action runs an MCTS search, so that
-   4× lands on the most expensive rollouts in the wave. **Recommendation: take
-   the 1k cadence together with `episodes_per_regime = 2`** — same total eval
-   cost as today, 4× the curve points, each point ~2× noisier. For a
-   sample-efficiency *curve* that is the right trade; the final `eval_report`
-   still uses 128 episodes per regime, so headline numbers are unaffected.
+   Evaluation *already* costs as much as training at the current setting, and
+   for the two search-based algorithms (mazero_mixed, m3w_adapted) every eval
+   action runs an MCTS search — so eval cost is not a rounding error. The
+   chosen setting nearly doubles the curve points (52 → 100) while **halving**
+   eval cost, at ~2× the per-point noise. Headline numbers are unaffected: the
+   final `eval_report` still uses 128 episodes per regime.
 
    Also note the two directions are not symmetric in cost: raising mbom's
    updates 8× and mamba's 2× makes the two slowest baselines slower still
