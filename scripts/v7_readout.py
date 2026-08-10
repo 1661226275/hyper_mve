@@ -60,7 +60,27 @@ def load_nashconv(rundir: str):
         if not nc:
             continue
         label = "planner" if p.endswith(".planner.json") else "prior"
-        yield label, nc, r.get("br_env_steps")
+        yield label, nc, r.get("br_env_steps"), r.get("v_pi") or {}
+
+
+def frozen_fidelity(v_pi: dict, report: dict) -> float:
+    """Fraction of DEPLOYED return that the frozen policy actually reproduces.
+
+    NashConv measures whatever policy was frozen. For the model-free baselines
+    that is the deployed policy (~93-99% here), but mazero_mixed's distilled
+    prior is NOT what deploys -- measured at 29% of the MCTS planner's return --
+    so its prior-mode NashConv describes a policy the method never plays and is
+    not comparable to a baseline's. Surfacing the ratio makes that visible
+    instead of silently mis-ranking the method.
+    """
+    num = den = 0.0
+    for k, vec in v_pi.items():
+        scalar = report["return_per_regime"].get(str(k))
+        if scalar is None:
+            continue
+        num += sum(vec)
+        den += scalar
+    return num / den if den else float("nan")
 
 
 def main() -> int:
@@ -128,14 +148,33 @@ def main() -> int:
         print(f"  {algo:55s} {'OK' if ok else 'MISMATCH'}  schema={r['schema_version']}")
 
     print("\n## NashConv (lower is better)\n")
-    print("| algo | frozen | " + " | ".join(f"g{g}" for g in range(n_reg)) + " | sum | br |")
-    print("|" + "---|" * (n_reg + 4))
+    print(
+        "| algo | frozen | "
+        + " | ".join(f"g{g}" for g in range(n_reg))
+        + " | sum | br | frozen=deployed? |"
+    )
+    print("|" + "---|" * (n_reg + 5))
     found = False
-    for algo, (_, d) in reports.items():
-        for label, nc, br in load_nashconv(d):
+    warn = []
+    for algo, (rep, d) in reports.items():
+        for label, nc, br, v_pi in load_nashconv(d):
             found = True
+            fid = frozen_fidelity(v_pi, rep)
+            flag = f"{100 * fid:.0f}%" if fid == fid else "n/a"
+            if fid == fid and fid < 0.8:
+                flag += " **NOT COMPARABLE**"
+                warn.append((algo, label, fid))
             cells = " | ".join(f"{nc.get(g, float('nan')):.2f}" for g in range(n_reg))
-            print(f"| {algo} | {label} | {cells} | **{sum(nc.values()):.2f}** | {br} |")
+            print(
+                f"| {algo} | {label} | {cells} | "
+                f"**{sum(nc.values()):.2f}** | {br} | {flag} |"
+            )
+    for algo, label, fid in warn:
+        print(
+            f"\n!! {algo} ({label}) reproduces only {100 * fid:.0f}% of its deployed\n"
+            "   return, so its NashConv describes a policy the algorithm does not play.\n"
+            "   Do not rank it against a baseline whose frozen policy IS its deployed one."
+        )
     if not found:
         print("  (no game_metrics reports in the run dirs yet)")
     print(
