@@ -128,6 +128,15 @@ def parse_args(argv=None):
                         "paces gradient steps off transitions_collected); it "
                         "trades behaviour-policy freshness for throughput. "
                         "CUDA search wall-time is ~flat in this value.")
+    p.add_argument("--env-steps-per-grad", type=int, default=0,
+                   help="mazero_mixed only: env transitions per gradient step "
+                        "(0 = the module default, 16). LOWER means more "
+                        "training per collected sample. Measured true "
+                        "optimizer.step() rates per 1k env steps put the method "
+                        "at ~62 against mamba ~1510 / m3w ~750 / happo ~150 / "
+                        "mbom ~100, so 16 trains it on far less optimisation "
+                        "than anything it is compared with; 4 puts it mid-band. "
+                        "Raises the replay ratio, so lr may need to move too.")
     p.add_argument("--list", action="store_true",
                    help="print registered algorithms/envs and exit")
     p.add_argument("--grid", type=pathlib.Path, default=None,
@@ -183,7 +192,8 @@ def make_env_fn(cfg, env_id: str):
 
 def run_one(*, algo: str, env_id: str, seed: int, total_env_steps: int,
             lr: float, episodes: int, out_root: pathlib.Path,
-            tb_dir, ablation: str, num_pmcts: int = 1) -> pathlib.Path:
+            tb_dir, ablation: str, num_pmcts: int = 1,
+            env_steps_per_grad: int = 0) -> pathlib.Path:
     from hyper_mve.comparison import REGISTRY, create_runner
     from hyper_mve.utils.schemas.relation import get_regime_family
     from hyper_mve.utils.unified_logger import UnifiedLogger
@@ -212,6 +222,7 @@ def run_one(*, algo: str, env_id: str, seed: int, total_env_steps: int,
         total_env_steps=int(total_env_steps), lr=float(lr), seed=int(seed),
         tensorboard_dir=str(tb_dir), unified_logger=logger,
         ablation=ablation, num_pmcts=int(num_pmcts),
+        env_steps_per_grad=int(env_steps_per_grad),
     )
     train_walltime = time.time() - t0
 
@@ -299,6 +310,10 @@ def run_one(*, algo: str, env_id: str, seed: int, total_env_steps: int,
         "train_walltime_s": round(train_walltime, 1),
         "train_steps_logged": logger.train_steps,
         "env_steps_logged": logger.env_steps,
+        # 0 = the runner's own default. Recorded because it changes how much
+        # optimisation a run gets at a fixed env-step budget, so two runs with
+        # identical (algo, env, steps) are not comparable across values of it.
+        "env_steps_per_grad": int(env_steps_per_grad),
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -360,6 +375,7 @@ def _run_grid(grid_path: pathlib.Path, args) -> int:
     episodes = int(spec.get("episodes", args.episodes))
     lr = float(spec.get("lr", args.lr))
     num_pmcts = int(spec.get("num_pmcts", args.num_pmcts))
+    env_steps_per_grad = int(spec.get("env_steps_per_grad", args.env_steps_per_grad))
     failures = 0
     for algo in algos:
         for env_id in envs:
@@ -391,6 +407,7 @@ def _run_grid(grid_path: pathlib.Path, args) -> int:
                         "--lr", str(lr),
                         "--ablation", arm,
                         "--num-pmcts", str(num_pmcts),
+                        "--env-steps-per-grad", str(env_steps_per_grad),
                         "--gpus", args.gpus,
                         "--out", str(args.out),
                     ]
@@ -418,6 +435,7 @@ def main(argv=None) -> int:
         episodes=args.episodes, out_root=args.out,
         tb_dir=args.tb_dir, ablation=args.ablation,
         num_pmcts=args.num_pmcts,
+        env_steps_per_grad=args.env_steps_per_grad,
     )
     return 0
 

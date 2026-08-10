@@ -50,7 +50,27 @@ _FORK_DIR = Path(__file__).resolve().parent / "mazero_mixed"
 
 # grad-step pacing: ~1 training step per this many env transitions (matches
 # the fork smoke ratio 5000/320 ≈ 16).
+#
+# 2026-08-10: this is now a DEFAULT, overridable per run via train()'s
+# ``env_steps_per_grad`` kwarg (``scripts/train.py --env-steps-per-grad``),
+# because at 16 the method trains on far less optimisation than any baseline it
+# is compared against. Measured true ``optimizer.step()`` counts per 1k env
+# steps (`scripts/probes/grad_step_probe.py`; the v7 stage-1 table compared
+# incommensurable units — see results/analysis/train_cadence.md):
+#
+#     mamba ~1510   m3w_adapted ~750   happo ~150   mbom ~100   ours ~62.5
+#
+# Lowering this raises ours toward that band without touching a baseline's
+# published cadence, which is the fair direction to close the gap. It also
+# raises the replay ratio (batch 64 x steps / env steps), so lr may need to
+# move with it.
 _ENV_STEPS_PER_GRAD = 16
+
+# Eval cadence in ENV steps. Must match the external baselines' constant of the
+# same name (comparison/{happo,mamba,mbom}.py) so every curve in the wave shares
+# an x-grid; the fork's own test_interval is derived from it in
+# _build_game_config, since that one counts TRAIN steps.
+_PROBE_EVERY_ENV_STEPS = 2000
 
 # Number of MCTS trees searched in parallel by the selfplay worker. This is the
 # inference BATCH SIZE on the search hot path: the fork evaluates all leaves of
@@ -104,6 +124,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         self._game_config = None
         self._ablation = "none"       # phase-7 arm name (fork-argv seam)
         self._num_pmcts = _DEFAULT_NUM_PMCTS
+        self._env_steps_per_grad = _ENV_STEPS_PER_GRAD
         self._eval_episode_returns: dict[int, list[float]] = {}
         self._eval_diagnostics: dict[str, Any] = {}
         # None until train() or load_checkpoint() supplies weights. _lazy_model
@@ -122,13 +143,20 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             return torch.device("cpu")
 
     # ------------------------------------------------------------ internals
-    def _build_game_config(self, *, total_env_steps: int, lr: float, seed: int):
+    def _build_game_config(self, *, total_env_steps: int, lr: float, seed: int,
+                           env_steps_per_grad: int = 0):
         _ensure_fork_on_path()
         import importlib
         core_config = importlib.import_module("core.config")
 
+        ratio = int(env_steps_per_grad or _ENV_STEPS_PER_GRAD)
         total_env_steps = int(max(total_env_steps, 1))
-        training_steps = max(1, total_env_steps // _ENV_STEPS_PER_GRAD)
+        training_steps = max(1, total_env_steps // ratio)
+        # Eval every ~2000 env steps regardless of the pacing ratio. The fork's
+        # test_interval counts TRAIN steps, so a hardcoded value silently
+        # changes the eval cadence whenever `ratio` moves (at 16 it was every
+        # 3200 env steps, not the 2000 the baselines use).
+        test_interval = max(1, _PROBE_EVERY_ENV_STEPS // ratio)
         start_transition = int(min(256, max(64, total_env_steps // 4)))
         argv = [
             "--opr", "train_sync", "--case", "relation", "--env", "rel_duo",
@@ -160,7 +188,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
             # so test/mean_score is a trend line, not comparable to
             # eval/return_mean (which sums over agents, per pinned regime) --
             # unlike the external runners' probe, which IS eval/return_mean.
-            "--test_interval", "200",
+            "--test_interval", str(test_interval),
             "--test_episodes", "8", "--use_mcts_test",
             "--target_model_interval", "50",
             "--batch_size", "64", "--num_simulations", "25",
@@ -290,13 +318,16 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         self.cfg = cfg
         self._ablation = str(kwargs.get("ablation") or "none")
         self._num_pmcts = int(kwargs.get("num_pmcts") or _DEFAULT_NUM_PMCTS)
+        self._env_steps_per_grad = int(
+            kwargs.get("env_steps_per_grad") or _ENV_STEPS_PER_GRAD)
         _ensure_fork_on_path()
         import torch
         from torch.utils.tensorboard import SummaryWriter
         from core.train import train_sync_serial
 
         game_config = self._build_game_config(
-            total_env_steps=total_env_steps, lr=lr, seed=seed
+            total_env_steps=total_env_steps, lr=lr, seed=seed,
+            env_steps_per_grad=self._env_steps_per_grad,
         )
         tb_dir_kwarg = kwargs.get("tensorboard_dir")
         tb_dir = tb_dir_kwarg or tempfile.mkdtemp(prefix="mazero_mixed_tb_")
@@ -336,7 +367,7 @@ class MAZeroMixedRunner(ExternalBaselineRunner):
         # from the first log batch; train/transitions_collected refines it every
         # _log thereafter (UnifiedLogger self-calibration).
         if hasattr(summary_writer, "declare_ratio"):
-            summary_writer.declare_ratio(_ENV_STEPS_PER_GRAD)
+            summary_writer.declare_ratio(self._env_steps_per_grad)
         model, weights = train_sync_serial(game_config, summary_writer, None)
         model.set_weights(weights)
         model.eval()

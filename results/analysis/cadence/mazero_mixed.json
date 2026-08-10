@@ -1,0 +1,31 @@
+{
+  "algo": "mazero_mixed",
+  "env": "relation_coopmix",
+  "env_steps_requested": 10000,
+  "env_steps_logged": 11667,
+  "train_steps_logged": 625,
+  "true_grad_steps": 694,
+  "true_grad_per_1k_env": 59.5,
+  "logged_per_1k_env": 53.6,
+  "expansion_factor": 1.1,
+  "walltime_s": 660.8,
+  "per_optimizer_class": {
+    "Adam": 694
+  },
+  "patched_classes": [
+    "ASGD",
+    "Adadelta",
+    "Adafactor",
+    "Adagrad",
+    "Adam",
+    "Adamax",
+    "LBFGS",
+    "Muon",
+    "NAdam",
+    "RAdam",
+    "RMSprop",
+    "Rprop",
+    "SGD",
+    "SparseAdam"
+  ]
+}

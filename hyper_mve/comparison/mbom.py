@@ -59,7 +59,13 @@ from hyper_mve.utils.eval.eval_report import EvalReport, regime_names_for
 #: steps (52 points) and mbom every ~80000 (14 points across a whole 1M run),
 #: because each takes a different number of updates per env step. 4000 env steps
 #: => 250 points. mazero and m3w_adapted keep their original schedules.
-_PROBE_EVERY_ENV_STEPS: int = 4000
+#: 2026-08-10: 4000 -> 2000, paired with episodes_per_regime 8 -> 2 at the probe
+#: sites below. An episode is 100 steps, so one eval point costs
+#: episodes x 5 regimes x 100 env steps -- at (4000, 8) evaluation cost as much
+#: as training did. (2000, 2) nearly doubles the curve points while halving eval
+#: cost, at ~2x the per-point noise. Headline numbers are unaffected: the final
+#: eval_report still uses 128 episodes per regime.
+_PROBE_EVERY_ENV_STEPS: int = 2000
 
 from hyper_mve.comparison.base import (
     freeze_per_agent,
@@ -474,7 +480,7 @@ class MBOMRunner(ExternalBaselineRunner):
 
             probe = PeriodicEvalProbe(
                 env_fn, cfg, probe_writer, act_fn=_probe_act,
-                every_env_steps=_PROBE_EVERY_ENV_STEPS, episodes_per_regime=8,
+                every_env_steps=_PROBE_EVERY_ENV_STEPS, episodes_per_regime=2,
             )
 
         # Single-process equivalent of upstream trainer.worker() at ranks=1

@@ -64,32 +64,48 @@ def build_rel_coopmix_config() -> V4Config:
 
 
 def build_rel_coopmix_holdout_config() -> V4Config:
-    """rel_coopmix trained on one regime of each character, held out on the rest.
+    """rel_coopmix trained on ``(0, 1, 2)``, zero-shot tested on ``(3, 4)``.
 
-    Trains on ``mutual_coop`` (cooperative), ``asym_exploit`` (mixed) and ``neutral``
-    (independent); holds out ``asym_exploited`` and ``asym_exploit_mild`` — the mirror
-    and the weakened form of the trained asymmetric role.
+    Trains on ``mutual_coop`` (cooperative, symmetric) plus **both** asymmetric
+    mirrors, ``asym_exploit`` and ``asym_exploited``; holds out
+    ``asym_exploit_mild`` and ``neutral``.
 
     .. warning::
 
-       **The literal ``(0, 1, 4)`` is a false friend.** It is byte-identical to
-       ``rel_recip_holdout``'s value but means something different: under ``g2`` id 1 is
-       ``mutual_comp``, under ``g2cm`` it is ``asym_exploit``. The distinct family name,
-       preset name and report ``schema_version`` make the change detectable downstream,
-       but anyone diffing the two preset modules sees "no change" at exactly the line
-       where the semantics inverted. Tests here assert on **resolved regime names**, not
-       on the tuple, for this reason.
+       **The tuple is a false friend across families.** This preset used to hold
+       ``(0, 1, 4)``, byte-identical to ``rel_recip_holdout``'s value but meaning
+       something else: under ``g2`` id 1 is ``mutual_comp``, under ``g2cm`` it is
+       ``asym_exploit``. Anyone diffing the two preset modules sees "no change" at
+       exactly the line where the semantics inverted. Tests here assert on
+       **resolved regime names**, not on the tuple, for this reason.
 
-    Coverage note. All three own-row values an agent can observe (``+λ``, ``-λ``, ``0``)
-    occur in training, so observation coverage is complete — but each maps to a *unique*
-    training regime, which means the posterior is deterministic during training while the
-    held-out regimes ask it to resolve an ambiguity it has never experienced. That is a
-    sharp zero-shot test and possibly too sharp. It is measurable rather than arguable:
-    run ``scripts/probes/belief_confusion_probe.py`` against a trained checkpoint and
-    check whether the posterior degenerates. If it does, the fallback is
-    ``train_regime_ids=(0, 1, 3, 4)``, which keeps a genuine ``-λ`` inference task during
-    training at the cost of a single held-out regime.
+    What each held-out regime actually probes (``_w2(w01, w10)``, ``relation.py:218``;
+    ``w01`` is the entry an agent sees in its own row):
+
+    ==========================  ======  ======  ===================================
+    regime                      w01     w10     status under ``(0, 1, 2)``
+    ==========================  ======  ======  ===================================
+    g0 ``mutual_coop``          +λ      +λ      trained
+    g1 ``asym_exploit``         -λ      +λ      trained
+    g2 ``asym_exploited``       +λ      -λ      trained
+    g3 ``asym_exploit_mild``    -λ      0       **held out — unseen COMBINATION**
+    g4 ``neutral``              0       0       **held out — unseen own-row VALUE**
+    ==========================  ======  ======  ===================================
+
+    The two therefore test different things and should not be reported as one
+    number. Training covers own-row values ``{+λ, -λ}`` but never ``0``, so **g4 is
+    the only regime presenting an own-row value the model has never trained on**.
+    g3's ``-λ`` is already familiar from g1; what is new there is the *pairing*
+    (partner row ``0`` rather than ``+λ``), so g3 is the milder, in-distribution
+    generalization test and g4 the sharp out-of-distribution one.
+
+    Expect held-out ``regime_accuracy`` near zero: the belief head has 5 classes and
+    only 3 occur in training. Chance stays ``0.200`` — |G| is still 5, only the
+    training support shrank. Measure rather than argue: run
+    ``scripts/probes/belief_confusion_probe.py`` against a trained checkpoint. If the
+    posterior degenerates entirely, the fallback is ``(0, 1, 2, 3)``, which keeps a
+    partner-row ``0`` in training and holds out only ``neutral``.
     """
     base = build_rel_coopmix_config()
-    env = replace(base.env, train_regime_ids=(0, 1, 4))
+    env = replace(base.env, train_regime_ids=(0, 1, 2))
     return replace(base, env=env, preset_name="rel_coopmix_holdout")

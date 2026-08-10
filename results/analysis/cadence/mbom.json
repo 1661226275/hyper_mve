@@ -1,0 +1,94 @@
+{
+  "algo": "mbom",
+  "env": "relation_coopmix",
+  "env_steps_requested": 10000,
+  "env_steps_logged": 10000,
+  "train_steps_logged": 25,
+  "true_grad_steps": 90872,
+  "true_grad_per_1k_env": 9087.2,
+  "logged_per_1k_env": 2.5,
+  "expansion_factor": 3634.9,
+  "walltime_s": 457.3,
+  "per_optimizer_class": {
+    "Adam": 90872
+  },
+  "per_optimizer_instance": [
+    {
+      "class": "Adam",
+      "n_params": 3686,
+      "steps": 1011
+    },
+    {
+      "class": "Adam",
+      "n_params": 3686,
+      "steps": 804
+    },
+    {
+      "class": "Adam",
+      "n_params": 3686,
+      "steps": 793
+    },
+    {
+      "class": "Adam",
+      "n_params": 3686,
+      "steps": 329
+    },
+    {
+      "class": "Adam",
+      "n_params": 3686,
+      "steps": 267
+    },
+    {
+      "class": "Adam",
+      "n_params": 3686,
+      "steps": 250
+    },
+    {
+      "class": "Adam",
+      "n_params": 3521,
+      "steps": 250
+    },
+    {
+      "class": "Adam",
+      "n_params": 4070,
+      "steps": 250
+    },
+    {
+      "class": "Adam",
+      "n_params": 3521,
+      "steps": 250
+    },
+    {
+      "class": "Adam",
+      "n_params": 3686,
+      "steps": 249
+    },
+    {
+      "class": "Adam",
+      "n_params": 3686,
+      "steps": 233
+    },
+    {
+      "class": "Adam",
+      "n_params": 3686,
+      "steps": 233
+    }
+  ],
+  "distinct_optimizers": 5103,
+  "patched_classes": [
+    "ASGD",
+    "Adadelta",
+    "Adafactor",
+    "Adagrad",
+    "Adam",
+    "Adamax",
+    "LBFGS",
+    "Muon",
+    "NAdam",
+    "RAdam",
+    "RMSprop",
+    "Rprop",
+    "SGD",
+    "SparseAdam"
+  ]
+}

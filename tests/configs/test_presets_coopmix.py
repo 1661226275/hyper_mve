@@ -61,32 +61,67 @@ def test_rel_coopmix_holdout_trains_on_one_regime_of_each_character():
     held = tuple(fam.names()[g] for g in range(fam.size)
                  if g not in hold.env.train_regime_ids)
 
-    # one cooperative, one mixed, one independent
-    assert trained == ("mutual_coop", "asym_exploit", "neutral")
-    assert held == ("asym_exploited", "asym_exploit_mild")
+    # cooperative + BOTH asymmetric mirrors; the mild form and the independent
+    # regime are held out.
+    assert trained == ("mutual_coop", "asym_exploit", "asym_exploited")
+    assert held == ("asym_exploit_mild", "neutral")
 
-    # ...and the same literal tuple resolves to something else under g2, which
-    # is the trap this test exists to catch.
+    # ...and the tuple this preset used to carry, (0, 1, 4), resolves to
+    # something else again under g2 -- the trap this test exists to catch.
     recip_fam = get_regime_family(V4Config.from_preset("rel_recip_holdout").env)
     assert tuple(recip_fam.names()[g] for g in (0, 1, 4)) == (
         "mutual_coop", "mutual_comp", "neutral")
 
 
-def test_rel_coopmix_holdout_training_set_covers_every_own_row_value():
-    """Coverage claim in the preset docstring, pinned.
+def test_rel_coopmix_holdout_two_held_regimes_probe_different_things():
+    """The two held-out regimes are NOT one uniform generalization claim.
 
-    Every own-row value an agent can observe (+lam, -lam, 0) must occur among
-    the trained regimes, or the model meets an unseen observation rather than an
-    unseen partner row at eval time.
+    Under ``train_regime_ids=(0, 1, 2)`` training covers own-row values
+    ``{+lam, -lam}`` but never ``0``. So:
+
+    * g4 ``neutral`` presents an own-row VALUE never trained on -- the sharp,
+      out-of-distribution test;
+    * g3 ``asym_exploit_mild`` presents an own-row value that IS familiar
+      (``-lam``, from g1) in an unseen COMBINATION (partner row ``0`` rather
+      than ``+lam``) -- the milder, in-distribution test.
+
+    Reporting them as a single "held-out score" averages two different
+    questions, which is what this test exists to prevent. The predecessor of
+    this test asserted the training set covered all three own-row values; that
+    was true of the old ``(0, 1, 4)`` partition and is deliberately false now.
     """
     from hyper_mve.utils.schemas.relation import get_regime_family
 
     hold = V4Config.from_preset("rel_coopmix_holdout")
     fam = get_regime_family(hold.env)
-    seen_rows = {float(fam.regimes[g].w_array()[0, 1])
-                 for g in hold.env.train_regime_ids}
-    all_rows = {float(r.w_array()[0, 1]) for r in fam.regimes}
-    assert seen_rows == all_rows == {+1.0, -1.0, 0.0}
+    names = fam.names()
+    trained_ids = hold.env.train_regime_ids
+
+    def own_row(g):
+        return float(fam.regimes[g].w_array()[0, 1])
+
+    def partner_row(g):
+        return float(fam.regimes[g].w_array()[1, 0])
+
+    seen_own = {own_row(g) for g in trained_ids}
+    assert seen_own == {+1.0, -1.0}, "training must not cover the zero own-row"
+
+    held = [g for g in range(fam.size) if g not in trained_ids]
+    by_name = {names[g]: g for g in held}
+    assert set(by_name) == {"asym_exploit_mild", "neutral"}
+
+    # g4: unseen own-row value -> the model has never observed this row at all.
+    g_neutral = by_name["neutral"]
+    assert own_row(g_neutral) == 0.0
+    assert own_row(g_neutral) not in seen_own
+
+    # g3: seen own-row value, unseen pairing. Pin the source of the familiarity
+    # (g1) so the claim cannot silently rot if the family is reordered.
+    g_mild = by_name["asym_exploit_mild"]
+    assert own_row(g_mild) in seen_own
+    assert own_row(g_mild) == own_row(names.index("asym_exploit"))
+    seen_pairs = {(own_row(g), partner_row(g)) for g in trained_ids}
+    assert (own_row(g_mild), partner_row(g_mild)) not in seen_pairs
 
 
 @pytest.mark.parametrize("name", ["rel_coopmix", "rel_coopmix_holdout"])

@@ -1,0 +1,31 @@
+{
+  "algo": "happo",
+  "env": "relation_coopmix",
+  "env_steps_requested": 10000,
+  "env_steps_logged": 10000,
+  "train_steps_logged": 100,
+  "true_grad_steps": 1500,
+  "true_grad_per_1k_env": 150.0,
+  "logged_per_1k_env": 10.0,
+  "expansion_factor": 15.0,
+  "walltime_s": 57.0,
+  "per_optimizer_class": {
+    "Adam": 1500
+  },
+  "patched_classes": [
+    "ASGD",
+    "Adadelta",
+    "Adafactor",
+    "Adagrad",
+    "Adam",
+    "Adamax",
+    "LBFGS",
+    "Muon",
+    "NAdam",
+    "RAdam",
+    "RMSprop",
+    "Rprop",
+    "SGD",
+    "SparseAdam"
+  ]
+}

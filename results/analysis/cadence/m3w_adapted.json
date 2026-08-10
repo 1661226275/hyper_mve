@@ -1,0 +1,31 @@
+{
+  "algo": "m3w_adapted",
+  "env": "relation_coopmix",
+  "env_steps_requested": 10000,
+  "env_steps_logged": 10000,
+  "train_steps_logged": 2500,
+  "true_grad_steps": 7128,
+  "true_grad_per_1k_env": 712.8,
+  "logged_per_1k_env": 250.0,
+  "expansion_factor": 2.9,
+  "walltime_s": 340.1,
+  "per_optimizer_class": {
+    "Adam": 7128
+  },
+  "patched_classes": [
+    "ASGD",
+    "Adadelta",
+    "Adafactor",
+    "Adagrad",
+    "Adam",
+    "Adamax",
+    "LBFGS",
+    "Muon",
+    "NAdam",
+    "RAdam",
+    "RMSprop",
+    "Rprop",
+    "SGD",
+    "SparseAdam"
+  ]
+}
