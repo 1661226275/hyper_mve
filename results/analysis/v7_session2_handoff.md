@@ -38,7 +38,23 @@ lands on the module file, not the vendor dir).
 
 ## 2. Four defects stage 1 exposed — these are the reason it was worth running
 
-### 2.1 mappo is not trained (blocks any mappo comparison)
+### 2.1 mappo is not trained — DECISION (2026-08-10): mappo is dropped
+
+**User decision: mappo is removed from all subsequent training.** The roster
+becomes `mazero_mixed` (method) vs `happo`, `mamba`, `mbom`, `m3w_adapted`.
+
+Two consequences that must be honoured in the writeup:
+
+* **Never report that MAPPO performs poorly.** Its stage-1 score (global reward
+  22.60 vs happo's 115.70) is a configuration artefact of the update cadence
+  below, not a property of the algorithm. Dropping it is legitimate; citing it
+  as a weak baseline would not be.
+* **Any archived table carrying mappo numbers from this configuration is
+  suspect** for the same reason, and should not be reused as a reference point.
+
+The measurement below is retained because it is the evidence for the decision,
+and because the same cadence audit must be applied to the remaining four
+baselines before they are compared.
 
 Gradient updates over the whole 200k-step run, read from TB
 `progress/train_steps`:
@@ -52,11 +68,17 @@ Gradient updates over the whole 200k-step run, read from TB
 | mbom | 500 | 2.5 | 52 | 4.71 h | 141.2 |
 | **mappo** | **62** | **0.31** | **2** | 0.08 h | 2.5 |
 
-mappo gets 62 updates — 32× fewer than happo, 800× fewer than m3w — and
+mappo (dropped) gets 62 updates — 32× fewer than happo, 800× fewer than m3w — and
 produces 2 eval points, so it has essentially no sample-efficiency curve. Its
-low score is a configuration artefact, not an algorithmic finding. **Fix the
-update cadence before mappo appears in any table.** This table also answers
-TODO #2 for seed 0; re-measure after the cadence fix.
+low score is a configuration artefact, not an algorithmic finding — which is
+why it is dropped rather than reported.
+
+**The cadence disparity does not end with mappo.** Among the four surviving
+baselines the spread is still 100× (mbom 2.5 vs m3w 250 updates per 1k env
+steps), and "equal env steps" therefore does not mean "equal training". Decide
+explicitly what is being held constant across the comparison — env steps,
+gradient updates, or wall-clock — and state it, because the three give
+different rankings. This table is the seed-0 answer to TODO #2.
 
 ### 2.2 NashConv can silently measure a policy the algorithm never plays
 
@@ -157,15 +179,21 @@ the model reproduces mamba's observed 100k runtime exactly):
 
 ## 4. TODO for the next session
 
+0. **mappo 剔除于之后的训练**（2026-08-10 决定，见 §2.1）。Roster is
+   `mazero_mixed` vs `happo`, `mamba`, `mbom`, `m3w_adapted`. Do not describe
+   MAPPO as a weak baseline anywhere — it was misconfigured, not outperformed.
+
 1. **将 mbom 从 NashConv 表中剔除，仅报告其按角色划分的指标。**
    Rationale measured in §2.4 (≈11.5 h/checkpoint). Per-role metrics for mbom
    cost nothing extra and stay in.
 
 2. **弄清各算法每 100K env_steps 所需要的训练时间、train_steps 次数（梯度更新次数）、
    eval 次数（指标记录到 tensorboard 的次数）。**
-   The §2.1 table is the seed-0 answer; treat it as provisional and re-measure
-   after fixing mappo's update cadence. The disparity there (0.31 vs 250
-   updates per 1k env steps) is the thing to resolve, not just to record.
+   The §2.1 table is the seed-0 answer. With mappo dropped the spread among the
+   four survivors is still ~100× (mbom 2.5 vs m3w 250 updates per 1k env
+   steps), so the open question is not "record the numbers" but **decide what
+   is held constant** across the comparison — env steps, gradient updates, or
+   wall-clock — and say so, since the three orderings differ.
 
 3. **整体实验顺序**（每一步都是所有 g 参与训练）：
    1. seed0：世界模型真实度 (fidelity) → 全局 reward → per-agent reward → NashConv
