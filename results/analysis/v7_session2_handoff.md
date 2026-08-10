@@ -89,8 +89,24 @@ while saying nothing about the method. The model-free baselines are at 97–100 
 so their numbers mean what they appear to mean.
 
 `v7_readout.py` now computes this ratio per row and prints
-`**NOT COMPARABLE**` below 80 %. **Keep that guard.** The method's exploitability
-claim requires `--frozen-mode planner` (or `both`).
+`**NOT COMPARABLE**` below 80 %. **Keep that guard.**
+
+**DECISION (2026-08-10): mazero_mixed deploys via the MCTS planner, not the
+prior.** Therefore:
+
+* Every mazero NashConv must use `--frozen-mode planner` (or `both`).
+  **The prior-mode number must not be reported at all** — it describes a
+  policy that is never deployed.
+* Budget for the cost. The planner runs a full search at *every* BR env step
+  (~1 M searches at br = 100k × 2 agents × 5 regimes); the stage-1 `both` job
+  was still running after 7 h. Prior-mode is ~1.9 h, so essentially all of that
+  is the planner pass. This is the single most expensive measurement in the
+  wave and should be scheduled first, not last.
+* The same applies to m3w_adapted, which is also search-based — and which is
+  additionally *excluded* from NashConv entirely because its planner is
+  regime-CONDITIONED while `FrozenExternalPolicy`'s contract is `(obs, t)` with
+  no regime, so an adapter would silently plan as g0 in every regime.
+  Supporting it means threading the regime through `FrozenExternalPolicy`.
 
 ### 2.3 NashConv is a lower bound, and `0.000` is ambiguous
 
@@ -225,6 +241,55 @@ the model reproduces mamba's observed 100k runtime exactly):
      no-op, so it buys nothing. The tree-search arms were originally selected
      on g1 NashConv, and g1 no longer exists — so they need re-selection
      against the new headline regardless.
+
+5. **将所有算法的 `train_steps` 统一到 ~20 次 / 1K env steps，`eval` 接近每 1K env
+   一次。** At 200k env steps that is **4 000 train_steps** and **~200 eval
+   points** per run.
+
+   Current values and the factor each must move (from §2.1):
+
+   | algo | now (upd/1k) | → 20/1k | now (evals) | → ~200 |
+   |---|---|---|---|---|
+   | m3w_adapted | 250.0 | ÷12.5 | 251 | already there |
+   | mazero_mixed | 62.0 | ÷3.1 | 64 | ×3.1 |
+   | happo | 10.0 | ×2 | 52 | ×3.8 |
+   | mamba | 10.0 | ×2 | 52 | ×3.8 |
+   | mbom | 2.5 | ×8 | 52 | ×3.8 |
+
+   **Where the knobs are:**
+   * eval cadence: `_PROBE_EVERY_ENV_STEPS = 4000` in `happo.py:45`,
+     `mamba.py:57`, `mbom.py:62` → set to `1000`. m3w_adapted instead uses
+     `every_train_steps=200` (`m3w_adapted/runner.py:201`) and so is already at
+     ~1.25 evals/1k; re-derive it after its update cadence changes, since its
+     probe is keyed to train steps, not env steps. mazero_mixed has its own
+     probe in `mazero_mixed/core/train.py`.
+   * eval episodes: `episodes_per_regime=8` at every `PeriodicEvalProbe`
+     construction site.
+
+   **Cost warning — this is the part that can silently blow up the wave.**
+   An episode is 100 steps (`env_steps_evaluated 64000 / episodes_total 640`),
+   so one eval point costs `episodes_per_regime × 5 regimes × 100` env steps:
+
+   | setting | eval rollout cost per 200k-step run | vs training budget |
+   |---|---|---|
+   | now: every 4k, 8 eps | 200 000 steps | 1.0× |
+   | every 1k, 8 eps | 800 000 steps | **4.0×** |
+   | every 1k, 2 eps | 200 000 steps | 1.0× |
+
+   Evaluation *already* costs as much as training. Moving to a 1k cadence while
+   keeping 8 episodes makes it 4×, and for the two search-based algorithms
+   (mazero_mixed, m3w_adapted) every eval action runs an MCTS search, so that
+   4× lands on the most expensive rollouts in the wave. **Recommendation: take
+   the 1k cadence together with `episodes_per_regime = 2`** — same total eval
+   cost as today, 4× the curve points, each point ~2× noisier. For a
+   sample-efficiency *curve* that is the right trade; the final `eval_report`
+   still uses 128 episodes per regime, so headline numbers are unaffected.
+
+   Also note the two directions are not symmetric in cost: raising mbom's
+   updates 8× and mamba's 2× makes the two slowest baselines slower still
+   (mamba is already 7.52 h / 200k), while m3w ÷12.5 and mazero ÷3.1 get
+   cheaper. Re-measure walltime after the change rather than assuming it nets
+   out.
 
 ### 限制
 
