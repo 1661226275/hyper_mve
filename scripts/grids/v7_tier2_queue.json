@@ -52,6 +52,19 @@
     "out": "results_v7_500k"
   },
   {
+    "name": "abl_search_margvisit",
+    "_why": "Search-module ablation: marginal_visit_count. Added at user request 2026-08-10. EXPECTED: no difference -- it is provably the same estimator as the method's own visit target (the factorized head makes them two reassociations of one sum; test_marginal_visit_equals_visit_loss_exactly pins the shipped code path). Read it as a NULL CONTROL: it bounds how much of any ablation gap is seed noise. It cannot show the targets differ -- with n=1 and within-run sd ~8, a numerically identical target can still land several points away.",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_margvisit",
+    "env": "relation_coopmix",
+    "seed": 0,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
     "name": "gen_mamba_holdout",
     "_why": "Generalization comparison: strongest baseline on the same holdout partition. Without it the method's zero-shot number has nothing to be compared against.",
     "algo": "mamba",

@@ -58,6 +58,7 @@ ARMS: tuple[str, ...] = (
     "ref_bc_anneal_scaled_hardval_decoupled_cover",
     "ref_bc_anneal_scaled_hardval_decoupled_qtarget",
     "ref_bc_anneal_scaled_hardval_decoupled_mctsfix",
+    "ref_bc_anneal_scaled_hardval_decoupled_margvisit",
     # v6 visit_q_blend tau sweep (replaces q_softmax; see below)
     "ref_bc_anneal_scaled_hardval_decoupled_blend_t025",
     "ref_bc_anneal_scaled_hardval_decoupled_blend_t05",
@@ -311,6 +312,27 @@ _ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_qtarget"] = _ARGV_REMOVE["r
 _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_mctsfix"] = (
     _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"] + _ARGV_ADD["mcts_fix"])
 _ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_mctsfix"] = _ARGV_REMOVE["ref_bc"]
+
+# --- marginal_visit: the action-axis form of the method's own visit target ---
+#
+# EXPECTED RESULT: no difference. `marginal_visit` is provably identical to
+# `visit`, which is what the method of record already runs -- the factorized
+# policy head makes the two reassociations of one sum, with the same
+# normalizer (core/train.py's module docstring;
+# test_marginal_visit_equals_visit_loss_exactly pins the shipped code path,
+# not just the algebra).
+#
+# Run at user request (2026-08-10) as the empirical arm of that claim. Read it
+# as a NULL CONTROL rather than as a candidate: two runs differing only in
+# floating-point summation order bound how much of any ablation gap is seed
+# noise. Note this makes it a weak equivalence test in isolation -- with n=1
+# and a within-run sd of ~8, a numerically identical target can still land
+# several points away, so a difference here is evidence about noise, NOT
+# evidence that the targets differ.
+_ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled_margvisit"] = (
+    _ARGV_ADD["ref_bc_anneal_scaled_hardval_decoupled"]
+    + ("--policy_target_type", "marginal_visit"))
+_ARGV_REMOVE["ref_bc_anneal_scaled_hardval_decoupled_margvisit"] = _ARGV_REMOVE["ref_bc"]
 
 # --- visit_q_blend: q_softmax with the visit allocation restored as a prior ---
 #

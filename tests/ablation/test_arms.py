@@ -56,6 +56,13 @@ def test_arm_set_is_the_locked_five_plus_diagnostics():
         "ref_bc_anneal_scaled_hardval_decoupled_cover",
         "ref_bc_anneal_scaled_hardval_decoupled_qtarget",
         "ref_bc_anneal_scaled_hardval_decoupled_mctsfix",
+        # 2026-08-10, user request. A NULL CONTROL, not a candidate:
+        # `marginal_visit` is provably the same estimator as the method's own
+        # `visit` target (tests/algo/test_policy_target_agent_marginal.py::
+        # test_marginal_visit_equals_visit_loss_exactly pins the shipped code
+        # path exactly, not merely up to a scale). Its value is as a noise
+        # floor for the arms above -- it cannot show a target difference.
+        "ref_bc_anneal_scaled_hardval_decoupled_margvisit",
     }
     # 2026-08-07 visit_q_blend tau sweep. Supersedes the q_softmax cell: the
     # blend keeps the visit counts as a per-child reliability prior instead of

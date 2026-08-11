@@ -345,3 +345,62 @@ def test_absent_actions_get_exactly_zero_mass_and_rows_normalize(batch):
         torch.testing.assert_close(
             T[live].sum(dim=2), torch.ones(int(live.sum()), N), atol=1e-5, rtol=1e-5)
         assert T[~live].sum() == 0.0
+
+
+# --------------------------------------------------------------------------
+# 4. the `marginal_visit` target type: the no-op, exercised end to end
+# --------------------------------------------------------------------------
+
+def test_marginal_visit_equals_visit_loss_exactly(batch):
+    """``marginal_visit`` IS ``visit``, through a disjoint code path.
+
+    The two branches share no tensor operations: ``visit`` contracts the
+    per-child log-probs against the child visit distribution on the sampled-
+    child axis, while ``marginal_visit`` scatters those visits onto the
+    ``(N, A)`` grid and contracts against ``log_prob_full``. The factorized
+    head makes them two reassociations of one sum, so the losses must agree
+    exactly -- not merely up to a scale, since neither branch renormalizes.
+
+    This is the empirical form of the result that
+    ``test_visit_prior_at_huge_temperature_is_the_visit_loss`` proves
+    algebraically. It exists so the equivalence covers the shipped
+    ``--policy_target_type marginal_visit`` code path rather than the algebra
+    alone: a scatter bug (fp16 accumulation, a transposed index) would break
+    this while leaving the algebra true.
+    """
+    actions, visit_policy, adv, mask, lpf = batch
+    visit_loss = _loss(_Cfg("visit"), actions, visit_policy, adv, mask, lpf)
+    marginal_loss = _loss(_Cfg("marginal_visit"), actions, visit_policy, adv,
+                          mask, lpf)
+    torch.testing.assert_close(marginal_loss, visit_loss, atol=1e-5, rtol=1e-5)
+
+
+def test_marginal_visit_target_is_the_cpp_marginalisation(batch):
+    """``W_i(a) = sum_{c: a_i^c=a} visit(c)``, against an independent loop.
+
+    Mirrors ``cnode.cpp:95-105``'s
+    ``logits(i, children_action[c][i]) += child->visit_count``. Masked children
+    contribute nothing even though their action indices are real indices.
+    """
+    from core.train import marginal_visit_target
+
+    actions, visit_policy, _, mask, _ = batch
+    W = marginal_visit_target(actions, visit_policy, mask, A)
+
+    expected = torch.zeros(BATCH, N, A)
+    for b in range(BATCH):
+        for c in range(C):
+            if mask[b, c] == 0:
+                continue
+            for i in range(N):
+                expected[b, i, int(actions[b, c, i])] += visit_policy[b, c]
+    torch.testing.assert_close(W, expected, atol=1e-6, rtol=1e-6)
+
+    # Unnormalized by design: rows carry the live visit mass, which is what
+    # makes the loss equal `visit` term for term instead of proportional to it.
+    live = mask.sum(dim=1) > 0
+    torch.testing.assert_close(
+        W[live].sum(dim=2),
+        (visit_policy * mask).sum(dim=1)[live].unsqueeze(1).expand(-1, N),
+        atol=1e-6, rtol=1e-6)
+    assert W[~live].sum() == 0.0

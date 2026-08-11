@@ -162,6 +162,37 @@ def agent_marginal_target(actions_step, visit_step, adv_step, mask_step,
     return T / T.sum(dim=2, keepdim=True).clamp_min(1e-8)
 
 
+def marginal_visit_target(actions_step, visit_step, mask_step,
+                          action_space_size):
+    """``W_i(a) = sum_{c: a_i^c = a} visit(c)`` on the ``(batch, N, A)`` grid.
+
+    The action-axis form of the ``visit`` target, and exactly what the C++
+    tree's ``get_marginal_visit_count`` (``cnode.cpp:95-105``) computes -- the
+    same scatter, on the reanalyze targets rather than on a live tree, so it is
+    usable as a training target without plumbing the search output through the
+    replay buffer.
+
+    Deliberately NOT normalized. ``visit_step`` is already the normalized root
+    visit distribution, so scattering it onto actions preserves the total mass,
+    which is what makes the resulting loss equal the ``visit`` loss term for
+    term rather than merely proportional to it.
+
+    Arguments mirror :func:`agent_marginal_target`: ``actions_step``
+    ``(batch, C, N)`` integer joint actions, ``visit_step`` ``(batch, C)``
+    normalized root visit counts, ``mask_step`` ``(batch, C)`` live-child mask.
+    """
+    batch, _, num_agents = actions_step.shape
+    # (batch, N, C), agent-major, matching log_prob_full's (batch, N, A).
+    idx = actions_step.permute(0, 2, 1).long()
+    # fp32 for the same reason as agent_marginal_target: scatter_add_ in fp16
+    # loses counts once several children share an action, which is precisely
+    # the regime this target exists to represent.
+    w = (visit_step * mask_step).float().unsqueeze(1).expand(-1, num_agents, -1)
+    shape = (batch, num_agents, action_space_size)
+    return torch.zeros(shape, dtype=torch.float32,
+                       device=actions_step.device).scatter_add_(2, idx, w)
+
+
 def policy_target_weights(target_sampled_adv_step, sampled_action_mask_step,
                           temperature, visit_policy_step=None):
     """Per-agent policy-target weights from the search's OWN advantage estimates.
@@ -257,6 +288,25 @@ def policy_loss_step(config, per_agent_log_prob, sampled_actions_log_prob,
             * target_sampled_policies_step                      # visit count
             * sampled_action_mask_step                          # mask invalid actions
         ).sum(dim=1)
+    if target_type == "marginal_visit":
+        # The ACTION-AXIS formulation of `visit`, i.e. what the C++ tree's
+        # get_marginal_visit_count (cnode.cpp:95-105) produces:
+        #     W_i(a) = sum_{c: a_i^c = a} visit(c)
+        # scored against log_prob_full instead of against the summed
+        # per-child log-prob.
+        #
+        # This is mathematically IDENTICAL to `visit` above -- the factorized
+        # head makes the two reassociations of the same sum, and both
+        # normalizers are num_simulations, so not even a scale factor differs
+        # (see the module docstring; test_policy_target_agent_marginal.py pins
+        # the algebra, test_marginal_visit_equals_visit_loss pins THIS code
+        # path numerically). It is kept as a separate branch only so the
+        # equivalence can be exercised end-to-end rather than argued: the two
+        # branches share no tensor operations.
+        W = marginal_visit_target(
+            target_sampled_actions_step, target_sampled_policies_step,
+            sampled_action_mask_step, config.action_space_size)   # (batch, N, A)
+        return -(log_prob_full.float() * W).sum(dim=(1, 2))
     if target_type in ("agent_q_softmax", "agent_q_blend"):
         # Action-axis (per-agent marginal) targets: aggregate children onto
         # actions by a visit-weighted AVERAGE inside the exponent, which drops

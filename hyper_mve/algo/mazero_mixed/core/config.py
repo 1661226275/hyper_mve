@@ -129,8 +129,9 @@ def parse_args(args):
                         help="clip parameter in advantage (default: %(default)s)")
     groups.add_argument("--PG_type", type=str, default="none", choices=["none", "sharp", "raw"], help="type of PG loss")
     groups.add_argument("--policy_target_type", type=str, default="visit",
-                        choices=["visit", "q_softmax", "visit_q_blend",
-                                 "agent_q_softmax", "agent_q_blend"],
+                        choices=["visit", "marginal_visit", "q_softmax",
+                                 "visit_q_blend", "agent_q_softmax",
+                                 "agent_q_blend"],
                         help="Source of the policy target under PG_type=none. Because the policy "
                              "head is factorized, every choice here is really an AGGREGATION RULE "
                              "mapping the root's sampled children onto per-agent action slots -- "
