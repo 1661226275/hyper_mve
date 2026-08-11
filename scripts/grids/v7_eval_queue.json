@@ -1,0 +1,76 @@
+[
+  {
+    "name": "nc_mamba",
+    "_why": "NashConv for the strongest baseline, br=100k. BLOCKED until tier-1 mamba writes its checkpoint -- `requires` makes the queue wait rather than needing a hand launch.",
+    "requires": ["results_v7_500k/mamba/relation_coopmix/seed0/ckpt.pt"],
+    "expect": "results_v7_500k/mamba/relation_coopmix/seed0/game_metrics_br100000.json",
+    "cmd": ["python", "scripts/eval_game_metrics.py",
+            "--ckpt", "results_v7_500k/mamba/relation_coopmix/seed0/ckpt.pt",
+            "--external", "mamba", "--preset", "rel_coopmix",
+            "--br-steps", "100000", "--episodes", "16",
+            "--out", "results_v7_500k/mamba/relation_coopmix/seed0/game_metrics_br100000.json"]
+  },
+  {
+    "name": "nc_abl_cover",
+    "_why": "NashConv for the star root-cover arm, planner mode. Return already puts it 10.9 below the method; NashConv tests whether the star-multiplicity mechanism also costs individual optimality, which is the metric the search arms were originally selected on.",
+    "requires": ["results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_cover/relation_coopmix/seed0/ckpt.pt"],
+    "expect": "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_cover/relation_coopmix/seed0/game_metrics_br100000_planner.json",
+    "cmd": ["python", "scripts/eval_game_metrics.py",
+            "--ckpt", "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_cover/relation_coopmix/seed0/ckpt.pt",
+            "--external", "mazero_mixed", "--preset", "rel_coopmix",
+            "--frozen-mode", "planner", "--br-steps", "100000", "--episodes", "16",
+            "--out", "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_cover/relation_coopmix/seed0/game_metrics_br100000_planner.json"]
+  },
+  {
+    "name": "nc_abl_qtarget",
+    "_why": "NashConv for the q_softmax target arm, planner mode. Completes the search-module ablation on the individual-optimality axis.",
+    "requires": ["results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_qtarget/relation_coopmix/seed0/ckpt.pt"],
+    "expect": "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_qtarget/relation_coopmix/seed0/game_metrics_br100000_planner.json",
+    "cmd": ["python", "scripts/eval_game_metrics.py",
+            "--ckpt", "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_qtarget/relation_coopmix/seed0/ckpt.pt",
+            "--external", "mazero_mixed", "--preset", "rel_coopmix",
+            "--frozen-mode", "planner", "--br-steps", "100000", "--episodes", "16",
+            "--out", "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_qtarget/relation_coopmix/seed0/game_metrics_br100000_planner.json"]
+  },
+  {
+    "name": "belief_probe_no_subjective_control",
+    "_why": "Belief settle-time + value swing on the Module-1 ABLATION, as the control for the same probe already run on the method. The method's posterior can only be shown to do work if the arm without the subjective module differs on it.",
+    "requires": ["results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_no_subjective_decoupled/relation_coopmix/seed0/ckpt.pt"],
+    "cmd": ["python", "scripts/probes/belief_confusion_probe.py",
+            "--run-dir", "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_no_subjective_decoupled/relation_coopmix/seed0",
+            "--episodes", "32", "--gpus", "{gpu}"]
+  },
+  {
+    "name": "nc_gen_method_holdout",
+    "_why": "NashConv for the method trained on the holdout partition, planner mode. Zero-shot individual optimality on g3/g4 is the generalization claim's own metric, not just held-out return.",
+    "requires": ["results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled/relation_coopmix_holdout/seed0/ckpt.pt"],
+    "expect": "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled/relation_coopmix_holdout/seed0/game_metrics_br100000_planner.json",
+    "cmd": ["python", "scripts/eval_game_metrics.py",
+            "--ckpt", "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled/relation_coopmix_holdout/seed0/ckpt.pt",
+            "--external", "mazero_mixed", "--preset", "rel_coopmix_holdout",
+            "--frozen-mode", "planner", "--br-steps", "100000", "--episodes", "16",
+            "--out", "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled/relation_coopmix_holdout/seed0/game_metrics_br100000_planner.json"]
+  },
+  {
+    "name": "nc_gen_happo_holdout",
+    "_why": "Generalization NashConv comparison point. Cheap (~1h) and model-free, so it means what it appears to mean.",
+    "requires": ["results_v7_500k/happo/relation_coopmix_holdout/seed0/ckpt.pt"],
+    "expect": "results_v7_500k/happo/relation_coopmix_holdout/seed0/game_metrics_br100000.json",
+    "cmd": ["python", "scripts/eval_game_metrics.py",
+            "--ckpt", "results_v7_500k/happo/relation_coopmix_holdout/seed0/ckpt.pt",
+            "--external", "happo", "--preset", "rel_coopmix_holdout",
+            "--br-steps", "100000", "--episodes", "16",
+            "--out", "results_v7_500k/happo/relation_coopmix_holdout/seed0/game_metrics_br100000.json"]
+  },
+  {
+    "name": "nc_mamba_holdout",
+    "_why": "Generalization NashConv for the strongest baseline. Last: mamba's holdout run is the slowest thing in the wave.",
+    "requires": ["results_v7_500k/mamba/relation_coopmix_holdout/seed0/ckpt.pt"],
+    "expect": "results_v7_500k/mamba/relation_coopmix_holdout/seed0/game_metrics_br100000.json",
+    "cmd": ["python", "scripts/eval_game_metrics.py",
+            "--ckpt", "results_v7_500k/mamba/relation_coopmix_holdout/seed0/ckpt.pt",
+            "--external", "mamba", "--preset", "rel_coopmix_holdout",
+            "--br-steps", "100000", "--episodes", "16",
+            "--out", "results_v7_500k/mamba/relation_coopmix_holdout/seed0/game_metrics_br100000.json"]
+  }
+]

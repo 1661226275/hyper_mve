@@ -76,7 +76,47 @@ def busy_gpus() -> set:
     return busy
 
 
+def job_expect(job: dict) -> str | None:
+    """Path whose existence means the job really produced its artefact.
+
+    Exit code alone is not enough for the training jobs (a run that dies after
+    training but before eval exits 0 from some shells), and for a restarted
+    scheduler there is no exit code at all -- the Popen handle died with the
+    previous process. Explicit for ``cmd`` jobs; defaults to the eval report for
+    train jobs.
+    """
+    if "expect" in job:
+        return job["expect"] or None
+    if "cmd" in job:
+        return None
+    return os.path.join(job["out"], _run_rel(job), "eval_report.json")
+
+
+def job_ready(job: dict) -> bool:
+    """False while an input this job needs has not been produced yet.
+
+    Lets a NashConv job sit in the queue behind the training run whose
+    checkpoint it consumes, instead of being launched by hand once that run
+    happens to finish.
+    """
+    for path in job.get("requires") or ():
+        if not os.path.exists(path):
+            return False
+    return True
+
+
 def build_cmd(job: dict, gpu: int) -> list:
+    if "cmd" in job:
+        # `{gpu}` lets a job that takes its own GPU flag place it; if it uses no
+        # placeholder the card is handed over via CUDA_VISIBLE_DEVICES instead
+        # (see build_env), so both conventions work unchanged.
+        cmd = [str(tok).format(gpu=gpu) for tok in job["cmd"]]
+        # A bare "python" would resolve against PATH, which is not the conda env
+        # this queue runs under -- the failure mode is a torch-less interpreter
+        # several hours into a wave. Pin it to our own.
+        if cmd and cmd[0] == "python":
+            cmd[0] = PYTHON
+        return cmd
     cmd = [
         PYTHON, os.path.join(REPO_ROOT, "scripts", "train.py"),
         "--algo", str(job["algo"]),
@@ -94,6 +134,13 @@ def build_cmd(job: dict, gpu: int) -> list:
     if job.get("env_steps_per_grad"):
         cmd += ["--env-steps-per-grad", str(int(job["env_steps_per_grad"]))]
     return cmd
+
+
+def build_env(job: dict, gpu: int) -> dict:
+    env = dict(os.environ)
+    if "cmd" in job and not any("{gpu}" in str(t) for t in job["cmd"]):
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    return env
 
 
 def load_state(path: pathlib.Path, queue: list) -> dict:
@@ -140,8 +187,13 @@ def print_status(state: dict) -> int:
         if j.get("started"):
             end = j.get("finished") or now
             el = f"{(end - j['started']) / 3600:.2f}h"
-        print(f"{j['status']:>8}  {str(j.get('gpu') or '-'):>3}  "
-              f"{j['name']:<52} {el:>9}")
+        # `or '-'` would print GPU 0 as '-': 0 is falsy.
+        gpu = j.get("gpu")
+        gpu_s = "-" if gpu is None else str(gpu)
+        status = j["status"]
+        if status == "pending" and not job_ready(j):
+            status = "blocked"
+        print(f"{status:>8}  {gpu_s:>3}  {j['name']:<52} {el:>9}")
     n = {k: sum(1 for j in state["jobs"] if j["status"] == k)
          for k in ("pending", "running", "done", "failed")}
     print(f"\npending {n['pending']}  running {n['running']}  "
@@ -175,6 +227,7 @@ def main(argv=None) -> int:
     logdir = args.logdir or (args.state.parent / "logs")
     logdir.mkdir(parents=True, exist_ok=True)
     just_launched: dict = {}                 # gpu -> monotonic launch time
+    handles: dict = {}                       # pid -> Popen, for exit codes
 
     print(f"[queue] {len(state['jobs'])} jobs, pool {pool}, "
           f"poll {args.poll}s, cooldown {args.cooldown}s", flush=True)
@@ -184,11 +237,21 @@ def main(argv=None) -> int:
         for j in state["jobs"]:
             if j["status"] == "running" and not alive(j["pid"]):
                 j["finished"] = time.time()
-                rep = pathlib.Path(j["out"]) / _run_rel(j) / "eval_report.json"
-                j["returncode"] = 0 if rep.exists() else 1
-                j["status"] = "done" if rep.exists() else "failed"
+                proc = handles.pop(j["pid"], None)
+                rc = proc.poll() if proc is not None else None
+                expect = job_expect(j)
+                produced = expect is None or os.path.exists(expect)
+                # An exit code is authoritative when we still have the handle;
+                # after a scheduler restart there is none, so fall back to the
+                # artefact. Both must agree when both are available.
+                ok = produced and (rc in (0, None))
+                j["returncode"] = rc
+                j["status"] = "done" if ok else "failed"
+                why = "" if ok else (
+                    f" (rc={rc}, missing {expect})" if not produced
+                    else f" (rc={rc})")
                 print(f"[queue] {j['status'].upper()} {j['name']} "
-                      f"(gpu {j['gpu']})", flush=True)
+                      f"(gpu {j['gpu']}){why}", flush=True)
                 save_state(args.state, state)
 
         pending = [j for j in state["jobs"] if j["status"] == "pending"]
@@ -196,6 +259,17 @@ def main(argv=None) -> int:
         if not pending and not running:
             print("[queue] all jobs finished", flush=True)
             return 0
+
+        # A job whose inputs do not exist yet is not launchable, but it is also
+        # not skipped -- it is simply passed over until the run it depends on
+        # produces them. Blocked jobs must not consume the GPU slot.
+        blocked = [j for j in pending if not job_ready(j)]
+        pending = [j for j in pending if job_ready(j)]
+        if blocked and not running and not pending:
+            print("[queue] DEADLOCK: only blocked jobs remain -- "
+                  + ", ".join(f"{j['name']} needs {j.get('requires')}"
+                              for j in blocked), flush=True)
+            return 1
 
         # ---- find launchable GPUs
         if pending:
@@ -215,7 +289,9 @@ def main(argv=None) -> int:
                 with open(log, "ab") as fh:
                     proc = subprocess.Popen(
                         cmd, stdout=fh, stderr=subprocess.STDOUT,
-                        cwd=REPO_ROOT, start_new_session=True)
+                        cwd=REPO_ROOT, start_new_session=True,
+                        env=build_env(job, gpu))
+                handles[proc.pid] = proc
                 job.update(status="running", pid=proc.pid, gpu=gpu,
                            started=time.time())
                 just_launched[gpu] = time.monotonic()
