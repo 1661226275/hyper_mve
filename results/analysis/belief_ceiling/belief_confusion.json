@@ -1,80 +1,80 @@
 {
-  "ref_bc_anneal_scaled_hardval_decoupled/relation_recip/seed0": {
-    "overall_acc": 0.5565,
+  "ref_bc_anneal_scaled_hardval_decoupled/relation_coopmix/seed0": {
+    "overall_acc": 0.47965625,
     "per_regime_acc": {
-      "0": 0.7125,
-      "1": 1.0,
-      "2": 0.0,
-      "3": 0.07,
-      "4": 1.0
+      "0": 0.97234375,
+      "1": 0.308125,
+      "2": 0.0003125,
+      "3": 0.21640625,
+      "4": 0.90109375
     },
     "confusion": [
       [
-        570,
-        0,
-        0,
-        230,
-        0
-      ],
-      [
-        0,
-        800,
-        0,
+        6223,
+        134,
+        43,
         0,
         0
       ],
       [
-        384,
-        400,
-        0,
-        16,
+        3072,
+        1972,
+        128,
+        1228,
         0
       ],
       [
-        344,
-        400,
-        0,
-        56,
+        3194,
+        2384,
+        2,
+        820,
         0
+      ],
+      [
+        0,
+        1989,
+        2,
+        1385,
+        3024
       ],
       [
         0,
         0,
         0,
-        0,
-        800
+        633,
+        5767
       ]
     ],
     "settle_time": {
       "0.35": {
         "0": {
-          "n_traj": 8,
-          "n_settled": 6,
-          "never_settled_frac": 0.25,
-          "t_star_min": 11,
-          "t_star_p25": 40.0,
-          "t_star_median": 67.0,
-          "t_star_p75": 73.75,
-          "t_star_max": 77,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 5.841792583912611,
-          "value_swing_post_settle": 3.9847668882633465
-        },
-        "1": {
-          "n_traj": 8,
-          "n_settled": 8,
-          "never_settled_frac": 0.0,
+          "n_traj": 64,
+          "n_settled": 62,
+          "never_settled_frac": 0.03125,
           "t_star_min": 0,
           "t_star_p25": 0.0,
           "t_star_median": 0.0,
           "t_star_p75": 0.0,
-          "t_star_max": 0,
+          "t_star_max": 45,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.629019732326269,
-          "value_swing_post_settle": 6.629019732326269
+          "value_swing_mean": 2.9924517184225263,
+          "value_swing_post_settle": 2.8180958089198107
+        },
+        "1": {
+          "n_traj": 64,
+          "n_settled": 20,
+          "never_settled_frac": 0.6875,
+          "t_star_min": 0,
+          "t_star_p25": 15.75,
+          "t_star_median": 63.5,
+          "t_star_p75": 97.0,
+          "t_star_max": 99,
+          "episode_len_mean": 100.0,
+          "value_swing_mean": 1.8565470894778264,
+          "value_swing_post_settle": 0.10574124543306496
         },
         "2": {
-          "n_traj": 8,
+          "n_traj": 64,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -83,106 +83,106 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.588283164799213,
+          "value_swing_mean": 1.7471712100866716,
           "value_swing_post_settle": null
         },
         "3": {
-          "n_traj": 8,
+          "n_traj": 64,
+          "n_settled": 13,
+          "never_settled_frac": 0.796875,
+          "t_star_min": 5,
+          "t_star_p25": 23.0,
+          "t_star_median": 63.0,
+          "t_star_p75": 96.0,
+          "t_star_max": 99,
+          "episode_len_mean": 100.0,
+          "value_swing_mean": 2.6809753574206847,
+          "value_swing_post_settle": 0.13511850214514398
+        },
+        "4": {
+          "n_traj": 64,
+          "n_settled": 55,
+          "never_settled_frac": 0.140625,
+          "t_star_min": 0,
+          "t_star_p25": 0.0,
+          "t_star_median": 2.0,
+          "t_star_p75": 51.0,
+          "t_star_max": 99,
+          "episode_len_mean": 100.0,
+          "value_swing_mean": 0.9531058967579883,
+          "value_swing_post_settle": 0.5617146264957973
+        }
+      },
+      "0.50": {
+        "0": {
+          "n_traj": 64,
+          "n_settled": 62,
+          "never_settled_frac": 0.03125,
+          "t_star_min": 0,
+          "t_star_p25": 0.0,
+          "t_star_median": 0.0,
+          "t_star_p75": 0.0,
+          "t_star_max": 48,
+          "episode_len_mean": 100.0,
+          "value_swing_mean": 2.9924517184225263,
+          "value_swing_post_settle": 2.801894538269656
+        },
+        "1": {
+          "n_traj": 64,
           "n_settled": 1,
+          "never_settled_frac": 0.984375,
+          "t_star_min": 97,
+          "t_star_p25": 97.0,
+          "t_star_median": 97.0,
+          "t_star_p75": 97.0,
+          "t_star_max": 97,
+          "episode_len_mean": 100.0,
+          "value_swing_mean": 1.8565470894778264,
+          "value_swing_post_settle": 0.02850101391474406
+        },
+        "2": {
+          "n_traj": 64,
+          "n_settled": 0,
+          "never_settled_frac": 1.0,
+          "t_star_min": null,
+          "t_star_p25": null,
+          "t_star_median": null,
+          "t_star_p75": null,
+          "t_star_max": null,
+          "episode_len_mean": 100.0,
+          "value_swing_mean": 1.7471712100866716,
+          "value_swing_post_settle": null
+        },
+        "3": {
+          "n_traj": 64,
+          "n_settled": 8,
           "never_settled_frac": 0.875,
-          "t_star_min": 98,
-          "t_star_p25": 98.0,
-          "t_star_median": 98.0,
-          "t_star_p75": 98.0,
-          "t_star_max": 98,
+          "t_star_min": 17,
+          "t_star_p25": 32.25,
+          "t_star_median": 69.5,
+          "t_star_p75": 97.5,
+          "t_star_max": 99,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.16662509508431,
-          "value_swing_post_settle": 1.705163836479187
+          "value_swing_mean": 2.6809753574206847,
+          "value_swing_post_settle": 0.20287465036815752
         },
         "4": {
-          "n_traj": 8,
-          "n_settled": 8,
-          "never_settled_frac": 0.0,
+          "n_traj": 64,
+          "n_settled": 55,
+          "never_settled_frac": 0.140625,
           "t_star_min": 0,
           "t_star_p25": 0.0,
-          "t_star_median": 0.0,
-          "t_star_p75": 0.0,
-          "t_star_max": 0,
+          "t_star_median": 2.0,
+          "t_star_p75": 51.0,
+          "t_star_max": 99,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 0.0,
-          "value_swing_post_settle": 0.0
-        }
-      },
-      "0.50": {
-        "0": {
-          "n_traj": 8,
-          "n_settled": 6,
-          "never_settled_frac": 0.25,
-          "t_star_min": 76,
-          "t_star_p25": 79.25,
-          "t_star_median": 83.0,
-          "t_star_p75": 92.0,
-          "t_star_max": 98,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 5.841792583912611,
-          "value_swing_post_settle": 3.151004827334211
-        },
-        "1": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 6.629019732326269,
-          "value_swing_post_settle": null
-        },
-        "2": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 6.588283164799213,
-          "value_swing_post_settle": null
-        },
-        "3": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 6.16662509508431,
-          "value_swing_post_settle": null
-        },
-        "4": {
-          "n_traj": 8,
-          "n_settled": 8,
-          "never_settled_frac": 0.0,
-          "t_star_min": 0,
-          "t_star_p25": 0.0,
-          "t_star_median": 0.0,
-          "t_star_p75": 0.0,
-          "t_star_max": 0,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 0.0,
-          "value_swing_post_settle": 0.0
+          "value_swing_mean": 0.9531058967579883,
+          "value_swing_post_settle": 0.5617146264957973
         }
       },
       "0.70": {
         "0": {
-          "n_traj": 8,
+          "n_traj": 64,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -191,11 +191,11 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 5.841792583912611,
+          "value_swing_mean": 2.9924517184225263,
           "value_swing_post_settle": null
         },
         "1": {
-          "n_traj": 8,
+          "n_traj": 64,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -204,11 +204,11 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.629019732326269,
+          "value_swing_mean": 1.8565470894778264,
           "value_swing_post_settle": null
         },
         "2": {
-          "n_traj": 8,
+          "n_traj": 64,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -217,11 +217,11 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.588283164799213,
+          "value_swing_mean": 1.7471712100866716,
           "value_swing_post_settle": null
         },
         "3": {
-          "n_traj": 8,
+          "n_traj": 64,
           "n_settled": 0,
           "never_settled_frac": 1.0,
           "t_star_min": null,
@@ -230,295 +230,26 @@
           "t_star_p75": null,
           "t_star_max": null,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 6.16662509508431,
+          "value_swing_mean": 2.6809753574206847,
           "value_swing_post_settle": null
         },
         "4": {
-          "n_traj": 8,
-          "n_settled": 8,
-          "never_settled_frac": 0.0,
-          "t_star_min": 0,
-          "t_star_p25": 0.0,
-          "t_star_median": 0.0,
-          "t_star_p75": 0.0,
-          "t_star_max": 0,
+          "n_traj": 64,
+          "n_settled": 46,
+          "never_settled_frac": 0.28125,
+          "t_star_min": 5,
+          "t_star_p25": 18.25,
+          "t_star_median": 42.5,
+          "t_star_p75": 77.0,
+          "t_star_max": 99,
           "episode_len_mean": 100.0,
-          "value_swing_mean": 0.0,
-          "value_swing_post_settle": 0.0
+          "value_swing_mean": 0.9531058967579883,
+          "value_swing_post_settle": 0.1961057705977572
         }
       }
     },
-    "vswing_wrong_mean": 6.658983104023347,
-    "vswing_correct_mean": 3.759002890548295,
-    "maxprob_wrong_mean": 0.4818471266794635,
-    "planner_dist_overall": 0.59125,
-    "planner_dist_per_regime": {
-      "0": 0.795,
-      "1": 1.0,
-      "2": 0.0,
-      "3": 0.16125,
-      "4": 1.0
-    }
-  },
-  "ref_bc_anneal_scaled_hardval_decoupled/relation_recip/seed1": {
-    "overall_acc": 0.6165,
-    "per_regime_acc": {
-      "0": 1.0,
-      "1": 0.89875,
-      "2": 0.0,
-      "3": 0.18375,
-      "4": 1.0
-    },
-    "confusion": [
-      [
-        800,
-        0,
-        0,
-        0,
-        0
-      ],
-      [
-        0,
-        719,
-        0,
-        81,
-        0
-      ],
-      [
-        400,
-        277,
-        0,
-        123,
-        0
-      ],
-      [
-        400,
-        253,
-        0,
-        147,
-        0
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        800
-      ]
-    ],
-    "settle_time": {
-      "0.35": {
-        "0": {
-          "n_traj": 8,
-          "n_settled": 8,
-          "never_settled_frac": 0.0,
-          "t_star_min": 0,
-          "t_star_p25": 0.0,
-          "t_star_median": 0.0,
-          "t_star_p75": 0.0,
-          "t_star_max": 0,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 3.413898432180286,
-          "value_swing_post_settle": 3.413898432180286
-        },
-        "1": {
-          "n_traj": 8,
-          "n_settled": 7,
-          "never_settled_frac": 0.125,
-          "t_star_min": 2,
-          "t_star_p25": 28.0,
-          "t_star_median": 74.0,
-          "t_star_p75": 91.5,
-          "t_star_max": 99,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8817420746572315,
-          "value_swing_post_settle": 2.3208878318002486
-        },
-        "2": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8464067933801562,
-          "value_swing_post_settle": null
-        },
-        "3": {
-          "n_traj": 8,
-          "n_settled": 3,
-          "never_settled_frac": 0.625,
-          "t_star_min": 87,
-          "t_star_p25": 88.0,
-          "t_star_median": 89.0,
-          "t_star_p75": 90.5,
-          "t_star_max": 92,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 4.308216930180788,
-          "value_swing_post_settle": 1.9547299102712898
-        },
-        "4": {
-          "n_traj": 8,
-          "n_settled": 8,
-          "never_settled_frac": 0.0,
-          "t_star_min": 0,
-          "t_star_p25": 0.0,
-          "t_star_median": 0.0,
-          "t_star_p75": 0.0,
-          "t_star_max": 0,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 0.0,
-          "value_swing_post_settle": 0.0
-        }
-      },
-      "0.50": {
-        "0": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 3.413898432180286,
-          "value_swing_post_settle": null
-        },
-        "1": {
-          "n_traj": 8,
-          "n_settled": 2,
-          "never_settled_frac": 0.75,
-          "t_star_min": 88,
-          "t_star_p25": 90.75,
-          "t_star_median": 93.5,
-          "t_star_p75": 96.25,
-          "t_star_max": 99,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8817420746572315,
-          "value_swing_post_settle": 0.9720075769970814
-        },
-        "2": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8464067933801562,
-          "value_swing_post_settle": null
-        },
-        "3": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 4.308216930180788,
-          "value_swing_post_settle": null
-        },
-        "4": {
-          "n_traj": 8,
-          "n_settled": 8,
-          "never_settled_frac": 0.0,
-          "t_star_min": 0,
-          "t_star_p25": 0.0,
-          "t_star_median": 0.0,
-          "t_star_p75": 0.0,
-          "t_star_max": 0,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 0.0,
-          "value_swing_post_settle": 0.0
-        }
-      },
-      "0.70": {
-        "0": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 3.413898432180286,
-          "value_swing_post_settle": null
-        },
-        "1": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8817420746572315,
-          "value_swing_post_settle": null
-        },
-        "2": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 3.8464067933801562,
-          "value_swing_post_settle": null
-        },
-        "3": {
-          "n_traj": 8,
-          "n_settled": 0,
-          "never_settled_frac": 1.0,
-          "t_star_min": null,
-          "t_star_p25": null,
-          "t_star_median": null,
-          "t_star_p75": null,
-          "t_star_max": null,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 4.308216930180788,
-          "value_swing_post_settle": null
-        },
-        "4": {
-          "n_traj": 8,
-          "n_settled": 8,
-          "never_settled_frac": 0.0,
-          "t_star_min": 0,
-          "t_star_p25": 0.0,
-          "t_star_median": 0.0,
-          "t_star_p75": 0.0,
-          "t_star_max": 0,
-          "episode_len_mean": 100.0,
-          "value_swing_mean": 0.0,
-          "value_swing_post_settle": 0.0
-        }
-      }
-    },
-    "vswing_wrong_mean": 4.245103135185299,
-    "vswing_correct_mean": 2.3715422445030496,
-    "maxprob_wrong_mean": 0.47701102508792975,
-    "planner_dist_overall": 0.617,
-    "planner_dist_per_regime": {
-      "0": 1.0,
-      "1": 0.78125,
-      "2": 0.0,
-      "3": 0.30375,
-      "4": 1.0
-    }
+    "vswing_wrong_mean": 2.49014256336908,
+    "vswing_correct_mean": 1.564287205629156,
+    "maxprob_wrong_mean": 0.5463100685156055
   }
 }
