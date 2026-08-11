@@ -1,0 +1,107 @@
+[
+  {
+    "name": "abl_module1_no_subjective",
+    "_why": "Role-awareness (Module-1) ablation, matched to the method: same scaled anneal, same decoupled selection. Disclosed asymmetry: removing the subjective module deletes the per-regime value heads, so --value_hard_select is necessarily absent (arms.py:225). This is the headline ablation.",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_no_subjective_decoupled",
+    "env": "relation_coopmix",
+    "seed": 0,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_method_holdout",
+    "_why": "Generalization, method arm. Trains on (0,1,2), zero-shot on (3,4). g4 tests an unseen own-row VALUE, g3 an unseen COMBINATION -- report them separately, never as one held-out score.",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled",
+    "env": "relation_coopmix_holdout",
+    "seed": 0,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_qtarget",
+    "_why": "Search-module ablation: policy target q_softmax instead of the method's default visit-count. The visit-count cell needs NO retraining (the method of record already is visit-count) and marginal_visit_count is a proven no-op, so this is the informative target-axis cell.",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_qtarget",
+    "env": "relation_coopmix",
+    "seed": 0,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_cover",
+    "_why": "Search-module ablation: star root-cover enumeration, target stays visit-count. Re-selection is required regardless of prior results -- these arms were originally chosen on g1 NashConv, and g1 no longer exists.",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_cover",
+    "env": "relation_coopmix",
+    "seed": 0,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_mamba_holdout",
+    "_why": "Generalization comparison: strongest baseline on the same holdout partition. Without it the method's zero-shot number has nothing to be compared against.",
+    "algo": "mamba",
+    "env": "relation_coopmix_holdout",
+    "seed": 0,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_happo_holdout",
+    "_why": "Generalization comparison: cheapest baseline (~0.7h), model-free reference point.",
+    "algo": "happo",
+    "env": "relation_coopmix_holdout",
+    "seed": 0,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_m3w_holdout",
+    "_why": "Generalization comparison: the other search-based, world-model baseline.",
+    "algo": "m3w_adapted",
+    "env": "relation_coopmix_holdout",
+    "seed": 0,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_mbom_holdout",
+    "_why": "Generalization comparison: opponent-modelling baseline. Last in the queue -- per-role metrics only, it is excluded from NashConv on cost grounds.",
+    "algo": "mbom",
+    "env": "relation_coopmix_holdout",
+    "seed": 0,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_mctsfix",
+    "_why": "Search-module ablation: both root-cover AND q_softmax. Lowest priority -- it is the interaction cell, only interpretable once the two single-factor cells above are in.",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_mctsfix",
+    "env": "relation_coopmix",
+    "seed": 0,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  }
+]

@@ -1,0 +1,240 @@
+#!/usr/bin/env python
+"""GPU-scheduling job queue: run a list of training jobs as GPUs free up.
+
+Why this exists
+---------------
+A wave is more jobs than GPUs, and the GPUs do not free up together — a happo
+run finishes in under an hour while mamba holds its card for ~19. Launching by
+hand either idles cards or oversubscribes them. This keeps a candidate GPU pool
+saturated: poll, find genuinely idle cards, start the next pending job, repeat
+until the queue drains.
+
+It deliberately decides idleness from **nvidia-smi compute apps**, not from its
+own bookkeeping alone, so it also absorbs cards freed by runs it did not launch
+(e.g. a separately-launched tier-1 wave). Two guards stop it from
+double-booking a card: a cooldown after each launch (a fresh process takes tens
+of seconds to allocate, and would otherwise still look idle on the next poll),
+and its own live PIDs are always treated as busy.
+
+Crash-safety: state is written to disk after every transition, so the queue can
+be inspected while running and resumed after a restart — jobs already `done`
+are never re-run.
+
+Usage::
+
+    # write a queue file (list of job dicts), then:
+    setsid nohup python scripts/train_queue.py \
+        --queue scripts/grids/v7_tier2_queue.json \
+        --gpus 5,6,7,8,0,1,2,3,4 \
+        --state results_v7_500k/queue_state.json \
+        --logdir /path/to/logs > /path/to/queue.log 2>&1 &
+
+    # check progress at any time:
+    python scripts/train_queue.py --state results_v7_500k/queue_state.json --status
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pathlib
+import shlex
+import subprocess
+import sys
+import time
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+PYTHON = sys.executable
+
+
+def _gpu_index_by_uuid() -> dict:
+    out = subprocess.run(
+        ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"],
+        capture_output=True, text=True, check=True).stdout
+    m = {}
+    for line in out.strip().splitlines():
+        idx, uuid = [p.strip() for p in line.split(",", 1)]
+        m[uuid] = int(idx)
+    return m
+
+
+def busy_gpus() -> set:
+    """GPU indices with at least one live compute process."""
+    by_uuid = _gpu_index_by_uuid()
+    out = subprocess.run(
+        ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid",
+         "--format=csv,noheader"],
+        capture_output=True, text=True, check=True).stdout
+    busy = set()
+    for line in out.strip().splitlines():
+        if not line.strip():
+            continue
+        uuid = line.split(",", 1)[0].strip()
+        if uuid in by_uuid:
+            busy.add(by_uuid[uuid])
+    return busy
+
+
+def build_cmd(job: dict, gpu: int) -> list:
+    cmd = [
+        PYTHON, os.path.join(REPO_ROOT, "scripts", "train.py"),
+        "--algo", str(job["algo"]),
+        "--env", str(job.get("env", "relation_coopmix")),
+        "--seed", str(int(job.get("seed", 0))),
+        "--total-env-steps", str(int(job.get("total_env_steps", 500_000))),
+        "--episodes", str(int(job.get("episodes", 128))),
+        "--gpus", str(gpu),
+        "--out", str(job["out"]),
+    ]
+    if job.get("ablation") and job["ablation"] != "none":
+        cmd += ["--ablation", str(job["ablation"])]
+    if job.get("num_pmcts"):
+        cmd += ["--num-pmcts", str(int(job["num_pmcts"]))]
+    if job.get("env_steps_per_grad"):
+        cmd += ["--env-steps-per-grad", str(int(job["env_steps_per_grad"]))]
+    return cmd
+
+
+def load_state(path: pathlib.Path, queue: list) -> dict:
+    if path.exists():
+        state = json.loads(path.read_text())
+        known = {j["name"] for j in state["jobs"]}
+        for j in queue:                      # allow appending to a live queue
+            if j["name"] not in known:
+                state["jobs"].append({**j, "status": "pending", "pid": None,
+                                      "gpu": None, "started": None,
+                                      "finished": None, "returncode": None})
+        return state
+    return {"jobs": [{**j, "status": "pending", "pid": None, "gpu": None,
+                      "started": None, "finished": None, "returncode": None}
+                     for j in queue]}
+
+
+def save_state(path: pathlib.Path, state: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    tmp.replace(path)
+
+
+def alive(pid) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def print_status(state: dict) -> int:
+    order = {"running": 0, "pending": 1, "done": 2, "failed": 3}
+    rows = sorted(state["jobs"], key=lambda j: (order.get(j["status"], 9),
+                                                j["name"]))
+    print(f"{'status':>8}  {'gpu':>3}  {'name':<52} {'elapsed':>9}")
+    print("-" * 80)
+    now = time.time()
+    for j in rows:
+        el = ""
+        if j.get("started"):
+            end = j.get("finished") or now
+            el = f"{(end - j['started']) / 3600:.2f}h"
+        print(f"{j['status']:>8}  {str(j.get('gpu') or '-'):>3}  "
+              f"{j['name']:<52} {el:>9}")
+    n = {k: sum(1 for j in state["jobs"] if j["status"] == k)
+         for k in ("pending", "running", "done", "failed")}
+    print(f"\npending {n['pending']}  running {n['running']}  "
+          f"done {n['done']}  failed {n['failed']}")
+    return 0
+
+
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--queue", type=pathlib.Path, default=None,
+                   help="JSON list of job dicts")
+    p.add_argument("--state", type=pathlib.Path, required=True)
+    p.add_argument("--gpus", default="5,6,7,8",
+                   help="candidate GPU pool, in preference order")
+    p.add_argument("--logdir", type=pathlib.Path, default=None)
+    p.add_argument("--poll", type=int, default=60, help="seconds between polls")
+    p.add_argument("--cooldown", type=int, default=300,
+                   help="seconds a just-launched GPU is treated as busy")
+    p.add_argument("--status", action="store_true",
+                   help="print the state file and exit")
+    args = p.parse_args(argv)
+
+    if args.status:
+        return print_status(json.loads(args.state.read_text()))
+
+    queue = json.loads(args.queue.read_text()) if args.queue else []
+    state = load_state(args.state, queue)
+    save_state(args.state, state)
+
+    pool = [int(x) for x in args.gpus.split(",") if x.strip()]
+    logdir = args.logdir or (args.state.parent / "logs")
+    logdir.mkdir(parents=True, exist_ok=True)
+    just_launched: dict = {}                 # gpu -> monotonic launch time
+
+    print(f"[queue] {len(state['jobs'])} jobs, pool {pool}, "
+          f"poll {args.poll}s, cooldown {args.cooldown}s", flush=True)
+
+    while True:
+        # ---- reap finished jobs
+        for j in state["jobs"]:
+            if j["status"] == "running" and not alive(j["pid"]):
+                j["finished"] = time.time()
+                rep = pathlib.Path(j["out"]) / _run_rel(j) / "eval_report.json"
+                j["returncode"] = 0 if rep.exists() else 1
+                j["status"] = "done" if rep.exists() else "failed"
+                print(f"[queue] {j['status'].upper()} {j['name']} "
+                      f"(gpu {j['gpu']})", flush=True)
+                save_state(args.state, state)
+
+        pending = [j for j in state["jobs"] if j["status"] == "pending"]
+        running = [j for j in state["jobs"] if j["status"] == "running"]
+        if not pending and not running:
+            print("[queue] all jobs finished", flush=True)
+            return 0
+
+        # ---- find launchable GPUs
+        if pending:
+            now = time.monotonic()
+            busy = busy_gpus()
+            busy |= {j["gpu"] for j in running if j.get("gpu") is not None}
+            busy |= {g for g, t in just_launched.items()
+                     if now - t < args.cooldown}
+            for gpu in pool:
+                if not pending:
+                    break
+                if gpu in busy:
+                    continue
+                job = pending.pop(0)
+                cmd = build_cmd(job, gpu)
+                log = logdir / f"{job['name']}.log"
+                with open(log, "ab") as fh:
+                    proc = subprocess.Popen(
+                        cmd, stdout=fh, stderr=subprocess.STDOUT,
+                        cwd=REPO_ROOT, start_new_session=True)
+                job.update(status="running", pid=proc.pid, gpu=gpu,
+                           started=time.time())
+                just_launched[gpu] = time.monotonic()
+                busy.add(gpu)
+                print(f"[queue] START {job['name']} on gpu {gpu} "
+                      f"pid {proc.pid}\n         {shlex.join(cmd)}", flush=True)
+                save_state(args.state, state)
+
+        time.sleep(args.poll)
+
+
+def _run_rel(job: dict) -> str:
+    """`<algo><_arm>/<env>/seed<k>` — mirrors scripts/train.py's run_dir."""
+    arm = job.get("ablation") or "none"
+    suffix = "" if arm in ("", "none") else f"_{arm}"
+    return os.path.join(f"{job['algo']}{suffix}",
+                        str(job.get("env", "relation_coopmix")),
+                        f"seed{int(job.get('seed', 0))}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
