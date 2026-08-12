@@ -49,12 +49,29 @@ intrinsically easier for return. That is why the comparison to report is the
 **differential** across arms — all three meet the same held-out regimes — and not
 any single arm's trained-vs-held-out increase on its own.
 
-**Caveat, and it is the load-bearing one.** The method row is `--frozen-mode
-planner` (it runs MCTS at eval); happo and mamba have no planner and are frozen
-as direct policies. Some of the level difference between the blocks is that, and
-this data cannot say how much. The *within-arm* degradation ratio is much less
-exposed to it than the levels are, so the +25.7 % vs +51.3 % / +56.9 % comparison
-is the defensible one; the "13.41 vs 25.01" level comparison is not, on its own.
+**Caveat 1 — the seed-0 checkpoint is not representative, and this is the worst
+problem with the table above.** The method's holdout run scores **102.97 at seed
+0 and 76.32 at seed 1**: a 26.6-point swing on an identical configuration, more
+than 12x the method's ±2.16 seed sd on the full regime set. Every NashConv figure
+in this section was computed on the seed-0 checkpoint, i.e. on the *lucky* one of
+the two runs seen so far. Until the seed-1 checkpoint is evaluated at br=100k,
+the +25.7 % degradation should be read as "what the seed-0 checkpoint did", not
+as a property of the method. The comparison rows have the same exposure: they are
+also single checkpoints, and mbom already showed a 23.7-point seed swing on the
+full regime set.
+
+This does **not** touch §1 — the return-gap confound is a within-checkpoint sign
+pattern across five arms, and seed 1 reproduces it (method −4.72, m3w flipping
++3.18 → −2.54).
+
+**Caveat 2 — frozen-mode.** The method row is `--frozen-mode planner` (it runs
+MCTS at eval); happo and mamba have no planner and are frozen as direct policies.
+Some of the level difference between the blocks is that, and this data cannot say
+how much. The *within-arm* degradation ratio is much less exposed to it than the
+levels are, so the +25.7 % vs +51.3 % / +56.9 % comparison is the more defensible
+one; the "13.41 vs 25.01" level comparison is not, on its own. Note that caveats
+1 and 2 bite the two different halves of the table — 1 the rows, 2 the columns —
+so neither the levels nor the ratios are currently safe at n=1.
 
 ## 3. Regime accuracy behaves as predicted
 
