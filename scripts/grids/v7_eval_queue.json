@@ -33,12 +33,12 @@
             "--out", "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled_qtarget/relation_coopmix/seed0/game_metrics_br100000_planner.json"]
   },
   {
-    "name": "belief_probe_no_subjective_control",
-    "_why": "Belief settle-time + value swing on the Module-1 ABLATION, as the control for the same probe already run on the method. The method's posterior can only be shown to do work if the arm without the subjective module differs on it.",
-    "requires": ["results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_no_subjective_decoupled/relation_coopmix/seed0/ckpt.pt"],
-    "cmd": ["python", "scripts/probes/belief_confusion_probe.py",
-            "--run-dir", "results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_no_subjective_decoupled/relation_coopmix/seed0",
-            "--episodes", "32", "--gpus", "{gpu}"]
+    "name": "belief_probe_method_rerun",
+    "_why": "REGENERATES the method's belief_confusion.json, which was destroyed by the job this entry replaces. belief_confusion_probe.py writes to a FIXED path (results/analysis/belief_ceiling/belief_confusion.json) with no --out, so every run overwrites the last. The deleted entry pointed the probe at the Module-1 ablation as a 'control', but that arm has no belief_net at all -- plain MAZero -- so the probe skipped it and wrote an empty {} over the method's data. The numbers survived in v7_module1_evidence.md; this restores the artefact and copies it to a run-specific name so the next probe run cannot repeat the loss.",
+    "requires": ["results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled/relation_coopmix/seed0/ckpt.pt"],
+    "expect": "results/analysis/belief_ceiling/belief_confusion_method_seed0.json",
+    "cmd": ["bash", "-c",
+            "/home/zhengwenbo/.conda/envs/lightzero/bin/python scripts/probes/belief_confusion_probe.py --run-dir results_v7_500k/mazero_mixed_ref_bc_anneal_scaled_hardval_decoupled/relation_coopmix/seed0 --episodes 32 --gpus {gpu} && cp results/analysis/belief_ceiling/belief_confusion.json results/analysis/belief_ceiling/belief_confusion_method_seed0.json"]
   },
   {
     "name": "nc_gen_method_holdout",
