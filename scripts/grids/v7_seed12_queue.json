@@ -1,0 +1,314 @@
+[
+  {
+    "name": "method_s1",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled",
+    "env": "relation_coopmix",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_module1_no_subjective_s1",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_no_subjective_decoupled",
+    "env": "relation_coopmix",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "base_mamba_s1",
+    "algo": "mamba",
+    "env": "relation_coopmix",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "base_mbom_s1",
+    "algo": "mbom",
+    "env": "relation_coopmix",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "base_m3w_adapted_s1",
+    "algo": "m3w_adapted",
+    "env": "relation_coopmix",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "base_happo_s1",
+    "algo": "happo",
+    "env": "relation_coopmix",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_method_holdout_s1",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled",
+    "env": "relation_coopmix_holdout",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_mamba_s1",
+    "algo": "mamba",
+    "env": "relation_coopmix_holdout",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_mbom_s1",
+    "algo": "mbom",
+    "env": "relation_coopmix_holdout",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_m3w_adapted_s1",
+    "algo": "m3w_adapted",
+    "env": "relation_coopmix_holdout",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_happo_s1",
+    "algo": "happo",
+    "env": "relation_coopmix_holdout",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_cover_s1",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_cover",
+    "env": "relation_coopmix",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_qtarget_s1",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_qtarget",
+    "env": "relation_coopmix",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_mctsfix_s1",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_mctsfix",
+    "env": "relation_coopmix",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_margvisit_s1",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_margvisit",
+    "env": "relation_coopmix",
+    "seed": 1,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "method_s2",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled",
+    "env": "relation_coopmix",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_module1_no_subjective_s2",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_no_subjective_decoupled",
+    "env": "relation_coopmix",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "base_mamba_s2",
+    "algo": "mamba",
+    "env": "relation_coopmix",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "base_mbom_s2",
+    "algo": "mbom",
+    "env": "relation_coopmix",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "base_m3w_adapted_s2",
+    "algo": "m3w_adapted",
+    "env": "relation_coopmix",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "base_happo_s2",
+    "algo": "happo",
+    "env": "relation_coopmix",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_method_holdout_s2",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled",
+    "env": "relation_coopmix_holdout",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_mamba_s2",
+    "algo": "mamba",
+    "env": "relation_coopmix_holdout",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_mbom_s2",
+    "algo": "mbom",
+    "env": "relation_coopmix_holdout",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_m3w_adapted_s2",
+    "algo": "m3w_adapted",
+    "env": "relation_coopmix_holdout",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "gen_happo_s2",
+    "algo": "happo",
+    "env": "relation_coopmix_holdout",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_cover_s2",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_cover",
+    "env": "relation_coopmix",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_qtarget_s2",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_qtarget",
+    "env": "relation_coopmix",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_mctsfix_s2",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_mctsfix",
+    "env": "relation_coopmix",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  },
+  {
+    "name": "abl_search_margvisit_s2",
+    "algo": "mazero_mixed",
+    "ablation": "ref_bc_anneal_scaled_hardval_decoupled_margvisit",
+    "env": "relation_coopmix",
+    "seed": 2,
+    "total_env_steps": 500000,
+    "episodes": 128,
+    "num_pmcts": 16,
+    "env_steps_per_grad": 16,
+    "out": "results_v7_500k"
+  }
+]

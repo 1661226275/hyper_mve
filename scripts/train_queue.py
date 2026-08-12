@@ -136,6 +136,62 @@ def build_cmd(job: dict, gpu: int) -> list:
     return cmd
 
 
+def _lock_path(lockdir: pathlib.Path, gpu: int) -> pathlib.Path:
+    return lockdir / f"gpu{gpu}.lock"
+
+
+def acquire_gpu(lockdir: pathlib.Path, gpu: int) -> bool:
+    """Claim `gpu` across schedulers, or return False.
+
+    nvidia-smi idleness is not enough once more than one queue runs: a fresh
+    process takes tens of seconds to allocate, so two schedulers polling the
+    same second both see the card free and both launch on it. The per-GPU
+    cooldown only protects a scheduler from itself.
+
+    The lock holds the PID of the job that owns the card. A lock whose PID is
+    gone is stale -- a scheduler killed mid-wave would otherwise strand its
+    cards forever -- so it is stolen rather than respected.
+    """
+    lockdir.mkdir(parents=True, exist_ok=True)
+    path = _lock_path(lockdir, gpu)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, b"pending")
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            holder = path.read_text().strip()
+        except OSError:
+            return False
+        if holder and holder != "pending" and not alive(holder):
+            try:
+                path.unlink()
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, b"pending")
+                os.close(fd)
+                return True
+            except (OSError, FileExistsError):
+                return False
+        return False
+
+
+def set_gpu_owner(lockdir: pathlib.Path, gpu: int, pid: int) -> None:
+    try:
+        _lock_path(lockdir, gpu).write_text(str(int(pid)))
+    except OSError:
+        pass
+
+
+def release_gpu(lockdir: pathlib.Path, gpu) -> None:
+    if gpu is None:
+        return
+    try:
+        _lock_path(lockdir, gpu).unlink()
+    except OSError:
+        pass
+
+
 def build_env(job: dict, gpu: int) -> dict:
     env = dict(os.environ)
     if "cmd" in job and not any("{gpu}" in str(t) for t in job["cmd"]):
@@ -214,6 +270,9 @@ def main(argv=None) -> int:
                    help="seconds a just-launched GPU is treated as busy")
     p.add_argument("--status", action="store_true",
                    help="print the state file and exit")
+    p.add_argument("--lockdir", type=pathlib.Path, default=None,
+                   help="cross-scheduler GPU locks (default: <state>/../.gpu_locks). "
+                        "All concurrent queues MUST share one lockdir.")
     args = p.parse_args(argv)
 
     if args.status:
@@ -228,6 +287,7 @@ def main(argv=None) -> int:
     logdir.mkdir(parents=True, exist_ok=True)
     just_launched: dict = {}                 # gpu -> monotonic launch time
     handles: dict = {}                       # pid -> Popen, for exit codes
+    lockdir = args.lockdir or (args.state.parent / ".gpu_locks")
 
     print(f"[queue] {len(state['jobs'])} jobs, pool {pool}, "
           f"poll {args.poll}s, cooldown {args.cooldown}s", flush=True)
@@ -247,6 +307,7 @@ def main(argv=None) -> int:
                 ok = produced and (rc in (0, None))
                 j["returncode"] = rc
                 j["status"] = "done" if ok else "failed"
+                release_gpu(lockdir, j.get("gpu"))
                 why = "" if ok else (
                     f" (rc={rc}, missing {expect})" if not produced
                     else f" (rc={rc})")
@@ -283,6 +344,8 @@ def main(argv=None) -> int:
                     break
                 if gpu in busy:
                     continue
+                if not acquire_gpu(lockdir, gpu):
+                    continue          # another scheduler got there first
                 job = pending.pop(0)
                 cmd = build_cmd(job, gpu)
                 log = logdir / f"{job['name']}.log"
@@ -292,6 +355,7 @@ def main(argv=None) -> int:
                         cwd=REPO_ROOT, start_new_session=True,
                         env=build_env(job, gpu))
                 handles[proc.pid] = proc
+                set_gpu_owner(lockdir, gpu, proc.pid)
                 job.update(status="running", pid=proc.pid, gpu=gpu,
                            started=time.time())
                 just_launched[gpu] = time.monotonic()
