@@ -183,11 +183,27 @@ def set_gpu_owner(lockdir: pathlib.Path, gpu: int, pid: int) -> None:
         pass
 
 
-def release_gpu(lockdir: pathlib.Path, gpu) -> None:
+def release_gpu(lockdir: pathlib.Path, gpu, pid=None) -> None:
+    """Drop the lock on `gpu`, but only if `pid` still owns it.
+
+    Releasing unconditionally is unsafe once queues overlap in time: a
+    scheduler restarted after its job ended reaps that job and would delete a
+    lock another scheduler has since taken for a *different* run on the same
+    card, re-opening the double-booking window that the lock exists to close.
+    A caller with no pid to vouch for (shutdown paths) still forces the unlink.
+    """
     if gpu is None:
         return
+    path = _lock_path(lockdir, gpu)
+    if pid is not None:
+        try:
+            holder = path.read_text().strip()
+        except OSError:
+            return
+        if holder and holder != "pending" and holder != str(int(pid)):
+            return                      # someone else's card now -- leave it
     try:
-        _lock_path(lockdir, gpu).unlink()
+        path.unlink()
     except OSError:
         pass
 
@@ -222,13 +238,28 @@ def save_state(path: pathlib.Path, state: dict) -> None:
 
 
 def alive(pid) -> bool:
+    """True only for a process that is still doing work.
+
+    A zombie -- exited but not yet waited on -- keeps its pid in the process
+    table, so ``os.kill(pid, 0)`` succeeds on one and would report a finished
+    job as running. The scheduler loop reaps its own children through their
+    Popen handles; this is the fallback for pids we do not own (a job inherited
+    across a scheduler restart, or the read-only ``--status`` path), so it has
+    to read the state out of /proc instead.
+    """
     if not pid:
         return False
     try:
         os.kill(int(pid), 0)
     except (OSError, ValueError):
         return False
-    return True
+    try:
+        with open(f"/proc/{int(pid)}/stat", "rb") as fh:
+            # comm can contain spaces and parens, so index off the LAST ')'.
+            fields = fh.read().rsplit(b")", 1)[1].split()
+        return fields[0] != b"Z"
+    except (OSError, IndexError, ValueError):
+        return True     # cannot tell -- assume running, never reap by guess
 
 
 def print_status(state: dict) -> int:
@@ -295,25 +326,39 @@ def main(argv=None) -> int:
     while True:
         # ---- reap finished jobs
         for j in state["jobs"]:
-            if j["status"] == "running" and not alive(j["pid"]):
-                j["finished"] = time.time()
-                proc = handles.pop(j["pid"], None)
-                rc = proc.poll() if proc is not None else None
-                expect = job_expect(j)
-                produced = expect is None or os.path.exists(expect)
-                # An exit code is authoritative when we still have the handle;
-                # after a scheduler restart there is none, so fall back to the
-                # artefact. Both must agree when both are available.
-                ok = produced and (rc in (0, None))
-                j["returncode"] = rc
-                j["status"] = "done" if ok else "failed"
-                release_gpu(lockdir, j.get("gpu"))
-                why = "" if ok else (
-                    f" (rc={rc}, missing {expect})" if not produced
-                    else f" (rc={rc})")
-                print(f"[queue] {j['status'].upper()} {j['name']} "
-                      f"(gpu {j['gpu']}){why}", flush=True)
-                save_state(args.state, state)
+            if j["status"] != "running":
+                continue
+            # A child we launched ourselves stays in the process table as a
+            # ZOMBIE until someone waits on it, and os.kill(pid, 0) succeeds on
+            # a zombie. Liveness therefore has to come from the handle whenever
+            # we hold one -- .poll() both tests it and reaps it. Testing with
+            # alive() first stalls the queue forever on its own finished jobs.
+            proc = handles.get(j["pid"])
+            if proc is not None:
+                rc = proc.poll()
+                if rc is None:
+                    continue
+                handles.pop(j["pid"], None)
+            else:
+                if alive(j["pid"]):
+                    continue
+                rc = None
+            j["finished"] = time.time()
+            expect = job_expect(j)
+            produced = expect is None or os.path.exists(expect)
+            # An exit code is authoritative when we still have the handle;
+            # after a scheduler restart there is none, so fall back to the
+            # artefact. Both must agree when both are available.
+            ok = produced and (rc in (0, None))
+            j["returncode"] = rc
+            j["status"] = "done" if ok else "failed"
+            release_gpu(lockdir, j.get("gpu"), j.get("pid"))
+            why = "" if ok else (
+                f" (rc={rc}, missing {expect})" if not produced
+                else f" (rc={rc})")
+            print(f"[queue] {j['status'].upper()} {j['name']} "
+                  f"(gpu {j['gpu']}){why}", flush=True)
+            save_state(args.state, state)
 
         pending = [j for j in state["jobs"] if j["status"] == "pending"]
         running = [j for j in state["jobs"] if j["status"] == "running"]

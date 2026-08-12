@@ -1,6 +1,6 @@
-# Module-1 (role awareness) on `rel_coopmix`: five measurements, one conclusion
+# Module-1 (role awareness) on `rel_coopmix`: six measurements, one conclusion
 
-**2026-08-11, seed 0, 500k env steps.** Five independent measurements agree that
+**2026-08-11, seed 0, 500k env steps.** Six independent measurements agree that
 the role-aware / belief module cannot be shown to do work on this environment —
 and that this is substantially a property of the ENVIRONMENT, not only of the
 module. Recorded together because no single one of them is decisive and the
@@ -87,12 +87,46 @@ is g1 with the agent indices swapped — the winning agent has accuracy **0.000*
 and earns **exactly the same 19.78**. Whatever produces the return, it is not
 regime inference.
 
+## 6. On individual optimality the ablation is not worse either — it is better
+
+NashConv at `br_env_steps = 100000`, seed 0, 16 episodes/regime. Lower is better
+(it is the summed gain from unilaterally deviating to a best response, so 0 means
+no agent can improve alone). `mazero_mixed` rows are `--frozen-mode planner`; the
+prior-mode number is not reportable at all (it reproduces 28% of the deployed
+policy's return).
+
+| arm | g0 | g1 | g2 | g3 | g4 | mean | G(0,3,4) | welfare |
+|---|---|---|---|---|---|---|---|---|
+| method `..._hardval_decoupled` | 5.14 | 19.46 | 16.90 | 27.67 | 10.28 | 15.89 | 14.36 | 142.85 |
+| **`..._no_subjective` (Module-1 removed)** | **0.00** | 14.48 | 20.54 | 24.65 | 7.61 | **13.46** | **10.75** | 141.20 |
+| mamba | 19.92 | 8.89 | 12.78 | 36.04 | 21.82 | 19.89 | 25.92 | 103.66 |
+| happo | 15.29 | 36.89 | 47.99 | 62.07 | 43.02 | 41.05 | 40.12 | 121.54 |
+
+Two separate readings, and they point in different directions:
+
+**Against the baselines the method holds up.** 15.89 vs mamba 19.89 and happo
+41.05, with the highest welfare of the four (142.85). This is the one axis in
+this document where the method is clearly ahead of the comparison set.
+
+**Against its own ablation it does not.** Removing the subjective module *lowers*
+NashConv by 2.43 (15.89 → 13.46), and by 3.61 on the G(0,3,4) scoring set. The
+ablation also reaches exactly 0.000 in g0 — no unilateral deviation gains
+anything — while the full method leaves 5.14 on the table there. So §1's "the
+ablation costs nothing" now reads, on this axis, as "the ablation costs less than
+nothing", n=1 seed.
+
+**Comparability caveat, and it is not small.** The two `mazero_mixed` rows are
+mutually comparable (same frozen mode, same budget, same episode count). The
+mamba and happo rows are *not* frozen in planner mode — they have no planner —
+so the cross-family comparison mixes an MCTS-at-eval policy against direct policy
+nets. Report the two blocks as two comparisons, never as one ranking.
+
 ## What this does and does not establish
 
 **Established:** on `rel_coopmix` at 500k, seed 0, the role-aware module produces
-no detectable return benefit, and the environment's own information content
-(2.256) is at the noise floor (2.16), so the experiment could not have shown a
-clear benefit even in principle.
+no detectable return benefit — and on NashConv (§6) removing it measurably helps
+— while the environment's own information content (2.256) is at the noise floor
+(2.16), so the experiment could not have shown a clear benefit even in principle.
 
 **Not established:** that the module is worthless in general. Two readings remain
 open and this data cannot separate them — the module genuinely contributes
@@ -105,7 +139,7 @@ role-awareness claim at 3 seeds regardless of the architecture. `rel_recip`
 scored 3.99 and was dropped for scope reasons; raising VoI well above the seed
 sd is the precondition for this line of experiments to be able to say anything.
 
-**Caveats.** n=1 seed for §1; §3 and §4 are single-checkpoint probes. The
+**Caveats.** n=1 seed for §1 and §6; §3 and §4 are single-checkpoint probes. The
 `regime_voi_probe` note applies to §2: it is a LOWER bound, since a 1-D scripted
 threshold family cannot exploit everything a learned policy could.
 

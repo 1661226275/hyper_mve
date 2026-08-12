@@ -105,15 +105,28 @@ def main(argv=None) -> int:
         for run_dir in hits:
             rows.append(_summarize(run_dir, args.frac))
 
-    hdr = (f"{'ratio':>6} {'robust':>8} {'sd':>7} {'endpoint':>9} "
-           f"{'pts':>5} {'div':>7} {'reg_acc':>8} {'steps':>8} "
-           f"{'walltime':>9}  done")
+    # One root per cadence cell was the original use, and there the ratio column
+    # identified the row on its own. Pointed at a whole wave root instead, every
+    # row shares a ratio and the table is unreadable without the run's name --
+    # so the name is printed, trimmed of the shared root and the trailing seed.
+    def _label(run_dir: str) -> str:
+        parts = run_dir.split(os.sep)
+        return "/".join(parts[1:]) if len(parts) > 1 else run_dir
+
+    width = max([28] + [len(_label(r["run"])) for r in rows])
+    hdr = (f"{'run':<{width}} {'ratio':>5} {'robust':>8} {'sd':>7} "
+           f"{'endpoint':>9} {'pts':>5} {'div':>7} {'reg_acc':>8} "
+           f"{'steps':>8} {'walltime':>9}  done")
     print(hdr)
     print("-" * len(hdr))
-    for r in sorted(rows, key=lambda d: -(d["ratio"] if isinstance(d["ratio"], int) else 0)):
-        print(f"{str(r['ratio']):>6} {str(r['robust']):>8} {str(r['sd']):>7} "
+    for r in sorted(rows, key=lambda d: (-(d["ratio"] if isinstance(d["ratio"], int) else 0),
+                                         -(d["robust"] or 0))):
+        acc = r["regime_accuracy"]
+        print(f"{_label(r['run']):<{width}} {str(r['ratio']):>5} "
+              f"{str(r['robust']):>8} {str(r['sd']):>7} "
               f"{str(r['endpoint']):>9} {r['points_tail']:>2}/{r['points_total']:<2} "
-              f"{str(r['head_diversity']):>7} {str(r['regime_accuracy']):>8} "
+              f"{str(r['head_diversity']):>7} "
+              f"{(round(acc, 3) if isinstance(acc, float) else acc)!s:>8} "
               f"{str(r['env_steps']):>8} {r['walltime_h']:>8}h  "
               f"{'yes' if r['complete'] else 'RUNNING'}")
 
