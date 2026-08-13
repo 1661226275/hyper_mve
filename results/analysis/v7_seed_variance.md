@@ -1,4 +1,13 @@
-# Seed variance dominates every arm difference in the v7 wave
+# Run variance dominates every arm difference in the v7 wave
+
+> **CORRECTION, 2026-08-13 — this document was first written as "seed variance"
+> and that framing is wrong.** The seed-2 null control settles it: `margvisit` is
+> a provably identical estimator to the method's `visit` target, and at seed 2
+> the method collapses to 33.24 while `margvisit` reaches 85.11 — **51.88 apart
+> at the same seed, from mathematically equivalent code**. The variance is
+> therefore *run-level*, not seed-determined. Seed 2 is not a bad seed. The
+> per-arm "sd" in §1 is really an estimate of each arm's **collapse
+> probability**, and should be read that way throughout.
 
 **2026-08-12, `results_v7_500k`, 500k env steps, robust last-20% statistic.**
 This supersedes the variance assumptions in `v7_search_module.md` and
@@ -41,16 +50,33 @@ run-to-run nondeterminism with the arm held constant:
 |---|---|---|---|
 | 0 | 102.35 | 102.41 | **0.06** |
 | 1 | 100.05 | 92.91 | **7.14** |
+| 2 | **33.24** | **85.11** | **51.88** |
 
 The mechanism is not mysterious: `scatter_add_` on CUDA is non-deterministic, so
 two mathematically identical runs diverge numerically and training amplifies the
 difference. `v7_search_module.md` reported the 0.06 as *the* nondeterminism
-floor. That was a single sample of a quantity whose second sample is 119x larger,
-and the claim should not have been made from n=1.
+floor. That was a single sample of a quantity whose next two samples are 119x and
+865x larger, and the claim should not have been made from n=1.
 
-**Working figure: differences below ~7 points between `mazero_mixed` arms are not
-attributable to the arm.** That threshold swallows the Module-1 gap (0.31) and
-most of the search-arm gaps.
+**Working figure: differences below ~52 points between `mazero_mixed` arms are
+not attributable to the arm.** No gap anywhere in this wave's ablation tables
+approaches that. The Module-1 gap is 0.31; the widest search-arm gap at a fixed
+seed is ~20.
+
+**The seed-2 row is the single most important measurement in this document.** It
+is the same seed and mathematically the same estimator, so everything that could
+differ between the two runs is nondeterminism — and one collapsed while the other
+did not. Whatever causes the collapses, it is not the seed, and it is not the
+arm. Two corollaries:
+
+* Re-running a collapsed configuration is a **fresh draw, not a repeat**. It will
+  probably not collapse again. That makes re-running-and-keeping a
+  selection-bias trap rather than a fix: it redraws until the number is
+  acceptable and silently deletes the collapse rate, which is the finding.
+* Per-arm sds computed across seeds (§1) are not measuring a seed effect. They
+  are a 2–3 sample estimate of how often that configuration collapses, which is
+  both what makes them so large and why they are not comparable between arms at
+  this sample size.
 
 ## 3. What predicts a collapsed run: head diversity
 
@@ -105,13 +131,45 @@ relationship causal on this evidence.
   sign pattern replicated across five arms and two seeds, so seed variance in the
   level does not touch it.
 
-## 5. What would settle it
+## 5. The collapse has a signature, and it is local
 
-Not more arms — more seeds on the arms already run, and a cause for the
-collapses. The seed-2 runs are in flight (`v7_seed12_queue.json`). Anything that
-distinguishes "this configuration is bimodal" from "these runs diverged for a
-findable reason" is worth more than another ablation cell, since at present no
-mazero comparison in this wave is resolvable.
+Diagnosed on method seed 2 (the curve is in the session log; `train/value_loss`
+is on the env-step axis):
+
+* The run trained **normally and even ahead** of seeds 0/1 to ~265k env steps
+  (74.0 at 177k vs seed 0's 55.7).
+* `train/value_loss` blew up over env steps 260.8k–265.6k: 85.0 → 57.4 → 96.2 →
+  **120.4**. Across the whole run seed 2 has **8 excursions above 50 and one
+  above 100**; seeds 0 and 1 never exceed **34.1** and **32.3** respectively.
+* Return collapsed immediately after, at 273.6k: 60.4 → 48.0 → 37.6, and did not
+  recover over the remaining 224k steps.
+* Seed 2 ran hotter throughout — median `value_loss` 13.7 vs 8.0 / 8.5, and
+  `head_diversity` ~50 vs seed 0's ~77 over the same window, so **diversity
+  degradation preceded the collapse** rather than following it.
+
+Two configuration leads, neither yet tested:
+
+* `lr` at the collapse is ~0.0092–0.0107, still near the top of the anneal.
+  `ef76dcc` found the scaled model needed 0.005.
+* `runner.py:226` sets `--max_grad_norm 10`, **loosening** the algorithm's own
+  default of 5.0 (`core/config.py:114`). Gradients were clipped and the value
+  loss still reached 120.
+
+## 6. What would settle it
+
+Not more arms. Three options, in increasing cost:
+
+1. **More seeds** on the arms already run, to turn the collapse rate into an
+   estimate rather than a 1-in-3 anecdote.
+2. **Fix the cause and re-run every arm** under the fixed config — tighten
+   `max_grad_norm`, lower `lr`. This is a configuration change, so partial
+   re-runs are not comparable and the whole table has to move together.
+3. **Report the collapse rate as the result.** It is a real property of the
+   method at this budget, and the baselines do not share it (happo sd 0.76,
+   mamba 0.18).
+
+What is *not* an option is re-running individual collapsed runs and keeping the
+better draw — see §2.
 
 ## Related
 
