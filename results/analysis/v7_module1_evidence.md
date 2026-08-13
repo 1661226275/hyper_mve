@@ -20,6 +20,20 @@ Gap **0.31** against within-run sds of ~1.5. Removing the subjective module —
 the hypernet-generated per-agent heads and the belief posterior that drives them
 — costs nothing measurable, while keeping it costs 2.1 h more wall-clock per run.
 
+**Update 2026-08-12, n=3** (`v7_seed_variance.md`). Adding seeds 1 and 2 does not
+change the conclusion but does change what can be claimed from it:
+
+| arm | seed 0 | seed 1 | seed 2 | mean | sd |
+|---|---|---|---|---|---|
+| method | 102.35 | 100.05 | **33.24** | 78.55 | **39.25** |
+| no_subjective | 102.04 | 101.87 | 82.51 | **95.47** | 11.23 |
+
+The ablation's mean is now 16.9 points *higher* — but its own sd is 11.2 and the
+method's is 39.3, so this is not the ablation winning either. The honest
+statement is that at n=3 these two arms are indistinguishable because the
+`mazero_mixed` family's between-seed spread is far larger than any gap between
+them. The between-arm question is not answerable at this sample size.
+
 ## 2. The environment's information is worth ~2 points, which is the noise floor
 
 `scripts/probes/regime_voi_probe.py --preset rel_coopmix --episodes 200`:
@@ -30,7 +44,14 @@ The method's seed sd, from the 3-seed method of record, is **±2.16**.
 
 So the entire benefit a PERFECT regime oracle could deliver is about the size of
 the seed noise. No module, however good, can produce a clearly detectable effect
-here. Note the g1 removal cost measurement power: VoI was **3.99** on
+here.
+
+**This section's conclusion is strengthened, not weakened, by the n=3 data.** The
+±2.16 above is the method of record's figure on a different environment at 1M
+steps. Measured on *this* wave the method's seed sd is **39.25**
+(`v7_seed_variance.md` §1). VoI of 2.256 does not sit at the noise floor — it
+sits at roughly 6 % of it. The gate the probe prints is missed by a far wider
+margin than this section originally claimed. Note the g1 removal cost measurement power: VoI was **3.99** on
 `rel_recip`, and is 2.256 on `rel_coopmix`. `hyper-mve-g1-removal-scope` flagged
 exactly this risk and said to measure rather than trust it — measured, it fell
 by 44%.
