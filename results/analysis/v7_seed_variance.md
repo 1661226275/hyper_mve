@@ -18,26 +18,40 @@ order of magnitude for the `mazero_mixed` family.
 
 ## 1. Measured spread per arm
 
-| arm | n | mean | sd | min | max | range |
+**Complete at n=3** (all 30 runs of `v7_seed12_queue.json` finished, 0 failed):
+
+| arm | seed 0 | seed 1 | seed 2 | mean | sd | range |
 |---|---|---|---|---|---|---|
-| happo | 3 | 99.26 | **0.76** | 98.54 | 100.05 | 1.51 |
-| mamba | 2 | 86.91 | **0.18** | 86.78 | 87.04 | 0.26 |
-| m3w_adapted | 2 | 97.23 | 2.69 | 95.33 | 99.13 | 3.80 |
-| mbom | 2 | 72.95 | 16.72 | 61.13 | 84.78 | 23.65 |
-| no_subjective | 3 | 95.47 | 11.23 | 82.51 | 102.04 | 19.53 |
-| **method** | 3 | **78.55** | **39.25** | **33.24** | 102.35 | **69.11** |
-| margvisit (null control) | 2 | 97.66 | 6.72 | 92.91 | 102.41 | 9.50 |
-| mctsfix | 2 | 87.15 | 6.90 | 82.27 | 92.03 | 9.76 |
-| qtarget | 2 | 65.92 | 28.53 | 45.74 | 86.09 | 40.35 |
-| cover | 2 | 52.68 | 54.90 | **13.86** | 91.50 | 77.64 |
+| happo | 99.19 | 100.05 | 98.54 | 99.26 | **0.76** | 1.51 |
+| m3w_adapted | 99.13 | 95.33 | 97.89 | 97.45 | 1.94 | 3.80 |
+| mamba | 87.04 | 86.78 | 102.70 | 92.17 | 9.12 | 15.92 |
+| mbom | 84.78 | 61.13 | 68.53 | 71.48 | 12.10 | 23.65 |
+| — | | | | | | |
+| method | 102.35 | 100.05 | **33.24** | 78.55 | **39.25** | **69.11** |
+| no_subjective | 102.04 | 101.87 | 82.51 | 95.47 | 11.23 | 19.53 |
+| margvisit (null control) | 102.41 | 92.91 | 85.11 | 93.48 | 8.66 | 17.30 |
+| cover | 91.50 | **13.86** | 88.94 | 64.77 | **44.11** | **77.64** |
+| qtarget | 86.09 | 45.74 | 77.65 | 69.83 | 21.28 | 40.35 |
+| mctsfix | 82.27 | 92.03 | 92.24 | 88.85 | 5.70 | 9.97 |
 
-The model-free baselines are stable to within 0.2–2.7. The `mazero_mixed` family
-is not: the method's three seeds are 102.35 / 100.05 / **33.24**, and the `cover`
-arm's two are 91.50 / **13.86**. These are not crashes — every run logged its full
-501,619 env steps and exited cleanly in the usual ~6.5–7 h.
+These are not crashes — every run logged its full 501,619 env steps and exited
+cleanly in the usual ~6.5–7 h.
 
-**No between-arm difference in the mazero family currently exceeds its own
-within-arm seed spread.** At n=2–3 the family cannot be ranked.
+**No between-arm difference in the mazero family exceeds the null control's own
+spread (17.30, and 51.88 at seed 2).** The family cannot be ranked from this
+wave.
+
+Two cautions on reading the sds above, both learned the hard way in this wave:
+
+* **They are collapse rates, not seed effects** — see the correction banner and
+  §2. `cover`'s 44.11 describes two runs at ~90 and one at 13.86, which a mean
+  and sd misdescribe: the distribution is bimodal, not wide. `qtarget` is the
+  exception that is genuinely graded (86 / 78 / 46).
+* **n=3 sds are themselves unstable.** mamba read sd **0.18** at n=2 and **9.12**
+  at n=3, because its first two seeds happened to land 0.26 apart. Any claim of
+  the form "arm X is stable" from two samples is worth very little; the honest
+  distinction here is only between the model-free baselines (range 1.5–3.8 for
+  happo/m3w) and the collapsing mazero arms (range up to 77.6).
 
 ## 2. The null control puts a number on the attribution floor
 
