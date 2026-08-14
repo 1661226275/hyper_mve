@@ -5,9 +5,15 @@
 > a provably identical estimator to the method's `visit` target, and at seed 2
 > the method collapses to 33.24 while `margvisit` reaches 85.11 — **51.88 apart
 > at the same seed, from mathematically equivalent code**. The variance is
-> therefore *run-level*, not seed-determined. Seed 2 is not a bad seed. The
-> per-arm "sd" in §1 is really an estimate of each arm's **collapse
-> probability**, and should be read that way throughout.
+> therefore *run-level*, not seed-determined.
+>
+> **CONFIRMED DIRECTLY, 2026-08-14 — see §7.** The method was re-run at seed 2
+> three more times under an identical command. Four draws give 33.24 / 33.94 /
+> 54.83 / 95.21: **sd 29.05, range 61.97 at one seed**, which is 90% of the
+> whole between-seed range. Two things in this document are wrong as a result
+> and are corrected in §7: the spread is **not** bimodal, so "collapse
+> probability" is the wrong frame; and §5's `value_loss` signature does **not**
+> predict which draw ends low.
 
 **2026-08-12, `results_v7_500k`, 500k env steps, robust last-20% statistic.**
 This supersedes the variance assumptions in `v7_search_module.md` and
@@ -43,10 +49,14 @@ wave.
 
 Two cautions on reading the sds above, both learned the hard way in this wave:
 
-* **They are collapse rates, not seed effects** — see the correction banner and
-  §2. `cover`'s 44.11 describes two runs at ~90 and one at 13.86, which a mean
-  and sd misdescribe: the distribution is bimodal, not wide. `qtarget` is the
-  exception that is genuinely graded (86 / 78 / 46).
+* **They are not seed effects** — see the correction banner and §2. ~~They are
+  collapse rates.~~ **Retracted by §7:** re-running the method at seed 2 gives a
+  *graded* 33 / 34 / 55 / 95 rather than a collapsed/healthy split, so there is
+  no rate to estimate. The honest reading is that these are 3-sample estimates
+  of a wide continuous within-arm distribution. On the same evidence the
+  bimodality I read into `cover` (two runs at ~90, one at 13.86) is an artifact
+  of n=3, not a property of the arm; `qtarget`'s graded 86 / 78 / 46 is what
+  every arm may look like given enough draws.
 * **n=3 sds are themselves unstable.** mamba read sd **0.18** at n=2 and **9.12**
   at n=3, because its first two seeds happened to land 0.26 apart. Any claim of
   the form "arm X is stable" from two samples is worth very little; the honest
@@ -76,6 +86,13 @@ floor. That was a single sample of a quantity whose next two samples are 119x an
 not attributable to the arm.** No gap anywhere in this wave's ablation tables
 approaches that. The Module-1 gap is 0.31; the widest search-arm gap at a fixed
 seed is ~20.
+
+> **Superseded as the primary measurement by §7.** `margvisit` is an identical
+> *estimator* but a different code path behind a different flag, so this table
+> is evidence *about* run-level variance rather than a measurement of it. §7
+> repeats the identical command and measures it directly: **61.97 points across
+> 4 draws**, which replaces the ~52 working figure above. The conclusion is
+> unchanged in direction and larger in size.
 
 **The seed-2 row is the single most important measurement in this document.** It
 is the same seed and mathematically the same estimator, so everything that could
@@ -161,6 +178,13 @@ is on the env-step axis):
   `head_diversity` ~50 vs seed 0's ~77 over the same window, so **diversity
   degradation preceded the collapse** rather than following it.
 
+> **The signature does not generalize (§7).** It describes this run; it does not
+> predict the outcome. Draw 1 has *more* excursions than draw 0 (12 above 50,
+> three above 100) and finishes **21 points higher**; draw 2 has almost none
+> (one above 50, none above 100) and finishes at the same 33 as draw 0. So the
+> `value_loss` blowup is not the mechanism, or not the only one, and the leads
+> below are weaker than this section originally implied.
+
 Two configuration leads, neither yet tested:
 
 * `lr` at the collapse is ~0.0092–0.0107, still near the top of the anneal.
@@ -173,8 +197,12 @@ Two configuration leads, neither yet tested:
 
 Not more arms. Three options, in increasing cost:
 
-1. **More seeds** on the arms already run, to turn the collapse rate into an
-   estimate rather than a 1-in-3 anecdote.
+1. **More draws** on the arms already run. ~~to turn the collapse rate into an
+   estimate rather than a 1-in-3 anecdote.~~ **Partly done — §7**, and it
+   changed the question: there is no rate to estimate, because the outcome is
+   continuous rather than collapsed/healthy. What §7 leaves open is whether
+   there is *also* a seed effect on top of the run variance, which needs
+   replicates at a second seed, not more seeds at n=1.
 2. **Fix the cause and re-run every arm** under the fixed config — tighten
    `max_grad_norm`, lower `lr`. This is a configuration change, so partial
    re-runs are not comparable and the whole table has to move together.
@@ -184,6 +212,66 @@ Not more arms. Three options, in increasing cost:
 
 What is *not* an option is re-running individual collapsed runs and keeping the
 better draw — see §2.
+
+## 7. The direct measurement: four same-command draws at seed 2
+
+**2026-08-14.** Everything above infers run-level variance from `margvisit`,
+which is a mathematically identical *estimator* but a different code path behind
+a different flag. **No experiment in this wave had ever repeated an identical
+command.** The method was therefore re-run at seed 2 three more times, same
+command, no config change.
+
+Provenance, so this is checkable rather than asserted: each draw wrote to its
+own `--out` root (`results_v7_s2rerun/r{1,2,3}`, queue file
+`scripts/grids/v7_s2_rerun_queue.json`), because `train.py:205` mkdirs `run_dir`
+with `exist_ok=True` and re-running into `results_v7_500k` would have merged a
+second event file into the original's TB directory and destroyed the draw-0
+curve. All three carry `config_hash b89b69343a229ca1c5653ba667651e76c46ded22`,
+identical to the original `method_s2` — `--out` and `--gpus` are not in the hash
+(`train.py:255-260`) — and all three logged the full 501,619 env steps /
+31,251 train steps in 6.25–6.47 h.
+
+| draw | robust | peak | vl med | vl max | #>50 | #>100 | head div | final eval (128 ep) |
+|---|---|---|---|---|---|---|---|---|
+| 0 (original) | 33.24 | 78.69 | 13.69 | 120.44 | 8 | 1 | 22.97 | 32.34 |
+| 1 | 54.83 | 94.11 | 9.86 | 115.41 | 12 | 3 | 16.82 | 54.97 |
+| 2 | 33.94 | 79.40 | 9.41 | 54.36 | 1 | 0 | 5.93 | 30.06 |
+| 3 | **95.21** | 98.24 | 9.69 | 64.56 | 1 | 0 | 101.85 | 97.01 |
+| *seed 0* | *102.35* | *104.48* | *8.01* | *34.08* | *0* | *0* | *129.39* | — |
+| *seed 1* | *100.05* | *103.33* | *8.51* | *32.29* | *0* | *0* | *136.74* | — |
+
+**mean 54.30, sd 29.05, range 61.97** — at one seed, from one command.
+
+### What it establishes
+
+* **Most of the "between-seed" spread is within-seed.** §1 records the method's
+  sd across seeds 0/1/2 as 39.25 and its range as 69.11. The within-seed range
+  at seed 2 alone is 61.97 — **90% of it**. The seed axis explains very little
+  of what §1 attributed to it.
+* **The distribution is graded, not bimodal.** 33 / 34 / 55 / 95 has no
+  collapsed/healthy split. This retracts the "collapse probability" framing in
+  the correction banner and §1: there is no rate to estimate.
+* **The `value_loss` signature does not predict the outcome** — see the note in
+  §5. Ranking the four draws by excursion count does not reproduce their return
+  ordering, in either direction.
+* **The attribution floor is 61.97 points, replacing §2's ~52.** Every gap in
+  this wave's ablation tables remains far inside it.
+
+### What it leaves open
+
+**All four seed-2 draws fall below both seed-0 and seed-1** (best draw 95.21 vs
+100.05 and 102.35). That is consistent with a seed effect sitting on top of the
+run variance — but seeds 0 and 1 have **n=1 each**, so their own within-seed
+distributions are unmeasured and the two cannot be separated. Settling it needs
+replicates at a second seed, not more seeds at n=1. This is the one open
+question in this document that the data cannot currently decide.
+
+Finally, §3's head-diversity relationship does not survive at this resolution.
+Across the four draws Pearson r = 0.934 but **Spearman rho = 0.400** — the
+Pearson is carried entirely by draw 3's 101.85, and the rank ordering is not
+reproduced. §3's rho = 0.940 was measured across 13 runs spanning arms and
+seeds; within a single command at n=4 it does not hold, so head diversity is not
+usable as the live per-run health check §3 suggested.
 
 ## Related
 

@@ -3,11 +3,16 @@
 > **SUPERSEDED IN PART, 2026-08-12 — read `v7_seed_variance.md` first.** This
 > document was written from seed 0 alone and its variance claims are wrong. The
 > ±2.16 seed sd it compares against was imported from a different environment at
-> a 1M budget; measured on this wave the `mazero_mixed` family's sd is 6.7–54.9.
-> At n=2 the arm ordering below is **not** stable — `mctsfix`, the worst arm at
+> a 1M budget; measured on this wave the `mazero_mixed` family's sd is 5.7–44.1
+> at n=3. The arm ordering below is **not** stable — `mctsfix`, the worst arm at
 > seed 0 (82.27), beats `cover` and `qtarget` at seed 1 (92.03 vs 13.86, 45.74).
 > The seed-0 numbers and the NashConv measurements are correct as recorded; the
 > conclusions drawn from them about arms separating are not.
+>
+> **Updated 2026-08-14 — `v7_seed_variance.md` §7.** Repeating an *identical
+> command* four times at one seed spans **61.97 points**. Every gap in the table
+> below is inside that, so no arm in this document is separated from any other
+> by its return.
 
 **2026-08-12, seed 0, 500k env steps, `results_v7_500k`.** Unlike the Module-1
 result (`v7_module1_evidence.md`, where six measurements all land inside the
@@ -72,10 +77,16 @@ Seed 0 gives |102.41 − 102.35| = **0.06**. Seed 1 gives |92.91 − 100.05| =
 
 ~~It reads the fixed-seed nondeterminism floor: 0.06.~~ **Retracted**: that was
 one sample of a quantity with enormous spread, reported as though it were the
-floor. The working figure is now **~7 points**, and differences smaller than that
-between `mazero_mixed` arms are not attributable to the arm. `scatter_add_` on
-CUDA is non-deterministic, which is a sufficient mechanism. See
-`v7_seed_variance.md` §2.
+floor. ~~The working figure is now **~7 points**.~~ Also retracted — that was
+written at n=2; seed 2 gives |85.11 − 33.24| = **51.88**. `scatter_add_` on CUDA
+is non-deterministic, which is a sufficient mechanism.
+
+**The current figure is 61.97 points** (`v7_seed_variance.md` §7), measured by
+repeating an identical command four times at one seed rather than by comparing
+`margvisit` to `visit` — which are equal in loss but not the same code path, so
+every figure in this paragraph was a proxy. Differences smaller than 61.97
+between `mazero_mixed` arms are not attributable to the arm, which covers every
+gap in this document.
 
 ## Gaps
 

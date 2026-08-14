@@ -51,8 +51,13 @@ any single arm's trained-vs-held-out increase on its own.
 
 **Caveat 1 — the seed-0 checkpoint is not representative, and this is the worst
 problem with the table above.** The method's holdout run scores **102.97 at seed
-0 and 76.32 at seed 1**: a 26.6-point swing on an identical configuration, more
-than 12x the method's ±2.16 seed sd on the full regime set. Every NashConv figure
+0 and 76.32 at seed 1**: a 26.6-point swing on an identical configuration.
+~~more than 12x the method's ±2.16 seed sd on the full regime set.~~ **The
+±2.16 is retracted** — it came from a different environment at 1M steps. Against
+the measured floor (61.97 points across four identical-command draws,
+`v7_seed_variance.md` §7) a 26.6-point swing is *unremarkable*, which makes this
+caveat stronger rather than weaker: single checkpoints are not informative here.
+Every NashConv figure
 in this section was computed on the seed-0 checkpoint, i.e. on the *lucky* one of
 the two runs seen so far. Until the seed-1 checkpoint is evaluated at br=100k,
 the +25.7 % degradation should be read as "what the seed-0 checkpoint did", not

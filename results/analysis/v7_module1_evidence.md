@@ -31,8 +31,15 @@ change the conclusion but does change what can be claimed from it:
 The ablation's mean is now 16.9 points *higher* — but its own sd is 11.2 and the
 method's is 39.3, so this is not the ablation winning either. The honest
 statement is that at n=3 these two arms are indistinguishable because the
-`mazero_mixed` family's between-seed spread is far larger than any gap between
-them. The between-arm question is not answerable at this sample size.
+`mazero_mixed` family's spread is far larger than any gap between them. The
+between-arm question is not answerable at this sample size.
+
+**Update 2026-08-14** (`v7_seed_variance.md` §7): the 39.25 above is not a
+*between-seed* spread. Re-running the method at seed 2 under an identical
+command four times spans 33.24–95.21 — sd 29.05, range 61.97, i.e. **90% of the
+between-seed range occurs within a single seed**. More seeds would therefore not
+have answered the between-arm question; more draws per cell are what the
+comparison needs.
 
 ## 2. The environment's information is worth ~2 points, which is the noise floor
 
@@ -146,8 +153,11 @@ nets. Report the two blocks as two comparisons, never as one ranking.
 
 **Established:** on `rel_coopmix` at 500k, seed 0, the role-aware module produces
 no detectable return benefit — and on NashConv (§6) removing it measurably helps
-— while the environment's own information content (2.256) is at the noise floor
-(2.16), so the experiment could not have shown a clear benefit even in principle.
+— while the environment's own information content (2.256) is ~~at the noise
+floor (2.16)~~ **far below the noise floor, measured at 61.97 points from four
+identical-command draws** (`v7_seed_variance.md` §7), so the experiment could not
+have shown a clear benefit even in principle. VoI is ~3.6% of the noise floor,
+not comparable to it; the argument in §2 is strengthened, not weakened.
 
 **Not established:** that the module is worthless in general. Two readings remain
 open and this data cannot separate them — the module genuinely contributes
