@@ -1,0 +1,38 @@
+[
+ {
+  "name": "method_s2_r1",
+  "algo": "mazero_mixed",
+  "ablation": "ref_bc_anneal_scaled_hardval_decoupled",
+  "env": "relation_coopmix",
+  "seed": 2,
+  "total_env_steps": 500000,
+  "episodes": 128,
+  "num_pmcts": 16,
+  "env_steps_per_grad": 16,
+  "out": "results_v7_s2rerun/r1"
+ },
+ {
+  "name": "method_s2_r2",
+  "algo": "mazero_mixed",
+  "ablation": "ref_bc_anneal_scaled_hardval_decoupled",
+  "env": "relation_coopmix",
+  "seed": 2,
+  "total_env_steps": 500000,
+  "episodes": 128,
+  "num_pmcts": 16,
+  "env_steps_per_grad": 16,
+  "out": "results_v7_s2rerun/r2"
+ },
+ {
+  "name": "method_s2_r3",
+  "algo": "mazero_mixed",
+  "ablation": "ref_bc_anneal_scaled_hardval_decoupled",
+  "env": "relation_coopmix",
+  "seed": 2,
+  "total_env_steps": 500000,
+  "episodes": 128,
+  "num_pmcts": 16,
+  "env_steps_per_grad": 16,
+  "out": "results_v7_s2rerun/r3"
+ }
+]
